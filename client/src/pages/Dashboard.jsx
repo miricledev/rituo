@@ -18,11 +18,11 @@ const Dashboard = () => {
   }, [fetchTasks]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 min-h-screen bg-primary-50 dark:bg-secondary-900 transition-colors duration-200">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-secondary-900">Dashboard</h1>
-        <p className="text-secondary-600 mt-2">
+        <h1 className="text-3xl font-bold text-secondary-900 dark:text-white">Dashboard</h1>
+        <p className="text-secondary-600 dark:text-secondary-300 mt-2">
           Welcome back, {currentUser?.username}! Track your daily progress and stay committed.
         </p>
       </div>
@@ -31,11 +31,11 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left column - Task list */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-lg shadow-card p-6 mb-8">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 mb-8 transition-colors duration-200">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-secondary-800">Your 30-Day Tasks</h2>
+              <h2 className="text-xl font-semibold text-secondary-800 dark:text-white">Your 30-Day Tasks</h2>
               {!hasCycle && !loading && (
-                <Link to="/create-tasks" className="btn btn-primary">
+                <Link to="/create-tasks" className="btn btn-primary hover:scale-105 transition-transform duration-200">
                   Create Tasks
                 </Link>
               )}
@@ -57,12 +57,12 @@ const Dashboard = () => {
           
           {/* Call to action if no tasks */}
           {!hasCycle && !loading && (
-            <div className="bg-white rounded-lg shadow-card p-8 text-center">
-              <h3 className="text-xl font-semibold mb-4">Ready to Start Your 30-Day Journey?</h3>
-              <p className="text-secondary-600 mb-6">
+            <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-8 text-center transition-colors duration-200">
+              <h3 className="text-xl font-semibold mb-4 text-secondary-900 dark:text-white">Ready to Start Your 30-Day Journey?</h3>
+              <p className="text-secondary-600 dark:text-secondary-300 mb-6">
                 Create your 30-day commitment list to build lasting habits and track your progress.
               </p>
-              <Link to="/create-tasks" className="btn btn-primary px-8 py-3">
+              <Link to="/create-tasks" className="btn btn-primary px-8 py-3 hover:scale-105 transition-transform duration-200">
                 Create Your Task List
               </Link>
             </div>
@@ -71,11 +71,11 @@ const Dashboard = () => {
       </div>
       
       {/* Motivation section */}
-      <div className="mt-8 bg-primary-50 rounded-lg p-6">
-        <h3 className="text-lg font-semibold mb-3">Daily Inspiration</h3>
-        <blockquote className="italic text-secondary-700">
+      <div className="mt-8 bg-primary-50 dark:bg-secondary-800 rounded-lg p-6 transition-colors duration-200">
+        <h3 className="text-lg font-semibold mb-3 text-secondary-900 dark:text-white">Daily Inspiration</h3>
+        <blockquote className="italic text-secondary-700 dark:text-secondary-300">
           "We are what we repeatedly do. Excellence, then, is not an act, but a habit."
-          <footer className="mt-2 text-sm font-medium text-secondary-600">
+          <footer className="mt-2 text-sm font-medium text-secondary-600 dark:text-secondary-400">
             — Aristotle
           </footer>
         </blockquote>

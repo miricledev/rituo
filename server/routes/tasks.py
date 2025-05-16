@@ -6,7 +6,7 @@ import json
 
 tasks_bp = Blueprint('tasks', __name__)
 
-@tasks_bp.route('/', methods=['POST'])
+@tasks_bp.route('', methods=['POST'])
 @jwt_required()
 def create_tasks():
     user_id = get_jwt_identity()
@@ -80,7 +80,7 @@ def create_tasks():
         return jsonify({'message': f'Failed to create tasks: {str(e)}'}), 500
 
 
-@tasks_bp.route('/', methods=['GET'])
+@tasks_bp.route('', methods=['GET'])
 @jwt_required()
 def get_tasks():
     user_id = get_jwt_identity()
@@ -159,7 +159,7 @@ def toggle_task_completion(task_id):
         return jsonify({'message': f'Failed to update task completion: {str(e)}'}), 500
 
 
-@tasks_bp.route('/history/<int:task_id>', methods=['GET'])
+@tasks_bp.route('/history/<int:task_id>/', methods=['GET'])
 @jwt_required()
 def get_task_history(task_id):
     user_id = get_jwt_identity()
@@ -184,7 +184,7 @@ def get_task_history(task_id):
     }), 200
 
 
-@tasks_bp.route('/expired', methods=['GET'])
+@tasks_bp.route('/expired/', methods=['GET'])
 @jwt_required()
 def get_expired_tasks():
     user_id = get_jwt_identity()

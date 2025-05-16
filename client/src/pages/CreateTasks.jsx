@@ -94,46 +94,46 @@ const CreateTasks = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-colors duration-200">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-secondary-900">Create Your 30-Day Commitment</h1>
-        <p className="text-secondary-600 mt-2">
+        <h1 className="text-3xl font-bold text-secondary-900 dark:text-white">Create Your 30-Day Commitment</h1>
+        <p className="text-secondary-600 dark:text-secondary-300 mt-2">
           Set up the tasks you want to commit to for the next 30 days. Once created, these tasks cannot be changed until the cycle ends.
         </p>
       </div>
       
       {/* Step progress */}
       <div className="flex mb-8">
-        <div className={`flex-1 h-2 ${activeStep >= 1 ? 'bg-primary-500' : 'bg-gray-200'}`}></div>
-        <div className={`flex-1 h-2 ${activeStep >= 2 ? 'bg-primary-500' : 'bg-gray-200'}`}></div>
-        <div className={`flex-1 h-2 ${activeStep >= 3 ? 'bg-primary-500' : 'bg-gray-200'}`}></div>
+        <div className={`flex-1 h-2 ${activeStep >= 1 ? 'bg-primary-500' : 'bg-gray-200 dark:bg-secondary-700'}`}></div>
+        <div className={`flex-1 h-2 ${activeStep >= 2 ? 'bg-primary-500' : 'bg-gray-200 dark:bg-secondary-700'}`}></div>
+        <div className={`flex-1 h-2 ${activeStep >= 3 ? 'bg-primary-500' : 'bg-gray-200 dark:bg-secondary-700'}`}></div>
       </div>
       
       {/* Error message */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-md p-4 mb-6">
+        <div className="bg-red-50 dark:bg-red-900/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-md p-4 mb-6 transition-colors duration-200">
           {error}
         </div>
       )}
       
-      <div className="bg-white rounded-lg shadow-card p-6">
+      <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 transition-colors duration-200">
         <form onSubmit={handleSubmit}>
           {/* Step 1: Create tasks */}
           {activeStep === 1 && (
             <div>
-              <h2 className="text-xl font-semibold mb-6">Step 1: Create Your Tasks</h2>
+              <h2 className="text-xl font-semibold mb-6 text-secondary-900 dark:text-white">Step 1: Create Your Tasks</h2>
               
               <div className="space-y-4 mb-6">
                 {tasks.map((task, index) => (
-                  <div key={index} className="bg-gray-50 rounded-lg p-4">
+                  <div key={index} className="bg-gray-50 dark:bg-secondary-700 rounded-lg p-4 transition-colors duration-200">
                     <div className="flex justify-between items-center mb-3">
-                      <span className="font-medium">Task {index + 1}</span>
+                      <span className="font-medium text-secondary-900 dark:text-white">Task {index + 1}</span>
                       
                       {tasks.length > 1 && (
                         <button
                           type="button"
                           onClick={() => removeTask(index)}
-                          className="text-red-500 hover:text-red-700"
+                          className="text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors duration-200"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
@@ -143,7 +143,7 @@ const CreateTasks = () => {
                     </div>
                     
                     <div className="mb-3">
-                      <label htmlFor={`task-title-${index}`} className="block text-sm font-medium text-secondary-700 mb-1">
+                      <label htmlFor={`task-title-${index}`} className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-1">
                         Task Title <span className="text-red-500">*</span>
                       </label>
                       <input
@@ -158,7 +158,7 @@ const CreateTasks = () => {
                     </div>
                     
                     <div>
-                      <label htmlFor={`task-description-${index}`} className="block text-sm font-medium text-secondary-700 mb-1">
+                      <label htmlFor={`task-description-${index}`} className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-1">
                         Description (Optional)
                       </label>
                       <textarea
@@ -178,7 +178,7 @@ const CreateTasks = () => {
                 <button
                   type="button"
                   onClick={addTask}
-                  className="flex items-center text-primary-600 hover:text-primary-800 font-medium mb-8"
+                  className="flex items-center text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-300 font-medium mb-8 transition-colors duration-200"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-1">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -191,7 +191,7 @@ const CreateTasks = () => {
                 <button
                   type="button"
                   onClick={nextStep}
-                  className="btn btn-primary"
+                  className="btn btn-primary hover:scale-105 transition-transform duration-200"
                 >
                   Continue
                 </button>
@@ -202,11 +202,11 @@ const CreateTasks = () => {
           {/* Step 2: Preview and guidelines */}
           {activeStep === 2 && (
             <div>
-              <h2 className="text-xl font-semibold mb-6">Step 2: Review Your Tasks</h2>
+              <h2 className="text-xl font-semibold mb-6 text-secondary-900 dark:text-white">Step 2: Review Your Tasks</h2>
               
-              <div className="bg-primary-50 rounded-lg p-4 mb-6">
-                <h3 className="font-medium mb-2">Tips for Success:</h3>
-                <ul className="list-disc pl-5 space-y-1 text-secondary-700">
+              <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4 mb-6 transition-colors duration-200">
+                <h3 className="font-medium mb-2 text-secondary-900 dark:text-white">Tips for Success:</h3>
+                <ul className="list-disc pl-5 space-y-1 text-secondary-700 dark:text-secondary-300">
                   <li>Start with manageable tasks that you can realistically complete daily</li>
                   <li>Be specific about what counts as completing each task</li>
                   <li>Consider including a mix of physical, mental, and personal growth activities</li>
@@ -214,16 +214,16 @@ const CreateTasks = () => {
                 </ul>
               </div>
               
-              <div className="border border-gray-200 rounded-lg overflow-hidden mb-8">
-                <div className="bg-gray-50 p-3 border-b border-gray-200">
-                  <h3 className="font-semibold">Your 30-Day Tasks</h3>
+              <div className="border border-gray-200 dark:border-secondary-700 rounded-lg overflow-hidden mb-8 transition-colors duration-200">
+                <div className="bg-gray-50 dark:bg-secondary-700 p-3 border-b border-gray-200 dark:border-secondary-600">
+                  <h3 className="font-semibold text-secondary-900 dark:text-white">Your 30-Day Tasks</h3>
                 </div>
-                <ul className="divide-y divide-gray-200">
+                <ul className="divide-y divide-gray-200 dark:divide-secondary-700">
                   {tasks.map((task, index) => (
                     <li key={index} className="p-4">
-                      <div className="font-medium">{task.title}</div>
+                      <div className="font-medium text-secondary-900 dark:text-white">{task.title}</div>
                       {task.description && (
-                        <div className="text-sm text-secondary-600 mt-1">{task.description}</div>
+                        <div className="text-sm text-secondary-600 dark:text-secondary-300 mt-1">{task.description}</div>
                       )}
                     </li>
                   ))}
@@ -234,14 +234,14 @@ const CreateTasks = () => {
                 <button
                   type="button"
                   onClick={prevStep}
-                  className="btn btn-outline"
+                  className="btn btn-outline hover:scale-105 transition-transform duration-200"
                 >
                   Back
                 </button>
                 <button
                   type="button"
                   onClick={nextStep}
-                  className="btn btn-primary"
+                  className="btn btn-primary hover:scale-105 transition-transform duration-200"
                 >
                   Continue
                 </button>
@@ -252,11 +252,11 @@ const CreateTasks = () => {
           {/* Step 3: Confirmation and commitment */}
           {activeStep === 3 && (
             <div>
-              <h2 className="text-xl font-semibold mb-6">Step 3: Commit to Your 30-Day Journey</h2>
+              <h2 className="text-xl font-semibold mb-6 text-secondary-900 dark:text-white">Step 3: Commit to Your 30-Day Journey</h2>
               
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                <h3 className="font-medium text-yellow-800 mb-2">Important:</h3>
-                <p className="text-yellow-700">
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6 transition-colors duration-200">
+                <h3 className="font-medium text-yellow-800 dark:text-yellow-300 mb-2">Important:</h3>
+                <p className="text-yellow-700 dark:text-yellow-400">
                   Once created, your task list will be locked for 30 days. You won't be able to add, remove, or modify these tasks until the cycle ends.
                 </p>
               </div>
@@ -269,7 +269,7 @@ const CreateTasks = () => {
                     onChange={(e) => setAccepted(e.target.checked)}
                     className="mt-1 mr-3"
                   />
-                  <span>
+                  <span className="text-secondary-700 dark:text-secondary-300">
                     I understand that I am committing to these tasks for the next 30 days, and I cannot modify them during this period.
                   </span>
                 </label>
@@ -279,14 +279,14 @@ const CreateTasks = () => {
                 <button
                   type="button"
                   onClick={prevStep}
-                  className="btn btn-outline"
+                  className="btn btn-outline hover:scale-105 transition-transform duration-200"
                 >
                   Back
                 </button>
                 <button
                   type="submit"
                   disabled={loading || !accepted}
-                  className={`btn btn-primary ${(loading || !accepted) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  className={`btn btn-primary hover:scale-105 transition-transform duration-200 ${(loading || !accepted) ? 'opacity-70 cursor-not-allowed' : ''}`}
                 >
                   {loading ? (
                     <div className="flex items-center justify-center">

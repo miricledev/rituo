@@ -24,6 +24,16 @@ function App() {
     window.scrollTo(0, 0);
   }, [location.pathname]);
 
+  // Sync dark mode on initial load
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, []);
+
   // Show loading state while authentication is being checked
   if (loading) {
     return (
@@ -37,7 +47,7 @@ function App() {
   const showNavbar = isAuthenticated && location.pathname !== '/';
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-primary-50 dark:bg-secondary-900">
       {showNavbar && <Navbar />}
       
       <div className={`${showNavbar ? 'pt-16' : ''}`}>

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useAuth } from './AuthContext';
 
@@ -49,22 +49,19 @@ export function TaskProvider({ children }) {
   }, [isAuthenticated]);
 
   // Fetch user's tasks
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      
       const response = await axios.get(`${API_URL}/tasks`);
-      
       setTasks(response.data.tasks || []);
       setHasCycle(response.data.tasks && response.data.tasks.length > 0);
-      
       setLoading(false);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to fetch tasks');
       setLoading(false);
     }
-  };
+  }, [API_URL]);
 
   // Create new tasks for a 30-day cycle
   const createTasks = async (taskList) => {
@@ -120,13 +117,11 @@ export function TaskProvider({ children }) {
   };
 
   // Fetch task history for a specific task
-  const fetchTaskHistory = async (taskId) => {
+  const fetchTaskHistory = useCallback(async (taskId) => {
     try {
       setLoading(true);
       setError(null);
-      
       const response = await axios.get(`${API_URL}/tasks/history/${taskId}`);
-      
       setLoading(false);
       return response.data;
     } catch (err) {
@@ -134,18 +129,15 @@ export function TaskProvider({ children }) {
       setLoading(false);
       throw err;
     }
-  };
+  }, [API_URL]);
 
   // Fetch analytics data
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = useCallback(async () => {
     try {
       setError(null);
-      
       const response = await axios.get(`${API_URL}/analytics/summary`);
-      
       setAnalytics(response.data);
       setHasCycle(response.data.has_active_cycle);
-      
       if (response.data.has_active_cycle) {
         setCycleData({
           startDate: response.data.cycle_start_date,
@@ -154,56 +146,49 @@ export function TaskProvider({ children }) {
           daysRemaining: response.data.days_remaining
         });
       }
-      
       return response.data;
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to fetch analytics');
       throw err;
     }
-  };
+  }, [API_URL]);
 
   // Fetch heatmap data for visualization
-  const fetchHeatmapData = async () => {
+  const fetchHeatmapData = useCallback(async () => {
     try {
       setError(null);
-      
       const response = await axios.get(`${API_URL}/analytics/heatmap`);
-      
       setHeatmapData(response.data.heatmap_data || []);
       return response.data;
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to fetch heatmap data');
       throw err;
     }
-  };
+  }, [API_URL]);
 
   // Fetch trends data for the current cycle
-  const fetchTrends = async () => {
+  const fetchTrends = useCallback(async () => {
     try {
       setError(null);
-      
       const response = await axios.get(`${API_URL}/analytics/trends`);
-      
       return response.data;
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to fetch trends data');
       throw err;
     }
-  };
+  }, [API_URL]);
 
   // Fetch specific task analytics
-  const fetchTaskAnalytics = async (taskId) => {
+  const fetchTaskAnalytics = useCallback(async (taskId) => {
     try {
       setError(null);
-      
       const response = await axios.get(`${API_URL}/analytics/task/${taskId}`);
-      
       return response.data;
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to fetch task analytics');
       throw err;
     }
-  };
+  }, [API_URL]);
 
   // Clear any error
   const clearError = () => {

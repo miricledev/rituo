@@ -23,21 +23,21 @@ const HeatmapChart = () => {
 
   // Get color based on completion rate
   const getColorClass = (rate) => {
-    if (rate === 0) return 'bg-gray-100';
-    if (rate < 25) return 'bg-blue-100';
-    if (rate < 50) return 'bg-blue-200';
-    if (rate < 75) return 'bg-blue-300';
-    if (rate < 100) return 'bg-blue-400';
-    return 'bg-blue-500';
+    if (rate === 0) return 'bg-gray-100 dark:bg-gray-800';
+    if (rate < 25) return 'bg-blue-100 dark:bg-blue-900/50';
+    if (rate < 50) return 'bg-blue-200 dark:bg-blue-800/50';
+    if (rate < 75) return 'bg-blue-300 dark:bg-blue-700/50';
+    if (rate < 100) return 'bg-blue-400 dark:bg-blue-600/50';
+    return 'bg-blue-500 dark:bg-blue-500/50';
   };
 
   if (loading || !heatmapData || heatmapData.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-card p-6 animate-pulse">
-        <div className="h-6 bg-gray-200 rounded w-1/2 mb-6"></div>
+      <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 animate-pulse transition-colors duration-200">
+        <div className="h-6 bg-gray-200 dark:bg-secondary-700 rounded w-1/2 mb-6"></div>
         <div className="flex flex-wrap gap-1">
           {Array(14).fill(0).map((_, i) => (
-            <div key={i} className="w-8 h-8 bg-gray-200 rounded-sm"></div>
+            <div key={i} className="w-8 h-8 bg-gray-200 dark:bg-secondary-700 rounded-sm"></div>
           ))}
         </div>
       </div>
@@ -73,15 +73,15 @@ const HeatmapChart = () => {
   });
 
   return (
-    <div className="bg-white rounded-lg shadow-card p-6">
-      <h3 className="text-lg font-semibold mb-4">Completion Heatmap</h3>
+    <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 transition-colors duration-200">
+      <h3 className="text-lg font-semibold mb-4 text-secondary-900 dark:text-white">Completion Heatmap</h3>
       
       <div className="relative">
         {/* Header - Days of the week */}
         <div className="flex mb-2">
           <div className="w-8 mr-2"></div> {/* Empty space for alignment */}
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, i) => (
-            <div key={i} className="w-8 text-xs text-center text-secondary-600">
+            <div key={i} className="w-8 text-xs text-center text-secondary-600 dark:text-secondary-400">
               {day}
             </div>
           ))}
@@ -93,7 +93,7 @@ const HeatmapChart = () => {
             <div key={weekIndex} className="flex">
               {/* Week label */}
               <div className="w-8 mr-2 flex items-center justify-end">
-                <span className="text-xs text-secondary-600">
+                <span className="text-xs text-secondary-600 dark:text-secondary-400">
                   {new Date(week[0].date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                 </span>
               </div>
@@ -111,7 +111,7 @@ const HeatmapChart = () => {
                 {week.map((day) => (
                   <div
                     key={day.date}
-                    className={`heatmap-cell ${getColorClass(day.completion_rate)}`}
+                    className={`heatmap-cell ${getColorClass(day.completion_rate)} w-8 h-8 m-0.5 rounded-sm transition-colors duration-200`}
                     onMouseEnter={(e) => handleCellHover(day, e)}
                     onMouseLeave={handleCellLeave}
                   ></div>
@@ -124,44 +124,46 @@ const HeatmapChart = () => {
         {/* Tooltip */}
         {hoveredCell && (
           <div 
-            className="heatmap-tooltip"
+            className="absolute z-10 bg-white dark:bg-secondary-800 text-secondary-900 dark:text-white px-3 py-2 rounded-lg shadow-lg text-sm transition-colors duration-200"
             style={{ 
               left: `${tooltipPos.x}px`, 
               top: `${tooltipPos.y - 10}px`, 
               transform: 'translate(-50%, -100%)' 
             }}
           >
-            <div>{new Date(hoveredCell.date).toLocaleDateString()}</div>
-            <div>{hoveredCell.completed_tasks} of {hoveredCell.total_tasks} tasks completed ({Math.round(hoveredCell.completion_rate)}%)</div>
+            <div className="font-medium">{new Date(hoveredCell.date).toLocaleDateString()}</div>
+            <div className="text-secondary-600 dark:text-secondary-300">
+              {hoveredCell.completed_tasks} of {hoveredCell.total_tasks} tasks completed ({Math.round(hoveredCell.completion_rate)}%)
+            </div>
           </div>
         )}
       </div>
       
       {/* Legend */}
       <div className="mt-6 flex items-center justify-center">
-        <div className="flex space-x-2 text-xs text-secondary-600">
+        <div className="flex space-x-2 text-xs text-secondary-600 dark:text-secondary-400">
           <div className="flex items-center">
-            <div className="w-4 h-4 bg-gray-100 rounded-sm mr-1"></div>
+            <div className="w-4 h-4 bg-gray-100 dark:bg-gray-800 rounded-sm mr-1"></div>
             <span>0%</span>
           </div>
           <div className="flex items-center">
-            <div className="w-4 h-4 bg-blue-100 rounded-sm mr-1"></div>
+            <div className="w-4 h-4 bg-blue-100 dark:bg-blue-900/50 rounded-sm mr-1"></div>
             <span>1-24%</span>
           </div>
           <div className="flex items-center">
-            <div className="w-4 h-4 bg-blue-200 rounded-sm mr-1"></div>
+            <div className="w-4 h-4 bg-blue-200 dark:bg-blue-800/50 rounded-sm mr-1"></div>
             <span>25-49%</span>
           </div>
           <div className="flex items-center">
-            <div className="w-4 h-4 bg-blue-300 rounded-sm mr-1"></div>
+            <div className="w-4 h-4 bg-blue-300 dark:bg-blue-700/50 rounded-sm mr-1"></div>
             <span>50-74%</span>
           </div>
           <div className="flex items-center">
-            <div className="w-4 h-4 bg-blue-400 rounded-sm mr-1"></div>
+            <div className="w-4 h-4 bg-blue-400 dark:bg-blue-600/50 rounded-sm mr-1"></div>
             <span>75-99%</span>
           </div>
           <div className="flex items-center">
-            <div className="w-4 h-4 bg-blue-500 rounded-sm mr-1"></div>
+            <div className="w-4 h-4 bg-blue-500 dark:bg-blue-500/50 rounded-sm mr-1"></div>
             <span>100%</span>
           </div>
         </div>

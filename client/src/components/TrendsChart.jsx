@@ -25,9 +25,9 @@ const TrendsChart = () => {
 
   if (loading || isLoading || !trendsData) {
     return (
-      <div className="bg-white rounded-lg shadow-card p-6 animate-pulse">
-        <div className="h-6 bg-gray-200 rounded w-1/2 mb-6"></div>
-        <div className="h-64 bg-gray-200 rounded w-full"></div>
+      <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 animate-pulse transition-colors duration-200">
+        <div className="h-6 bg-gray-200 dark:bg-secondary-700 rounded w-1/2 mb-6"></div>
+        <div className="h-64 bg-gray-200 dark:bg-secondary-700 rounded w-full"></div>
       </div>
     );
   }
@@ -50,27 +50,37 @@ const TrendsChart = () => {
   });
 
   return (
-    <div className="bg-white rounded-lg shadow-card p-6">
-      <h3 className="text-lg font-semibold mb-6">Completion Trends</h3>
+    <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 transition-colors duration-200">
+      <h3 className="text-lg font-semibold mb-6 text-secondary-900 dark:text-white">Completion Trends</h3>
       
       <div className="mb-8">
-        <h4 className="text-md font-medium mb-4">Daily Performance</h4>
+        <h4 className="text-md font-medium mb-4 text-secondary-800 dark:text-white">Daily Performance</h4>
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={dayOfWeekData}
               margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
             >
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis 
+                dataKey="name" 
+                tick={{ fill: '#6B7280' }}
+              />
               <YAxis 
                 domain={[0, 100]} 
                 tickFormatter={(tick) => `${tick}%`}
                 tickCount={6}
+                tick={{ fill: '#6B7280' }}
               />
               <Tooltip 
                 formatter={(value) => [`${value}%`, 'Completion Rate']} 
                 labelFormatter={(label) => `Day: ${label}`}
+                contentStyle={{
+                  backgroundColor: '#1F2937',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  color: '#F3F4F6'
+                }}
               />
               <Bar 
                 dataKey="completionRate" 
@@ -85,23 +95,33 @@ const TrendsChart = () => {
       
       {weeklyData.length > 1 && (
         <div>
-          <h4 className="text-md font-medium mb-4">Weekly Performance</h4>
+          <h4 className="text-md font-medium mb-4 text-secondary-800 dark:text-white">Weekly Performance</h4>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={weeklyData}
                 margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                <XAxis 
+                  dataKey="name" 
+                  tick={{ fill: '#6B7280' }}
+                />
                 <YAxis 
                   domain={[0, 100]} 
                   tickFormatter={(tick) => `${tick}%`}
                   tickCount={6}
+                  tick={{ fill: '#6B7280' }}
                 />
                 <Tooltip 
                   formatter={(value) => [`${value}%`, 'Completion Rate']} 
                   labelFormatter={(label) => `Week: ${label}`}
+                  contentStyle={{
+                    backgroundColor: '#1F2937',
+                    border: 'none',
+                    borderRadius: '0.375rem',
+                    color: '#F3F4F6'
+                  }}
                 />
                 <Bar 
                   dataKey="completionRate" 

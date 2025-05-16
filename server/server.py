@@ -40,7 +40,8 @@ CORS(app,
          "supports_credentials": True,
          "max_age": 3600,
          "send_wildcard": False,
-         "vary_header": True
+         "vary_header": True,
+         "automatic_options": True
      }},
      supports_credentials=True)
 
@@ -51,7 +52,7 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
-# Register blueprints
+# Register blueprints without trailing slashes
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(tasks_bp, url_prefix='/api/tasks')
 app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
