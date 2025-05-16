@@ -1,0 +1,121 @@
+import React, { useState, useEffect } from 'react';
+import { useTask } from '../contexts/TaskContext';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+const TrendsChart = () => {
+  const { fetchTrends, loading } = useTask();
+  const [trendsData, setTrendsData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadTrends = async () => {
+      setIsLoading(true);
+      try {
+        const data = await fetchTrends();
+        setTrendsData(data);
+      } catch (err) {
+        console.error('Failed to load trends data:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadTrends();
+  }, [fetchTrends]);
+
+  if (loading || isLoading || !trendsData) {
+    return (
+      <div className="bg-white rounded-lg shadow-card p-6 animate-pulse">
+        <div className="h-6 bg-gray-200 rounded w-1/2 mb-6"></div>
+        <div className="h-64 bg-gray-200 rounded w-full"></div>
+      </div>
+    );
+  }
+
+  // Format daily trend data
+  const dayOfWeekData = trendsData.day_of_week_trend.map(day => ({
+    name: day.day.substring(0, 3),
+    completionRate: Math.round(day.completion_rate)
+  }));
+
+  // Format weekly trend data
+  const weeklyData = trendsData.weekly_trend.map(week => {
+    const startDate = new Date(week.week_start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endDate = new Date(week.week_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    
+    return {
+      name: `${startDate} - ${endDate}`,
+      completionRate: Math.round(week.completion_rate)
+    };
+  });
+
+  return (
+    <div className="bg-white rounded-lg shadow-card p-6">
+      <h3 className="text-lg font-semibold mb-6">Completion Trends</h3>
+      
+      <div className="mb-8">
+        <h4 className="text-md font-medium mb-4">Daily Performance</h4>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={dayOfWeekData}
+              margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis 
+                domain={[0, 100]} 
+                tickFormatter={(tick) => `${tick}%`}
+                tickCount={6}
+              />
+              <Tooltip 
+                formatter={(value) => [`${value}%`, 'Completion Rate']} 
+                labelFormatter={(label) => `Day: ${label}`}
+              />
+              <Bar 
+                dataKey="completionRate" 
+                name="Completion Rate" 
+                fill="#0ea5e9" 
+                radius={[4, 4, 0, 0]} 
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      
+      {weeklyData.length > 1 && (
+        <div>
+          <h4 className="text-md font-medium mb-4">Weekly Performance</h4>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={weeklyData}
+                margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis 
+                  domain={[0, 100]} 
+                  tickFormatter={(tick) => `${tick}%`}
+                  tickCount={6}
+                />
+                <Tooltip 
+                  formatter={(value) => [`${value}%`, 'Completion Rate']} 
+                  labelFormatter={(label) => `Week: ${label}`}
+                />
+                <Bar 
+                  dataKey="completionRate" 
+                  name="Completion Rate" 
+                  fill="#22c55e" 
+                  radius={[4, 4, 0, 0]} 
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TrendsChart;
