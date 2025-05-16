@@ -1,29 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useTask } from '../contexts/TaskContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const TrendsChart = () => {
-  const { fetchTrends, loading } = useTask();
-  const [trendsData, setTrendsData] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { trendsData, loading } = useTask();
 
-  useEffect(() => {
-    const loadTrends = async () => {
-      setIsLoading(true);
-      try {
-        const data = await fetchTrends();
-        setTrendsData(data);
-      } catch (err) {
-        console.error('Failed to load trends data:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadTrends();
-  }, [fetchTrends]);
-
-  if (loading || isLoading || !trendsData) {
+  if (loading || !trendsData) {
     return (
       <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 animate-pulse transition-colors duration-200">
         <div className="h-6 bg-gray-200 dark:bg-secondary-700 rounded w-1/2 mb-6"></div>
@@ -86,7 +68,10 @@ const TrendsChart = () => {
                 dataKey="completionRate" 
                 name="Completion Rate" 
                 fill="#0ea5e9" 
-                radius={[4, 4, 0, 0]} 
+                radius={[4, 4, 0, 0]}
+                animationDuration={500}
+                animationBegin={0}
+                isAnimationActive={true}
               />
             </BarChart>
           </ResponsiveContainer>
@@ -127,7 +112,10 @@ const TrendsChart = () => {
                   dataKey="completionRate" 
                   name="Completion Rate" 
                   fill="#22c55e" 
-                  radius={[4, 4, 0, 0]} 
+                  radius={[4, 4, 0, 0]}
+                  animationDuration={500}
+                  animationBegin={0}
+                  isAnimationActive={true}
                 />
               </BarChart>
             </ResponsiveContainer>

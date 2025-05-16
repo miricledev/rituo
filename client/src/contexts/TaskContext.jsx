@@ -21,6 +21,7 @@ export function TaskProvider({ children }) {
   const [error, setError] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [heatmapData, setHeatmapData] = useState([]);
+  const [trendsData, setTrendsData] = useState(null);
 
   // Set up axios interceptor to add token to all requests
   useEffect(() => {
@@ -38,6 +39,7 @@ export function TaskProvider({ children }) {
       fetchTasks();
       fetchAnalytics();
       fetchHeatmapData();
+      fetchTrends();
     } else {
       // Reset state when user logs out
       setTasks([]);
@@ -45,6 +47,7 @@ export function TaskProvider({ children }) {
       setCycleData(null);
       setAnalytics(null);
       setHeatmapData([]);
+      setTrendsData(null);
     }
   }, [isAuthenticated]);
 
@@ -105,9 +108,12 @@ export function TaskProvider({ children }) {
         )
       );
       
-      // Also update analytics after toggling completion
-      fetchAnalytics();
-      fetchHeatmapData();
+      // Update all analytics data after toggling completion
+      await Promise.all([
+        fetchAnalytics(),
+        fetchHeatmapData(),
+        fetchTrends()
+      ]);
       
       return response.data;
     } catch (err) {
@@ -166,14 +172,15 @@ export function TaskProvider({ children }) {
     }
   }, [API_URL]);
 
-  // Fetch trends data for the current cycle
+  // Fetch trends data
   const fetchTrends = useCallback(async () => {
     try {
       setError(null);
       const response = await axios.get(`${API_URL}/analytics/trends`);
+      setTrendsData(response.data);
       return response.data;
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to fetch trends data');
+      setError(err.response?.data?.message || 'Failed to fetch trends');
       throw err;
     }
   }, [API_URL]);
@@ -204,6 +211,7 @@ export function TaskProvider({ children }) {
     error,
     analytics,
     heatmapData,
+    trendsData,
     fetchTasks,
     createTasks,
     toggleTaskCompletion,
@@ -224,5 +232,9 @@ export function TaskProvider({ children }) {
 
 // Custom hook to use the task context
 export function useTask() {
-  return useContext(TaskContext);
+  const context = useContext(TaskContext);
+  if (!context) {
+    throw new Error('useTask must be used within a TaskProvider');
+  }
+  return context;
 }

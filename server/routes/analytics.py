@@ -196,10 +196,11 @@ def get_trends():
     ).group_by('day_of_week').all()
     
     # Prepare day of week data
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    # PostgreSQL's dow returns 0-6 for Sunday-Saturday, so we need to adjust the mapping
+    days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     day_of_week_trend = []
     
-    for dow in range(7):  # 0-6 for Monday to Sunday
+    for dow in range(7):  # 0-6 for Sunday to Saturday
         dow_data = next((d for d in day_of_week_data if int(d.day_of_week) == dow), None)
         
         if dow_data:
