@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTask } from '../contexts/TaskContext';
 
 const Navbar = () => {
   const { currentUser, logout } = useAuth();
+  const { tasks } = useTask();
   const location = useLocation();
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -14,9 +16,18 @@ const Navbar = () => {
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
       setIsDarkMode(true);
-      document.documentElement.classList.add('dark');
+    } else {
+      setIsDarkMode(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
 
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode);
@@ -45,7 +56,7 @@ const Navbar = () => {
   // Navigation items
   const navItems = [
     { title: 'Dashboard', path: '/dashboard' },
-    { title: 'Create Tasks', path: '/create-tasks' }
+    ...(tasks && tasks.length === 0 ? [{ title: 'Create Tasks', path: '/create-tasks' }] : [])
   ];
 
   return (
