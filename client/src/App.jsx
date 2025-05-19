@@ -13,6 +13,7 @@ import PomodoroTimer from './pages/PomodoroTimer';
 import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
 import ResetPassword from './pages/ResetPassword';
+import Archives from './pages/Archives';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
@@ -115,6 +116,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <ResetPassword />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/archives" 
+            element={
+              <ProtectedRoute>
+                <Archives />
               </ProtectedRoute>
             } 
           />

@@ -33,7 +33,10 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 jwt = JWTManager(app)
 CORS(app, 
      resources={r"/*": {
-         "origins": ["http://localhost:5173"],
+         "origins": [
+             "http://localhost:5173",
+             os.getenv("FRONTEND_URL", "https://rituo-client.onrender.com")
+         ],
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          "allow_headers": ["Content-Type", "Authorization"],
          "expose_headers": ["Content-Type", "Authorization"],

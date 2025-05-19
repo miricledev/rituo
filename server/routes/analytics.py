@@ -329,3 +329,88 @@ def get_task_analytics(task_id):
         'current_streak': current_streak,
         'daily_data': daily_data
     }), 200
+
+
+@analytics_bp.route('/archives', methods=['GET'])
+@jwt_required()
+def get_archives():
+    user_id = get_jwt_identity()
+    # Find all completed cycles (cycle_end_date < today)
+    today = date.today()
+    completed_cycles = Task.query.filter_by(user_id=user_id).filter(Task.cycle_end_date < today).all()
+    if not completed_cycles:
+        return jsonify({'archives': []}), 200
+    # Group tasks by cycle
+    cycles = {}
+    for task in completed_cycles:
+        key = (task.cycle_start_date, task.cycle_end_date)
+        if key not in cycles:
+            cycles[key] = []
+        cycles[key].append(task)
+    archives = []
+    for (cycle_start, cycle_end), tasks in cycles.items():
+        # Gather all completions for these tasks
+        task_ids = [task.id for task in tasks]
+        completions = TaskCompletion.query.filter(
+            TaskCompletion.task_id.in_(task_ids),
+            TaskCompletion.user_id == user_id,
+            TaskCompletion.completion_date >= cycle_start,
+            TaskCompletion.completion_date <= cycle_end
+        ).all()
+        # Group completions by task and date
+        completion_map = {}
+        for completion in completions:
+            task_id = completion.task_id
+            if task_id not in completion_map:
+                completion_map[task_id] = {}
+            completion_map[task_id][completion.completion_date.isoformat()] = completion.is_complete
+        # Stats per task
+        task_stats = []
+        total_completion_rate = 0
+        for task in tasks:
+            days_in_cycle = (cycle_end - cycle_start).days + 1
+            completions_count = sum(1 for _, is_complete in completion_map.get(task.id, {}).items() if is_complete)
+            completion_rate = (completions_count / days_in_cycle) * 100 if days_in_cycle > 0 else 0
+            total_completion_rate += completion_rate
+            task_stats.append({
+                'title': task.title,
+                'completion_rate': completion_rate
+            })
+        # Calculate average completion rate across all tasks
+        avg_completion_rate = total_completion_rate / len(tasks) if tasks else 0
+        # Daily data for the cycle
+        daily_data = []
+        current_date = cycle_start
+        while current_date <= cycle_end:
+            # Calculate completion rate for this day
+            day_completions = 0
+            for task in tasks:
+                if completion_map.get(task.id, {}).get(current_date.isoformat(), False):
+                    day_completions += 1
+            day_completion_rate = (day_completions / len(tasks)) * 100 if tasks else 0
+            daily_data.append({
+                'date': current_date.isoformat(),
+                'is_complete': day_completion_rate
+            })
+            current_date += timedelta(days=1)
+        # Calculate longest streak of days with 100% completion
+        current_streak = 0
+        max_streak = 0
+        for day in daily_data:
+            if day['is_complete'] == 100:  # All tasks completed
+                current_streak += 1
+                max_streak = max(max_streak, current_streak)
+            else:
+                current_streak = 0
+        archives.append({
+            'cycle_id': f"{cycle_start}_{cycle_end}",
+            'title': f"{cycle_start.strftime('%b %d, %Y')} Challenge",
+            'cycle_start_date': cycle_start.strftime('%b %d, %Y'),
+            'cycle_end_date': cycle_end.strftime('%b %d, %Y'),
+            'days_completed': sum(1 for day in daily_data if day['is_complete'] == 100),  # Days with 100% completion
+            'completion_rate': avg_completion_rate,  # Average completion rate across all tasks
+            'current_streak': max_streak,
+            'tasks': task_stats,
+            'daily_data': daily_data
+        })
+    return jsonify({'archives': archives}), 200

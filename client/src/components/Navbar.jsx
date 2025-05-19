@@ -56,6 +56,7 @@ const Navbar = () => {
   // Navigation items
   const navItems = [
     { title: 'Dashboard', path: '/dashboard' },
+    { title: 'Archives', path: '/archives' },
     { title: 'Pomodoro Timer', path: '/pomodoro' },
     ...(tasks && tasks.length === 0 ? [{ title: 'Create Tasks', path: '/create-tasks' }] : [])
   ];
@@ -109,43 +110,59 @@ const Navbar = () => {
               )}
             </button>
 
-            <div className="relative">
-              <button
-                onClick={toggleMenu}
-                className="flex items-center gap-2 text-sm font-medium focus:outline-none hover:scale-105 transition-transform duration-200"
-              >
-                <span className="hidden md:block text-secondary-800 dark:text-secondary-200">{currentUser?.username}</span>
-                <div className="h-8 w-8 rounded-full bg-primary-500 dark:bg-primary-400 flex items-center justify-center text-white transform hover:scale-110 transition-transform duration-200">
-                  {currentUser?.username?.charAt(0).toUpperCase()}
-                </div>
-              </button>
-              
-              {/* Dropdown menu */}
-              {isMenuOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-secondary-800 rounded-md shadow-lg py-1 animate-fade-in">
-                  <Link
-                    to="/settings"
-                    onClick={closeMenu}
-                    className="block px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
-                  >
-                    Settings
-                  </Link>
-                  <Link
-                    to="/settings#help"
-                    onClick={closeMenu}
-                    className="block px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
-                  >
-                    Help & Support
-                  </Link>
-                  <button
-                    onClick={handleLogout}
-                    className="block w-full text-left px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
-                  >
-                    Sign out
-                  </button>
-                </div>
-              )}
-            </div>
+            {currentUser ? (
+              <div className="relative">
+                <button
+                  onClick={toggleMenu}
+                  className="flex items-center gap-2 text-sm font-medium focus:outline-none hover:scale-105 transition-transform duration-200"
+                >
+                  <span className="hidden md:block text-secondary-800 dark:text-secondary-200">{currentUser?.username}</span>
+                  <div className="h-8 w-8 rounded-full bg-primary-500 dark:bg-primary-400 flex items-center justify-center text-white transform hover:scale-110 transition-transform duration-200">
+                    {currentUser?.username?.charAt(0).toUpperCase()}
+                  </div>
+                </button>
+                {/* Dropdown menu */}
+                {isMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-secondary-800 rounded-md shadow-lg py-1 animate-fade-in">
+                    <Link
+                      to="/settings"
+                      onClick={closeMenu}
+                      className="block px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
+                    >
+                      Settings
+                    </Link>
+                    <Link
+                      to="/settings#help"
+                      onClick={closeMenu}
+                      className="block px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
+                    >
+                      Help & Support
+                    </Link>
+                    <button
+                      onClick={handleLogout}
+                      className="block w-full text-left px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
+                    >
+                      Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center space-x-4">
+                <Link
+                  to="/login"
+                  className="text-sm font-medium text-secondary-600 dark:text-secondary-300 hover:text-primary-600 dark:hover:text-primary-400 transition-colors duration-200"
+                >
+                  Log in
+                </Link>
+                <Link
+                  to="/register"
+                  className="btn btn-primary text-sm px-4 py-2"
+                >
+                  Sign up
+                </Link>
+              </div>
+            )}
           </div>
           
           {/* Mobile menu button */}
