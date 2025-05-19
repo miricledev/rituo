@@ -123,6 +123,20 @@ const Navbar = () => {
               {/* Dropdown menu */}
               {isMenuOpen && (
                 <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-secondary-800 rounded-md shadow-lg py-1 animate-fade-in">
+                  <Link
+                    to="/settings"
+                    onClick={closeMenu}
+                    className="block px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
+                  >
+                    Settings
+                  </Link>
+                  <Link
+                    to="/settings#help"
+                    onClick={closeMenu}
+                    className="block px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
+                  >
+                    Help & Support
+                  </Link>
                   <button
                     onClick={handleLogout}
                     className="block w-full text-left px-4 py-2 text-sm text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"
@@ -202,6 +216,20 @@ const Navbar = () => {
                 {item.title}
               </Link>
             ))}
+            <Link
+              to="/settings"
+              onClick={closeMenu}
+              className="block pl-3 pr-4 py-2 text-base font-medium text-secondary-600 dark:text-secondary-300 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-gray-50 dark:hover:bg-secondary-700 border-l-4 border-transparent transition-colors duration-200"
+            >
+              Settings
+            </Link>
+            <Link
+              to="/settings#help"
+              onClick={closeMenu}
+              className="block pl-3 pr-4 py-2 text-base font-medium text-secondary-600 dark:text-secondary-300 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-gray-50 dark:hover:bg-secondary-700 border-l-4 border-transparent transition-colors duration-200"
+            >
+              Help & Support
+            </Link>
             <button
               onClick={handleLogout}
               className="block w-full text-left pl-3 pr-4 py-2 text-base font-medium text-secondary-600 dark:text-secondary-300 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-gray-50 dark:hover:bg-secondary-700 border-l-4 border-transparent transition-colors duration-200"

@@ -10,7 +10,9 @@ import Dashboard from './pages/Dashboard';
 import CreateTasks from './pages/CreateTasks';
 import TaskStats from './pages/TaskStats';
 import PomodoroTimer from './pages/PomodoroTimer';
+import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
+import ResetPassword from './pages/ResetPassword';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
@@ -97,6 +99,22 @@ function App() {
             element={
               <ProtectedRoute>
                 <PomodoroTimer />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/settings" 
+            element={
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/reset-password/:token" 
+            element={
+              <ProtectedRoute>
+                <ResetPassword />
               </ProtectedRoute>
             } 
           />

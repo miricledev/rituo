@@ -182,7 +182,29 @@ def get_trends():
     
     # Get all completions for current tasks
     task_ids = [task.id for task in active_tasks]
-    
+    completions = TaskCompletion.query.filter(
+        TaskCompletion.task_id.in_(task_ids),
+        TaskCompletion.user_id == user_id,
+        TaskCompletion.completion_date >= cycle_start_date,
+        TaskCompletion.completion_date <= today
+    ).all()
+
+    # Prepare daily trend data
+    daily_trend = []
+    current_date = cycle_start_date
+    while current_date <= today:
+        date_str = current_date.isoformat()
+        # Count completions for this day
+        day_completions = [c for c in completions if c.completion_date == current_date and c.is_complete]
+        total_tasks = len(active_tasks)
+        completed_tasks = len(day_completions)
+        completion_rate = (completed_tasks / total_tasks) * 100 if total_tasks > 0 else 0
+        daily_trend.append({
+            'date': date_str,
+            'completion_rate': completion_rate
+        })
+        current_date += timedelta(days=1)
+
     # Calculate completion trends by day of week
     day_of_week_data = db.session.query(
         func.extract('dow', TaskCompletion.completion_date).label('day_of_week'),
@@ -196,13 +218,10 @@ def get_trends():
     ).group_by('day_of_week').all()
     
     # Prepare day of week data
-    # PostgreSQL's dow returns 0-6 for Sunday-Saturday, so we need to adjust the mapping
     days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     day_of_week_trend = []
-    
-    for dow in range(7):  # 0-6 for Sunday to Saturday
+    for dow in range(7):
         dow_data = next((d for d in day_of_week_data if int(d.day_of_week) == dow), None)
-        
         if dow_data:
             completion_rate = (dow_data.completed / dow_data.total) * 100 if dow_data.total > 0 else 0
             day_of_week_trend.append({
@@ -218,28 +237,24 @@ def get_trends():
                 'completed': 0,
                 'completion_rate': 0
             })
-    
     # Calculate completion trends by week
     weekly_data = []
     current_date = cycle_start_date
-    week_start = current_date - timedelta(days=current_date.weekday())
-    
+    # First week: start at cycle_start_date, end at the next Sunday or today
+    first_week_end = min(cycle_start_date + timedelta(days=6 - cycle_start_date.weekday()), today)
+    week_start = cycle_start_date
+    week_end = first_week_end
     while week_start <= today:
         week_end = min(week_start + timedelta(days=6), today)
-        
-        # Count completions for this week
         week_completions = TaskCompletion.query.filter(
             TaskCompletion.task_id.in_(task_ids),
             TaskCompletion.user_id == user_id,
             TaskCompletion.completion_date >= week_start,
             TaskCompletion.completion_date <= week_end
         ).all()
-        
         total_possible = len(active_tasks) * ((week_end - week_start).days + 1)
         total_completed = sum(1 for c in week_completions if c.is_complete)
-        
         completion_rate = (total_completed / total_possible) * 100 if total_possible > 0 else 0
-        
         weekly_data.append({
             'week_start': week_start.isoformat(),
             'week_end': week_end.isoformat(),
@@ -247,13 +262,11 @@ def get_trends():
             'total_completed': total_completed,
             'completion_rate': completion_rate
         })
-        
-        # Move to next week
-        week_start += timedelta(days=7)
-    
+        week_start = week_end + timedelta(days=1)
     return jsonify({
         'day_of_week_trend': day_of_week_trend,
-        'weekly_trend': weekly_data
+        'weekly_trend': weekly_data,
+        'daily_trend': daily_trend
     }), 200
 
 
