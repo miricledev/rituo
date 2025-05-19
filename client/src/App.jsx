@@ -9,6 +9,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import CreateTasks from './pages/CreateTasks';
 import TaskStats from './pages/TaskStats';
+import PomodoroTimer from './pages/PomodoroTimer';
 import NotFound from './pages/NotFound';
 
 // Components
@@ -88,6 +89,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <TaskStats />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/pomodoro" 
+            element={
+              <ProtectedRoute>
+                <PomodoroTimer />
               </ProtectedRoute>
             } 
           />

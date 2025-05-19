@@ -82,6 +82,19 @@ const Landing = () => {
               Learn More
             </a>
           </div>
+          <div className="mt-8 animate-fade-in" style={{ animationDelay: '0.5s' }}>
+            <a 
+              href="https://miricledev.github.io/md-landing-page/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="inline-flex items-center px-4 py-2 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 text-sm font-medium transition-all duration-300 hover:shadow-[0_0_15px_rgba(14,165,233,0.5)] dark:hover:shadow-[0_0_15px_rgba(56,189,248,0.5)] hover:scale-105"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Developed by miricledev
+            </a>
+          </div>
         </div>
       </section>
 
@@ -317,6 +330,19 @@ const Landing = () => {
           
           <div className="mt-8 pt-8 border-t border-secondary-800 text-center">
             <p>&copy; {new Date().getFullYear()} Rituo. All rights reserved.</p>
+            <div className="mt-4">
+              <a 
+                href="https://miricledev.github.io/md-landing-page/" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="inline-flex items-center px-4 py-2 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 text-sm font-medium transition-all duration-300 hover:shadow-[0_0_15px_rgba(14,165,233,0.5)] dark:hover:shadow-[0_0_15px_rgba(56,189,248,0.5)] hover:scale-105"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Developed by miricledev
+              </a>
+            </div>
           </div>
         </div>
       </footer>
