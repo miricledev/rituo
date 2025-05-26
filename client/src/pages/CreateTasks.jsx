@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTask } from '../contexts/TaskContext';
+import PaymentModal from '../components/PaymentModal';
 
 const CreateTasks = () => {
   const [tasks, setTasks] = useState([{ title: '', description: '' }]);
@@ -8,6 +9,7 @@ const CreateTasks = () => {
   const [error, setError] = useState('');
   const [activeStep, setActiveStep] = useState(1);
   const [accepted, setAccepted] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   
   const { hasCycle, cycleData, createTasks } = useTask();
   const navigate = useNavigate();
@@ -86,6 +88,21 @@ const CreateTasks = () => {
       }
       
       await createTasks(validTasks);
+      navigate('/dashboard');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to create tasks. Please try again.');
+      setLoading(false);
+    }
+  };
+
+  // Handle payment success
+  const handlePaymentSuccess = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const validTasks = tasks.filter(task => task.title.trim());
+      await createTasks(validTasks);
+      setShowPaymentModal(false);
       navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to create tasks. Please try again.');
@@ -253,14 +270,15 @@ const CreateTasks = () => {
           {activeStep === 3 && (
             <div>
               <h2 className="text-xl font-semibold mb-6 text-secondary-900 dark:text-white">Step 3: Commit to Your 30-Day Journey</h2>
-              
               <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6 transition-colors duration-200">
                 <h3 className="font-medium text-yellow-800 dark:text-yellow-300 mb-2">Important:</h3>
-                <p className="text-yellow-700 dark:text-yellow-400">
+                <p className="text-yellow-700 dark:text-yellow-400 mb-2">
                   Once created, your task list will be locked for 30 days. You won't be able to add, remove, or modify these tasks until the cycle ends.
                 </p>
+                <p className="text-yellow-700 dark:text-yellow-400 font-semibold">
+                  To start your 30-day challenge, a <span className="text-primary-600 dark:text-primary-400">one-time payment of £2.99</span> is required. This helps support the platform and unlocks your commitment.
+                </p>
               </div>
-              
               <div className="mb-8">
                 <label className="flex items-start">
                   <input
@@ -274,7 +292,6 @@ const CreateTasks = () => {
                   </span>
                 </label>
               </div>
-              
               <div className="flex justify-between">
                 <button
                   type="button"
@@ -284,23 +301,32 @@ const CreateTasks = () => {
                   Back
                 </button>
                 <button
-                  type="submit"
+                  type="button"
                   disabled={loading || !accepted}
                   className={`btn btn-primary hover:scale-105 transition-transform duration-200 ${(loading || !accepted) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  onClick={() => {
+                    localStorage.setItem('pendingTasks', JSON.stringify(tasks));
+                    setShowPaymentModal(true);
+                  }}
                 >
                   {loading ? (
                     <div className="flex items-center justify-center">
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                      Creating...
+                      Processing...
                     </div>
                   ) : (
-                    'Start My 30-Day Commitment'
+                    'Start My 30-Day Commitment (£2.99)'
                   )}
                 </button>
               </div>
             </div>
           )}
         </form>
+        <PaymentModal
+          isOpen={showPaymentModal}
+          onClose={() => setShowPaymentModal(false)}
+          onSuccess={handlePaymentSuccess}
+        />
       </div>
     </div>
   );

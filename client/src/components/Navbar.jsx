@@ -121,6 +121,7 @@ const Navbar = () => {
                     {currentUser?.username?.charAt(0).toUpperCase()}
                   </div>
                 </button>
+                
                 {/* Dropdown menu */}
                 {isMenuOpen && (
                   <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-secondary-800 rounded-md shadow-lg py-1 animate-fade-in">

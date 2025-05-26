@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from db.models import db, User
 import re
 
@@ -47,7 +47,8 @@ def register():
         db.session.commit()
         
         # Generate access token
-        access_token = create_access_token(identity=new_user.id)
+        access_token = create_access_token(identity=str(new_user.id))
+        print(f"Generated token for new user {new_user.username}: {access_token}")
         
         return jsonify({
             'message': 'User registered successfully',
@@ -65,17 +66,24 @@ def login():
     
     # Validate input data
     if not data or not data.get('username') or not data.get('password'):
+        print("Login attempt failed: Missing username or password")
         return jsonify({'message': 'Missing username or password'}), 400
     
     # Find user by username
     user = User.query.filter_by(username=data.get('username')).first()
     
-    # Check if user exists and password is correct
-    if not user or not check_password_hash(user.password_hash, data.get('password')):
+    if not user:
+        print(f"Login attempt failed: User not found - {data.get('username')}")
+        return jsonify({'message': 'Invalid username or password'}), 401
+    
+    # Check if password is correct
+    if not check_password_hash(user.password_hash, data.get('password')):
+        print(f"Login attempt failed: Invalid password for user - {data.get('username')}")
         return jsonify({'message': 'Invalid username or password'}), 401
     
     # Generate access token
-    access_token = create_access_token(identity=user.id)
+    access_token = create_access_token(identity=str(user.id))
+    print(f"Generated token for user {user.username}: {access_token}")
     
     return jsonify({
         'message': 'Login successful',
@@ -87,15 +95,39 @@ def login():
 @auth_bp.route('/user', methods=['GET'])
 @jwt_required()
 def get_user():
-    user_id = get_jwt_identity()
-    user = User.query.get(user_id)
-    
-    if not user:
-        return jsonify({'message': 'User not found'}), 404
-    
-    return jsonify({
-        'user': user.to_dict()
-    }), 200
+    try:
+        # Get the JWT token data
+        jwt_data = get_jwt()
+        print(f"JWT data: {jwt_data}")
+        
+        # Get user ID from token and convert to integer
+        user_id = int(get_jwt_identity())
+        print(f"Getting user data for ID: {user_id}")
+        
+        # Get user from database
+        user = User.query.get(user_id)
+        
+        if not user:
+            print(f"User not found for ID: {user_id}")
+            return jsonify({
+                'message': 'User not found',
+                'error': 'user_not_found'
+            }), 404
+        
+        # Convert user to dictionary
+        user_data = user.to_dict()
+        print(f"Returning user data: {user_data}")
+        
+        return jsonify({
+            'user': user_data,
+            'message': 'User data retrieved successfully'
+        }), 200
+    except Exception as e:
+        print(f"Error in get_user: {str(e)}")
+        return jsonify({
+            'message': f'Error getting user data: {str(e)}',
+            'error': 'server_error'
+        }), 500
 
 
 @auth_bp.route('/change-password', methods=['PUT'])

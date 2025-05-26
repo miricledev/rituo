@@ -1,6 +1,6 @@
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager
+from flask_jwt_extended import JWTManager, get_jwt, verify_jwt_in_request
 from datetime import timedelta
 import os
 from dotenv import load_dotenv
@@ -11,6 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 from routes.auth import auth_bp
 from routes.tasks import tasks_bp
 from routes.analytics import analytics_bp
+from routes.payments import payments_bp
 
 # Import utils
 from utils.reset_tasks import reset_daily_tasks
@@ -26,6 +27,9 @@ app = Flask(__name__)
 # Configure app
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
+app.config["JWT_TOKEN_LOCATION"] = ["headers"]
+app.config["JWT_HEADER_NAME"] = "Authorization"
+app.config["JWT_HEADER_TYPE"] = "Bearer"
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost/rituo_db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -48,6 +52,37 @@ CORS(app,
      }},
      supports_credentials=True)
 
+# Add request logging middleware
+@app.before_request
+def log_request_info():
+    print('Headers:', dict(request.headers))
+    print('Body:', request.get_data())
+
+# JWT error handlers
+@jwt.expired_token_loader
+def expired_token_callback(jwt_header, jwt_payload):
+    print(f"Token expired: {jwt_header}, {jwt_payload}")
+    return jsonify({
+        'message': 'The token has expired',
+        'error': 'token_expired'
+    }), 401
+
+@jwt.invalid_token_loader
+def invalid_token_callback(error):
+    print(f"Invalid token: {error}")
+    return jsonify({
+        'message': 'Invalid token',
+        'error': 'invalid_token'
+    }), 401
+
+@jwt.unauthorized_loader
+def unauthorized_callback(error):
+    print(f"Unauthorized: {error}")
+    return jsonify({
+        'message': 'Missing token',
+        'error': 'missing_token'
+    }), 401
+
 # Initialize database
 db.init_app(app)
 
@@ -59,6 +94,7 @@ with app.app_context():
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(tasks_bp, url_prefix='/api/tasks')
 app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
+app.register_blueprint(payments_bp, url_prefix='/api/payments')
 
 # Set up scheduler for daily task reset at midnight
 scheduler = BackgroundScheduler()

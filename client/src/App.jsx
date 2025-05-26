@@ -14,6 +14,7 @@ import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
 import ResetPassword from './pages/ResetPassword';
 import Archives from './pages/Archives';
+import PaymentSuccess from './pages/PaymentSuccess';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
@@ -126,6 +127,14 @@ function App() {
                 <Archives />
               </ProtectedRoute>
             } 
+          />
+          <Route
+            path="/payment-success"
+            element={
+              <ProtectedRoute>
+                <PaymentSuccess />
+              </ProtectedRoute>
+            }
           />
           
           {/* 404 Not Found */}
