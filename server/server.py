@@ -60,12 +60,10 @@ CORS(app,
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          "allow_headers": ["Content-Type", "Authorization"],
          "expose_headers": ["Content-Type", "Authorization"],
-         "supports_credentials": True,
          "max_age": 3600,
          "send_wildcard": False,
          "vary_header": True,
-         "automatic_options": True,
-         "credentials": True
+         "automatic_options": True
      }},
      supports_credentials=True)
 
