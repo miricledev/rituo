@@ -6,6 +6,8 @@ import os
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+import logging
+from logging.handlers import RotatingFileHandler
 
 # Import routes
 from routes.auth import auth_bp
@@ -24,6 +26,19 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Configure logging
+if not app.debug:
+    if not os.path.exists('logs'):
+        os.mkdir('logs')
+    file_handler = RotatingFileHandler('logs/rituo.log', maxBytes=10240, backupCount=10)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+    ))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Rituo startup')
+
 # Configure app
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
@@ -38,7 +53,8 @@ jwt = JWTManager(app)
 CORS(app, 
      resources={r"/*": {
          "origins": [
-             "http://localhost:5173",
+             "http://localhost:5173",  # Development
+             "http://localhost:4173",  # Production preview
              os.getenv("FRONTEND_URL", "https://rituo-client.onrender.com")
          ],
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -48,20 +64,21 @@ CORS(app,
          "max_age": 3600,
          "send_wildcard": False,
          "vary_header": True,
-         "automatic_options": True
+         "automatic_options": True,
+         "credentials": True
      }},
      supports_credentials=True)
 
 # Add request logging middleware
 @app.before_request
 def log_request_info():
-    print('Headers:', dict(request.headers))
-    print('Body:', request.get_data())
+    app.logger.info('Headers: %s', dict(request.headers))
+    app.logger.info('Body: %s', request.get_data())
 
 # JWT error handlers
 @jwt.expired_token_loader
 def expired_token_callback(jwt_header, jwt_payload):
-    print(f"Token expired: {jwt_header}, {jwt_payload}")
+    app.logger.warning("Token expired: %s, %s", jwt_header, jwt_payload)
     return jsonify({
         'message': 'The token has expired',
         'error': 'token_expired'
@@ -69,7 +86,7 @@ def expired_token_callback(jwt_header, jwt_payload):
 
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
-    print(f"Invalid token: {error}")
+    app.logger.warning("Invalid token: %s", error)
     return jsonify({
         'message': 'Invalid token',
         'error': 'invalid_token'
@@ -77,7 +94,7 @@ def invalid_token_callback(error):
 
 @jwt.unauthorized_loader
 def unauthorized_callback(error):
-    print(f"Unauthorized: {error}")
+    app.logger.warning("Unauthorized: %s", error)
     return jsonify({
         'message': 'Missing token',
         'error': 'missing_token'
@@ -88,7 +105,12 @@ db.init_app(app)
 
 # Create database tables if they don't exist
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        app.logger.info('Database tables created successfully')
+    except Exception as e:
+        app.logger.error('Error creating database tables: %s', str(e))
+        raise
 
 # Register blueprints without trailing slashes
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -116,4 +138,4 @@ if __name__ == '__main__':
     
     # Run the Flask app
     port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)

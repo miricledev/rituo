@@ -2,15 +2,20 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import axios from 'axios';
 import { useAuth } from './AuthContext';
 
-axios.defaults.withCredentials = true;
 // Create the task context
 const TaskContext = createContext();
 
 // API base URL from environment variable
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL || (
+  window.location.port === '4173' 
+    ? 'http://localhost:5000/api'  // Production preview
+    : 'http://localhost:5000/api'  // Development
+);
 
 // Configure axios defaults
+axios.defaults.baseURL = API_URL;
 axios.defaults.headers.common['Content-Type'] = 'application/json';
+axios.defaults.withCredentials = true;
 
 export function TaskProvider({ children }) {
   const { isAuthenticated, currentUser } = useAuth();
