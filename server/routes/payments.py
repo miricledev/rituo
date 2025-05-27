@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Initialize Stripe with test key
-stripe.api_key = os.getenv('STRIPE_TEST_SECRET_KEY')
+# Initialize Stripe with live key
+stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
 # Get product and price IDs from environment variables
 CHALLENGE_PRODUCT_ID = os.getenv('STRIPE_CHALLENGE_PRODUCT_ID')
