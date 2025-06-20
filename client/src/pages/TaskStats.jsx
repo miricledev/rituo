@@ -3,35 +3,35 @@ import { useParams, Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useTask } from '../contexts/TaskContext';
 
-const TaskStats = () => {
+const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
   const { taskId } = useParams();
-  const { fetchTaskAnalytics, loading } = useTask();
-  
-  const [taskData, setTaskData] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { fetchTaskAnalytics, loading: loadingContext } = useTask ? useTask() : {};
+  const [taskData, setTaskData] = useState(taskDataProp || null);
+  const [isLoading, setIsLoading] = useState(!taskDataProp);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const loadTaskData = async () => {
-      try {
-        setIsLoading(true);
-        const data = await fetchTaskAnalytics(taskId);
-        setTaskData(data);
-        setError('');
-      } catch (err) {
-        setError('Failed to load task data. Please try again.');
-        console.error(err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (taskId) {
+    if (!taskDataProp && taskId && fetchTaskAnalytics) {
+      const loadTaskData = async () => {
+        try {
+          setIsLoading(true);
+          const data = await fetchTaskAnalytics(taskId);
+          setTaskData(data);
+          setError('');
+        } catch (err) {
+          setError('Failed to load task data. Please try again.');
+          console.error(err);
+        } finally {
+          setIsLoading(false);
+        }
+      };
       loadTaskData();
     }
-  }, [taskId, fetchTaskAnalytics]);
+  }, [taskId, fetchTaskAnalytics, taskDataProp]);
 
-  if (isLoading || loading) {
+  const loading = typeof loadingProp === 'boolean' ? loadingProp : isLoading || loadingContext;
+
+  if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="animate-pulse">
@@ -65,7 +65,7 @@ const TaskStats = () => {
   }
 
   // Format chart data
-  const chartData = taskData.daily_data.map(day => ({
+  const chartData = (taskData.daily_data || []).map(day => ({
     date: new Date(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     completed: day.is_complete ? 1 : 0,
     originalDate: day.date // Keep the original date for sorting
@@ -77,14 +77,16 @@ const TaskStats = () => {
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-colors duration-200">
       {/* Header with back button */}
-      <div className="flex items-center mb-2">
-        <Link to="/dashboard" className="mr-4 text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-300 transition-colors duration-200">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-          </svg>
-        </Link>
-        <h1 className="text-2xl font-bold text-secondary-900 dark:text-white">Task Statistics</h1>
-      </div>
+      {!taskDataProp && (
+        <div className="flex items-center mb-2">
+          <Link to="/dashboard" className="mr-4 text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-300 transition-colors duration-200">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+            </svg>
+          </Link>
+          <h1 className="text-2xl font-bold text-secondary-900 dark:text-white">Task Statistics</h1>
+        </div>
+      )}
       
       <h2 className="text-xl font-semibold text-primary-600 dark:text-primary-400 mb-6">{taskData.task.title}</h2>
       

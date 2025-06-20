@@ -8,12 +8,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import logging
 from logging.handlers import RotatingFileHandler
+from flask_migrate import Migrate
 
 # Import routes
 from routes.auth import auth_bp
 from routes.tasks import tasks_bp
 from routes.analytics import analytics_bp
 from routes.payments import payments_bp
+from routes.groups import groups_bp
 
 # Import utils
 from utils.reset_tasks import reset_daily_tasks
@@ -45,7 +47,7 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_HEADER_NAME"] = "Authorization"
 app.config["JWT_HEADER_TYPE"] = "Bearer"
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost/rituo_db")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv('DATABASE_URL')
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 # Initialize extensions
@@ -66,6 +68,10 @@ CORS(app,
          "automatic_options": True
      }},
      supports_credentials=True)
+
+# Initialize database and migrations
+db.init_app(app)
+migrate = Migrate(app, db)
 
 # Add request logging middleware
 @app.before_request
@@ -98,9 +104,6 @@ def unauthorized_callback(error):
         'error': 'missing_token'
     }), 401
 
-# Initialize database
-db.init_app(app)
-
 # Create database tables if they don't exist
 with app.app_context():
     try:
@@ -115,12 +118,13 @@ app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(tasks_bp, url_prefix='/api/tasks')
 app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
 app.register_blueprint(payments_bp, url_prefix='/api/payments')
+app.register_blueprint(groups_bp, url_prefix='/api/groups')
 
 # Set up scheduler for daily task reset at midnight
-scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler(timezone='UTC')
 scheduler.add_job(
     reset_daily_tasks,
-    trigger=CronTrigger(hour=0, minute=0),
+    trigger=CronTrigger(hour=0, minute=0, timezone='UTC'),
     id='reset_daily_tasks',
     name='Reset all task completions at midnight',
     replace_existing=True

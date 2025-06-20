@@ -4,6 +4,8 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from db.models import db, User
 import re
 
+
+
 auth_bp = Blueprint('auth', __name__)
 
 # Helper function to validate email format
@@ -39,7 +41,7 @@ def register():
     new_user = User(
         username=data.get('username'),
         email=data.get('email'),
-        password_hash=hashed_password
+        password=hashed_password
     )
     
     try:
@@ -77,7 +79,7 @@ def login():
         return jsonify({'message': 'Invalid username or password'}), 401
     
     # Check if password is correct
-    if not check_password_hash(user.password_hash, data.get('password')):
+    if not check_password_hash(user.password, data.get('password')):
         print(f"Login attempt failed: Invalid password for user - {data.get('username')}")
         return jsonify({'message': 'Invalid username or password'}), 401
     
@@ -146,11 +148,11 @@ def change_password():
         return jsonify({'message': 'Missing required fields'}), 400
     
     # Check if current password is correct
-    if not check_password_hash(user.password_hash, data.get('current_password')):
+    if not check_password_hash(user.password, data.get('current_password')):
         return jsonify({'message': 'Current password is incorrect'}), 401
     
     # Update password
-    user.password_hash = generate_password_hash(data.get('new_password'))
+    user.password = generate_password_hash(data.get('new_password'))
     
     try:
         db.session.commit()

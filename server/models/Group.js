@@ -1,12 +1,11 @@
 const mongoose = require('mongoose');
 
-const userSchema = new mongoose.Schema({
-  username: {
+const groupSchema = new mongoose.Schema({
+  name: {
     type: String,
-    required: true,
-    unique: true
+    required: true
   },
-  email: {
+  groupId: {
     type: String,
     required: true,
     unique: true
@@ -15,24 +14,23 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  resetToken: String,
-  resetTokenExpiry: Date,
-  groups: [{
+  leader: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Group'
-  }],
-  leadingGroups: [{
+    ref: 'User',
+    required: true
+  },
+  members: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Group'
+    ref: 'User'
   }],
-  activeGroupChallenges: [{
+  activeChallenge: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'GroupChallenge'
-  }],
+  },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
 
-module.exports = mongoose.model('User', userSchema); 
+module.exports = mongoose.model('Group', groupSchema); 

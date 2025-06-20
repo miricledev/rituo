@@ -56,6 +56,7 @@ const Navbar = () => {
   // Navigation items
   const navItems = [
     { title: 'Dashboard', path: '/dashboard' },
+    { title: 'Groups', path: '/groups' },
     { title: 'Archives', path: '/archives' },
     { title: 'Pomodoro Timer', path: '/pomodoro' },
     ...(tasks && tasks.length === 0 ? [{ title: 'Create Tasks', path: '/create-tasks' }] : [])

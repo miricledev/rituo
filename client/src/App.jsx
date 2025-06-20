@@ -15,6 +15,9 @@ import NotFound from './pages/NotFound';
 import ResetPassword from './pages/ResetPassword';
 import Archives from './pages/Archives';
 import PaymentSuccess from './pages/PaymentSuccess';
+import Groups from './pages/Groups';
+import GroupDetail from './pages/GroupDetail';
+import MemberStats from './pages/MemberStats';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
@@ -136,6 +139,23 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/groups"
+            element={
+              <ProtectedRoute>
+                <Groups />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/groups/:groupId"
+            element={
+              <ProtectedRoute>
+                <GroupDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/groups/:groupId/member/:memberId" element={<ProtectedRoute><MemberStats /></ProtectedRoute>} />
           
           {/* 404 Not Found */}
           <Route path="*" element={<NotFound />} />
