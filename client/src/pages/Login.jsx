@@ -38,7 +38,7 @@ const Login = () => {
       <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card w-full max-w-md p-8 transform hover:scale-[1.02] transition-all duration-300">
         <div className="text-center mb-8 animate-fade-in">
           <Link to="/" className="inline-block hover:scale-105 transition-transform duration-200">
-            <h1 className="font-display text-2xl font-bold text-primary-600 dark:text-primary-400">Rituo</h1>
+            <h1 className="font-display text-2xl font-bold text-primary-600 dark:text-primary-400">Inner Performance</h1>
           </Link>
           <h2 className="mt-4 text-2xl font-bold text-secondary-800 dark:text-white">Welcome Back</h2>
           <p className="mt-2 text-secondary-600 dark:text-secondary-300">Log in to your account to continue your journey</p>

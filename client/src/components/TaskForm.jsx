@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import PaymentModal from './PaymentModal';
 
 const TaskForm = () => {
   const navigate = useNavigate();
@@ -14,7 +13,6 @@ const TaskForm = () => {
     is_30_day_challenge: false
   });
   const [error, setError] = useState('');
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -31,7 +29,7 @@ const TaskForm = () => {
     try {
       if (formData.is_30_day_challenge) {
         // Show payment modal for 30-day challenge
-        setIsPaymentModalOpen(true);
+        // setIsPaymentModalOpen(true); // This line is removed
       } else {
         // Regular task creation
         await createTask();
@@ -46,14 +44,14 @@ const TaskForm = () => {
     navigate('/tasks');
   };
 
-  const handlePaymentSuccess = async () => {
-    try {
-      await createTask();
-      setIsPaymentModalOpen(false);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Error creating task after payment');
-    }
-  };
+  // const handlePaymentSuccess = async () => { // This function is removed
+  //   try {
+  //     await createTask();
+  //     setIsPaymentModalOpen(false);
+  //   } catch (err) {
+  //     setError(err.response?.data?.message || 'Error creating task after payment');
+  //   }
+  // };
 
   return (
     <div className="max-w-2xl mx-auto p-6">
@@ -171,11 +169,7 @@ const TaskForm = () => {
         </div>
       </form>
 
-      <PaymentModal
-        isOpen={isPaymentModalOpen}
-        onClose={() => setIsPaymentModalOpen(false)}
-        onSuccess={handlePaymentSuccess}
-      />
+      {/* PaymentModal component is removed */}
     </div>
   );
 };

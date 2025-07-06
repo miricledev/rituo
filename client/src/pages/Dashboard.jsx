@@ -34,11 +34,6 @@ const Dashboard = () => {
           <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 mb-8 transition-colors duration-200">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold text-secondary-800 dark:text-white">Your 30-Day Tasks</h2>
-              {!hasCycle && !loading && (
-                <Link to="/create-tasks" className="btn btn-primary hover:scale-105 transition-transform duration-200">
-                  Create Tasks
-                </Link>
-              )}
             </div>
             <TaskList />
           </div>
@@ -55,18 +50,6 @@ const Dashboard = () => {
           {/* Trends chart */}
           {hasCycle && <TrendsChart />}
           
-          {/* Call to action if no tasks */}
-          {!hasCycle && !loading && (
-            <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-8 text-center transition-colors duration-200">
-              <h3 className="text-xl font-semibold mb-4 text-secondary-900 dark:text-white">Ready to Start Your 30-Day Journey?</h3>
-              <p className="text-secondary-600 dark:text-secondary-300 mb-6">
-                Create your 30-day commitment list to build lasting habits and track your progress.
-              </p>
-              <Link to="/create-tasks" className="btn btn-primary px-8 py-3 hover:scale-105 transition-transform duration-200">
-                Create Your Task List
-              </Link>
-            </div>
-          )}
         </div>
       </div>
       

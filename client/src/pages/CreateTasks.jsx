@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTask } from '../contexts/TaskContext';
-import PaymentModal from '../components/PaymentModal';
 
 const CreateTasks = () => {
   const [tasks, setTasks] = useState([{ title: '', description: '' }]);
@@ -9,7 +8,6 @@ const CreateTasks = () => {
   const [error, setError] = useState('');
   const [activeStep, setActiveStep] = useState(1);
   const [accepted, setAccepted] = useState(false);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
   
   const { hasCycle, cycleData, createTasks } = useTask();
   const navigate = useNavigate();
@@ -88,21 +86,6 @@ const CreateTasks = () => {
       }
       
       await createTasks(validTasks);
-      navigate('/dashboard');
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to create tasks. Please try again.');
-      setLoading(false);
-    }
-  };
-
-  // Handle payment success
-  const handlePaymentSuccess = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const validTasks = tasks.filter(task => task.title.trim());
-      await createTasks(validTasks);
-      setShowPaymentModal(false);
       navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to create tasks. Please try again.');
@@ -306,7 +289,6 @@ const CreateTasks = () => {
                   className={`btn btn-primary hover:scale-105 transition-transform duration-200 ${(loading || !accepted) ? 'opacity-70 cursor-not-allowed' : ''}`}
                   onClick={() => {
                     localStorage.setItem('pendingTasks', JSON.stringify(tasks));
-                    setShowPaymentModal(true);
                   }}
                 >
                   {loading ? (
@@ -322,11 +304,6 @@ const CreateTasks = () => {
             </div>
           )}
         </form>
-        <PaymentModal
-          isOpen={showPaymentModal}
-          onClose={() => setShowPaymentModal(false)}
-          onSuccess={handlePaymentSuccess}
-        />
       </div>
     </div>
   );

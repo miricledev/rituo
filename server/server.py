@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, get_jwt, verify_jwt_in_request
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import timedelta
 import os
 from dotenv import load_dotenv
@@ -21,7 +22,7 @@ from routes.groups import groups_bp
 from utils.reset_tasks import reset_daily_tasks
 
 # Import database
-from db.models import db
+from db.models import db, User, Group, Message
 
 # Load environment variables
 load_dotenv()
@@ -68,6 +69,13 @@ CORS(app,
          "automatic_options": True
      }},
      supports_credentials=True)
+
+# Initialize SocketIO with CORS support
+socketio = SocketIO(app, cors_allowed_origins=[
+    "http://localhost:5173",  # Development
+    "http://localhost:4173",  # Production preview
+    os.getenv("FRONTEND_URL", "https://rituo-client.onrender.com")
+])
 
 # Initialize database and migrations
 db.init_app(app)
@@ -120,6 +128,243 @@ app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
 app.register_blueprint(payments_bp, url_prefix='/api/payments')
 app.register_blueprint(groups_bp, url_prefix='/api/groups')
 
+# WebSocket event handlers
+@socketio.on('connect')
+def handle_connect():
+    app.logger.info('Client connected: %s', request.sid)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    app.logger.info('Client disconnected: %s', request.sid)
+
+@socketio.on('join_group_chat')
+def handle_join_group_chat(data):
+    try:
+        group_id = data.get('group_id')
+        user_id = data.get('user_id')
+        
+        # Verify user is in the group
+        group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
+        if not group:
+            emit('error', {'message': 'Group not found'})
+            return
+        
+        user = User.query.get(user_id)
+        if not user or (user_id not in [m.id for m in group.members] and user_id != group.leader_id):
+            emit('error', {'message': 'Not authorized to join group chat'})
+            return
+        
+        # Always use the public group code for the room name
+        room = f'group_chat_{group.group_id}'
+        join_room(room)
+        emit('joined_group_chat', {'group_id': group.group_id, 'room': room})
+        app.logger.info('User %s joined group chat %s (room: %s)', user_id, group.group_id, room)
+        
+        # Mark all group chat messages as read for this user
+        import json
+        group_messages = Message.query.filter_by(group_id=group.id, recipient_id=None).all()
+        for msg in group_messages:
+            read_by = json.loads(msg.read_by or '[]')
+            if user_id not in read_by:
+                read_by.append(user_id)
+                msg.read_by = json.dumps(read_by)
+        db.session.commit()
+        
+    except Exception as e:
+        app.logger.error('Error joining group chat: %s', str(e))
+        emit('error', {'message': 'Failed to join group chat'})
+
+@socketio.on('leave_group_chat')
+def handle_leave_group_chat(data):
+    try:
+        group_id = data.get('group_id')
+        room = f'group_chat_{group_id}'
+        leave_room(room)
+        emit('left_group_chat', {'group_id': group_id})
+        app.logger.info('User left group chat %s', group_id)
+        
+    except Exception as e:
+        app.logger.error('Error leaving group chat: %s', str(e))
+
+@socketio.on('send_group_message')
+def handle_send_group_message(data):
+    try:
+        group_id = data.get('group_id')
+        user_id = data.get('user_id')
+        content = data.get('content', '').strip()
+        
+        if not content:
+            emit('error', {'message': 'Message content required'})
+            return
+        
+        # Verify user is in the group
+        group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
+        if not group:
+            emit('error', {'message': 'Group not found'})
+            return
+        
+        user = User.query.get(user_id)
+        if not user or (user_id not in [m.id for m in group.members] and user_id != group.leader_id):
+            emit('error', {'message': 'Not authorized to send message'})
+            return
+        
+        # Save message to database
+        msg = Message(group_id=group.id, sender_id=user_id, content=content)
+        db.session.add(msg)
+        db.session.commit()
+        
+        # Broadcast to all users in the group chat
+        room = f'group_chat_{group.group_id}'
+        emit('receive_group_message', {
+            'id': msg.id,
+            'sender_id': msg.sender_id,
+            'sender_username': user.username,
+            'content': msg.content,
+            'created_at': msg.created_at.isoformat(),
+            'message_type': msg.message_type
+        }, room=room)
+        
+        app.logger.info('Group message sent by user %s in group %s', user_id, group_id)
+        
+    except Exception as e:
+        app.logger.error('Error sending group message: %s', str(e))
+        emit('error', {'message': 'Failed to send message'})
+
+@socketio.on('join_dm')
+def handle_join_dm(data):
+    try:
+        group_id = data.get('group_id')
+        user_id = data.get('user_id')
+        target_user_id = data.get('target_user_id')
+        
+        # Verify permissions
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            emit('error', {'message': 'Group not found'})
+            return
+        
+        # Check if current user is the leader
+        is_leader = user_id == group.leader_id
+        # Check if current user is the member trying to DM the leader
+        is_member_dming_leader = target_user_id == group.leader_id and user_id in [m.id for m in group.members]
+        
+        # Only leader or the member trying to DM the leader can join
+        if not is_leader and not is_member_dming_leader:
+            emit('error', {'message': 'Not authorized to join DM'})
+            return
+        
+        # Only allow DMs between leader and member
+        if target_user_id == group.leader_id:
+            # This is a member trying to DM the leader - this is allowed
+            pass
+        elif target_user_id not in [m.id for m in group.members]:
+            emit('error', {'message': 'User not in group'})
+            return
+        
+        room = f'dm_{group.group_id}_{min(user_id, target_user_id)}_{max(user_id, target_user_id)}'
+        join_room(room)
+        emit('joined_dm', {'group_id': group.group_id, 'target_user_id': target_user_id, 'room': room})
+        app.logger.info('User %s joined DM with user %s in group %s', user_id, target_user_id, group.group_id)
+        
+        # Mark DM messages as read for this user
+        import json
+        dm_messages = Message.query.filter_by(
+            group_id=group.id,
+            sender_id=target_user_id,
+            recipient_id=user_id
+        ).all()
+        for msg in dm_messages:
+            read_by = json.loads(msg.read_by or '[]')
+            if user_id not in read_by:
+                read_by.append(user_id)
+                msg.read_by = json.dumps(read_by)
+        db.session.commit()
+        
+    except Exception as e:
+        app.logger.error('Error joining DM: %s', str(e))
+        emit('error', {'message': 'Failed to join DM'})
+
+@socketio.on('leave_dm')
+def handle_leave_dm(data):
+    try:
+        group_id = data.get('group_id')
+        user_id = data.get('user_id')
+        target_user_id = data.get('target_user_id')
+        
+        room = f'dm_{group_id}_{min(user_id, target_user_id)}_{max(user_id, target_user_id)}'
+        leave_room(room)
+        emit('left_dm', {'group_id': group_id, 'target_user_id': target_user_id})
+        app.logger.info('User left DM with user %s in group %s', target_user_id, group_id)
+        
+    except Exception as e:
+        app.logger.error('Error leaving DM: %s', str(e))
+
+@socketio.on('send_dm')
+def handle_send_dm(data):
+    try:
+        group_id = data.get('group_id')
+        user_id = data.get('user_id')
+        target_user_id = data.get('target_user_id')
+        content = data.get('content', '').strip()
+        
+        if not content:
+            emit('error', {'message': 'Message content required'})
+            return
+        
+        # Verify permissions
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            emit('error', {'message': 'Group not found'})
+            return
+        
+        # Check if current user is the leader
+        is_leader = user_id == group.leader_id
+        # Check if current user is the member trying to DM the leader
+        is_member_dming_leader = target_user_id == group.leader_id and user_id in [m.id for m in group.members]
+        
+        # Only leader or the member trying to DM the leader can send
+        if not is_leader and not is_member_dming_leader:
+            emit('error', {'message': 'Not authorized to send DM'})
+            return
+        
+        # Only allow DMs between leader and member
+        if target_user_id == group.leader_id:
+            # This is a member trying to DM the leader - this is allowed
+            pass
+        elif target_user_id not in [m.id for m in group.members]:
+            emit('error', {'message': 'User not in group'})
+            return
+        
+        user = User.query.get(user_id)
+        if not user:
+            emit('error', {'message': 'User not found'})
+            return
+        
+        # Determine recipient
+        recipient_id = target_user_id if user_id == group.leader_id else group.leader_id
+        
+        # Save message to database
+        msg = Message(group_id=group.id, sender_id=user_id, recipient_id=recipient_id, content=content)
+        db.session.add(msg)
+        db.session.commit()
+        
+        # Send to DM room
+        room = f'dm_{group.group_id}_{min(user_id, target_user_id)}_{max(user_id, target_user_id)}'
+        emit('receive_dm', {
+            'id': msg.id,
+            'sender_id': msg.sender_id,
+            'sender_username': user.username,
+            'recipient_id': msg.recipient_id,
+            'content': msg.content,
+            'created_at': msg.created_at.isoformat()
+        }, room=room)
+        
+        app.logger.info('DM sent by user %s to user %s in group %s', user_id, target_user_id, group.group_id)
+        
+    except Exception as e:
+        app.logger.error('Error sending DM: %s', str(e))
+        emit('error', {'message': 'Failed to send DM'})
+
 # Set up scheduler for daily task reset at midnight
 scheduler = BackgroundScheduler(timezone='UTC')
 scheduler.add_job(
@@ -138,6 +383,6 @@ if __name__ == '__main__':
     # Start the scheduler
     scheduler.start()
     
-    # Run the Flask app
+    # Run the Flask app with SocketIO
     port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)

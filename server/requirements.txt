@@ -13,3 +13,5 @@ stripe==2.61.0
 Flask-Migrate==3.1.0
 bcrypt==3.2.0
 uuid==1.30
+Flask-SocketIO==5.1.1
+python-socketio==5.4.0

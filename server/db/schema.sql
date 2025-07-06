@@ -47,3 +47,15 @@ CREATE INDEX idx_task_completion_user_id ON task_completion(user_id);
 CREATE INDEX idx_task_completion_date ON task_completion(completion_date);
 CREATE INDEX idx_tasks_user_id ON tasks(user_id);
 CREATE INDEX idx_tasks_cycle_dates ON tasks(cycle_start_date, cycle_end_date);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    sender_id INTEGER NOT NULL,
+    recipient_id INTEGER,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id),
+    FOREIGN KEY (sender_id) REFERENCES users(id),
+    FOREIGN KEY (recipient_id) REFERENCES users(id)
+);

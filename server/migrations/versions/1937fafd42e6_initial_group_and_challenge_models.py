@@ -86,6 +86,16 @@ def upgrade():
                existing_nullable=True,
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
     op.drop_column('users', 'password_hash')
+
+    op.create_table(
+        'messages',
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('group_id', sa.Integer(), sa.ForeignKey('groups.id'), nullable=False),
+        sa.Column('sender_id', sa.Integer(), sa.ForeignKey('users.id'), nullable=False),
+        sa.Column('recipient_id', sa.Integer(), sa.ForeignKey('users.id'), nullable=True),
+        sa.Column('content', sa.Text(), nullable=False),
+        sa.Column('created_at', sa.DateTime(), server_default=sa.func.now()),
+    )
     # ### end Alembic commands ###
 
 
@@ -150,4 +160,5 @@ def downgrade():
     op.alter_column('task_completion', 'task_id',
                existing_type=sa.INTEGER(),
                nullable=True)
+    op.drop_table('messages')
     # ### end Alembic commands ###

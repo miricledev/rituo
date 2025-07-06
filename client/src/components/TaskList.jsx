@@ -51,7 +51,7 @@ const TaskList = () => {
           />
         </svg>
         <p className="text-lg font-semibold mb-2">You don't have any active tasks.</p>
-        <p className="mb-4 text-center max-w-xs">Create your 30-day commitment list to get started on your journey of daily progress and self-improvement!</p>
+        <p className="mb-4 text-center max-w-xs">You haven't created any group tasks yet. Start by creating a new group task to track your daily progress!</p>
         <Link
           to="/create-tasks"
           className="btn btn-primary px-6 py-2 rounded-md text-white bg-primary-600 hover:bg-primary-700 transition-colors duration-200 shadow"

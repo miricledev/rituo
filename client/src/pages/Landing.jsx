@@ -47,7 +47,7 @@ const Landing = () => {
           <div className="flex justify-between h-16">
             <div className="flex items-center">
               <a href="#" className="font-display text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200">
-                Rituo
+                Inner Performance
               </a>
             </div>
             <div className="flex items-center space-x-4">
@@ -72,7 +72,7 @@ const Landing = () => {
               <span className="text-primary-600 dark:text-primary-400 typewriter">{text}</span>
             </p>
             <p className="text-xl text-secondary-700 dark:text-secondary-300 max-w-3xl mx-auto mb-10 animate-fade-in" style={{ animationDelay: '0.3s' }}>
-              Rituo helps you create and maintain daily habits through a 30-day locked-in commitment system. Track your progress, visualize your success, and build discipline.
+              Inner Performance helps you create and maintain daily habits through a 30-day locked-in commitment system. Track your progress, visualize your success, and build discipline.
             </p>
             <div className="flex flex-col sm:flex-row justify-center gap-4 animate-fade-in" style={{ animationDelay: '0.4s' }}>
               <Link to="/register" className="btn btn-primary text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200">
@@ -128,7 +128,7 @@ const Landing = () => {
               Your Journey Starts Here
             </h2>
             <p className="text-xl text-secondary-700 dark:text-secondary-300 mb-8 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Every big change begins with a single step. Rituo is here to help you build habits, stay accountable, and celebrate your progress—one day at a time.
+              Every big change begins with a single step. Inner Performance is here to help you build habits, stay accountable, and celebrate your progress—one day at a time.
             </p>
             <div className="flex justify-center animate-fade-in" style={{ animationDelay: '0.3s' }}>
               <svg className="w-32 h-32 text-primary-200 dark:text-primary-700" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 64 64">
@@ -199,44 +199,8 @@ const Landing = () => {
               <div className="bg-primary-50 dark:bg-secondary-700 rounded-xl p-8 text-center max-w-2xl">
                 <h3 className="text-xl font-semibold mb-3 text-secondary-800 dark:text-white">A Place to Grow</h3>
                 <p className="text-secondary-600 dark:text-secondary-300">
-                  Rituo is more than just a habit tracker—it's a supportive space for anyone looking to build better routines. Whether you're starting your first 30-day challenge or are a seasoned habit builder, you're in good company. Join thousands of others on the journey to self-improvement!
+                  Inner Performance is more than just a habit tracker—it's a supportive space for anyone looking to build better routines. Whether you're starting your first 30-day challenge or are a seasoned habit builder, you're in good company. Join thousands of others on the journey to self-improvement!
                 </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Pricing Section */}
-        <section className="py-16 bg-gradient-to-br from-primary-100/60 to-primary-200/80 dark:from-secondary-900 dark:to-secondary-800 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl md:text-4xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">
-              Simple, One-Time Pricing
-            </h2>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 mb-8 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Start your 30-day challenge for a single payment of <span className="font-bold text-primary-600 dark:text-primary-400">£2.99</span>.<br />
-              <span className="text-primary-700 dark:text-primary-300 font-semibold">No subscriptions. No hidden fees.</span>
-            </p>
-            <div className="flex justify-center">
-              <div className="relative group bg-white dark:bg-secondary-800 rounded-2xl shadow-2xl p-10 mb-4 transition-all duration-300 transform hover:scale-105 hover:shadow-[0_8px_32px_rgba(14,165,233,0.15)] animate-fade-in" style={{ animationDelay: '0.3s' }}>
-                <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-primary-600 dark:bg-primary-400 text-white dark:text-secondary-900 px-4 py-1 rounded-full text-xs font-bold shadow-lg group-hover:bg-primary-700 dark:group-hover:bg-primary-300 transition-colors duration-200">
-                  One-Time Payment
-                </div>
-                <div className="text-6xl font-extrabold text-primary-600 dark:text-primary-400 mb-2 mt-4 group-hover:text-primary-700 dark:group-hover:text-primary-300 transition-colors duration-200">£2.99</div>
-                <div className="text-secondary-700 dark:text-secondary-300 mb-6 text-lg">per 30-day challenge</div>
-                <ul className="text-secondary-600 dark:text-secondary-300 mb-8 space-y-2 text-left mx-auto max-w-xs">
-                  <li className="flex items-center gap-2"><span className="text-green-500">✔️</span> One-time payment</li>
-                  <li className="flex items-center gap-2"><span className="text-green-500">✔️</span> No subscription</li>
-                  <li className="flex items-center gap-2"><span className="text-green-500">✔️</span> Full access for 30 days</li>
-                  <li className="flex items-center gap-2"><span className="text-green-500">✔️</span> Secure Stripe payment</li>
-                  <li className="flex items-center gap-2"><span className="text-green-500">✔️</span> Supports the platform</li>
-                </ul>
-                <Link to="/register" className="btn btn-primary text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200 group-hover:bg-primary-700 dark:group-hover:bg-primary-300 group-hover:text-white">
-                  Start Your 30-Day Challenge
-                </Link>
-                <div className="mt-4 text-xs text-secondary-500 dark:text-secondary-400 flex items-center justify-center gap-2 animate-fade-in" style={{ animationDelay: '0.4s' }}>
-                  <svg className="w-4 h-4 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 11c0-1.104.896-2 2-2s2 .896 2 2-.896 2-2 2-2-.896-2-2zm0 0V7m0 8v-2" /></svg>
-                  Pay securely with Stripe. No recurring charges—ever.
-                </div>
               </div>
             </div>
           </div>
@@ -290,7 +254,7 @@ const Landing = () => {
           <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl md:text-4xl font-bold mb-6 animate-fade-in">Ready to Transform Your Daily Routine?</h2>
             <p className="text-xl mb-8 max-w-3xl mx-auto animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Join thousands of people who have already changed their lives with Rituo's 30-day commitment system. Start your journey today - completely free!
+              Join thousands of people who have already changed their lives with Inner Performance's 30-day commitment system. Start your journey today - completely free!
             </p>
             <div className="flex flex-col sm:flex-row justify-center gap-4 animate-fade-in" style={{ animationDelay: '0.4s' }}>
               <Link to="/register" className="btn bg-white text-primary-600 hover:bg-gray-100 dark:hover:bg-gray-200 px-8 py-3 text-lg font-medium transform hover:scale-105 active:scale-95 transition-all duration-200">
@@ -308,7 +272,7 @@ const Landing = () => {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">About Us</h2>
             <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Rituo was created by a small team passionate about helping people build better habits. Our mission is to make habit formation simple, motivating, and accessible to everyone.
+              Inner Performance was created by a small team passionate about helping people build better habits. Our mission is to make habit formation simple, motivating, and accessible to everyone.
             </p>
           </div>
         </section>
@@ -318,7 +282,7 @@ const Landing = () => {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">Contact</h2>
             <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Have questions, feedback, or need support? Email us at <a href="mailto:support@rituo.app" className="text-primary-600 dark:text-primary-400 underline">support@rituo.app</a> and we'll get back to you as soon as possible.
+              Have questions, feedback, or need support? Email us at <a href="mailto:support@innerperformance.app" className="text-primary-600 dark:text-primary-400 underline">support@innerperformance.app</a> and we'll get back to you as soon as possible.
             </p>
           </div>
         </section>
@@ -328,7 +292,7 @@ const Landing = () => {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">Privacy Policy</h2>
             <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              We respect your privacy. Rituo does not sell your data or share your personal information with third parties. For full details, please review our complete privacy policy (coming soon).
+              We respect your privacy. Inner Performance does not sell your data or share your personal information with third parties. For full details, please review our complete privacy policy (coming soon).
             </p>
           </div>
         </section>
@@ -338,7 +302,7 @@ const Landing = () => {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">Terms of Service</h2>
             <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              By using Rituo, you agree to our terms of service. Please use the platform responsibly and respectfully. Full terms will be available here soon.
+              By using Inner Performance, you agree to our terms of service. Please use the platform responsibly and respectfully. Full terms will be available here soon.
             </p>
           </div>
         </section>
@@ -348,7 +312,7 @@ const Landing = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center">
             <div className="mb-6 md:mb-0">
-              <span className="font-display text-xl font-bold text-white">Rituo</span>
+              <span className="font-display text-xl font-bold text-white">Inner Performance</span>
               <p className="mt-2">Build lasting habits through commitment</p>
             </div>
             
@@ -380,7 +344,7 @@ const Landing = () => {
           </div>
           
           <div className="mt-8 pt-8 border-t border-secondary-800 text-center">
-            <p>&copy; {new Date().getFullYear()} Rituo. All rights reserved.</p>
+            <p>&copy; {new Date().getFullYear()} Inner Performance. All rights reserved.</p>
             <div className="mt-4">
               <a 
                 href="https://miricledev.github.io/md-landing-page/" 

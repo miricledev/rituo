@@ -216,9 +216,9 @@ const Settings = () => {
                 method="POST"
                 className="space-y-4"
               >
-                <input type="hidden" name="_subject" value="New Support Request from Rituo" />
+                <input type="hidden" name="_subject" value="New Support Request from Inner Performance" />
                 <input type="hidden" name="_template" value="table" />
-                <input type="hidden" name="_next" value="https://rituo.vercel.app/settings#help" />
+                <input type="hidden" name="_next" value="https://innerperformance.vercel.app/settings#help" />
                 
                 <div>
                   <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">

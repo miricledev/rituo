@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTask } from '../contexts/TaskContext';
+import ipLogo from '../assets/ip-logo.jpg';
+import Inbox from './Inbox';
 
 const Navbar = () => {
   const { currentUser, logout } = useAuth();
@@ -55,11 +57,7 @@ const Navbar = () => {
 
   // Navigation items
   const navItems = [
-    { title: 'Dashboard', path: '/dashboard' },
-    { title: 'Groups', path: '/groups' },
-    { title: 'Archives', path: '/archives' },
-    { title: 'Pomodoro Timer', path: '/pomodoro' },
-    ...(tasks && tasks.length === 0 ? [{ title: 'Create Tasks', path: '/create-tasks' }] : [])
+    { title: 'Groups', path: '/groups' }
   ];
 
   return (
@@ -69,8 +67,9 @@ const Navbar = () => {
           {/* Logo and navigation links */}
           <div className="flex">
             <div className="flex-shrink-0 flex items-center">
-              <Link to="/dashboard" className="font-display text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200">
-                Rituo
+              <Link to="/groups" className="flex items-center font-display text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200 gap-2">
+                <img src={ipLogo} alt="Inner Performance Logo" className="h-8 w-8 object-contain" />
+                Inner Performance
               </Link>
             </div>
             
@@ -110,6 +109,9 @@ const Navbar = () => {
                 </svg>
               )}
             </button>
+
+            {/* Inbox */}
+            {currentUser && <Inbox />}
 
             {currentUser ? (
               <div className="relative">
@@ -169,6 +171,9 @@ const Navbar = () => {
           
           {/* Mobile menu button */}
           <div className="flex items-center sm:hidden space-x-2">
+            {/* Inbox for mobile */}
+            {currentUser && <Inbox />}
+            
             <button
               onClick={toggleDarkMode}
               className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors duration-200"

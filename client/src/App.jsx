@@ -7,14 +7,12 @@ import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import CreateTasks from './pages/CreateTasks';
 import TaskStats from './pages/TaskStats';
 import PomodoroTimer from './pages/PomodoroTimer';
 import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
 import ResetPassword from './pages/ResetPassword';
 import Archives from './pages/Archives';
-import PaymentSuccess from './pages/PaymentSuccess';
 import Groups from './pages/Groups';
 import GroupDetail from './pages/GroupDetail';
 import MemberStats from './pages/MemberStats';
@@ -22,6 +20,7 @@ import MemberStats from './pages/MemberStats';
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
+import GoldParticlesBackground from './components/GoldParticlesBackground';
 
 function App() {
   const { isAuthenticated, loading } = useAuth();
@@ -56,6 +55,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-primary-50 dark:bg-secondary-900">
+      <GoldParticlesBackground />
       {showNavbar && <Navbar />}
       
       <div className={`${showNavbar ? 'pt-16' : ''}`}>
@@ -63,34 +63,35 @@ function App() {
           {/* Public routes */}
           <Route 
             path="/" 
-            element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Landing />} 
+            element={isAuthenticated ? <Navigate to="/groups" replace /> : <Landing />} 
           />
           <Route 
             path="/login" 
-            element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} 
+            element={isAuthenticated ? <Navigate to="/groups" replace /> : <Login />} 
           />
           <Route 
             path="/register" 
-            element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Register />} 
+            element={isAuthenticated ? <Navigate to="/groups" replace /> : <Register />} 
           />
           
           {/* Protected routes */}
           <Route 
-            path="/dashboard" 
+            path="/groups" 
             element={
               <ProtectedRoute>
-                <Dashboard />
+                <Groups />
               </ProtectedRoute>
             } 
           />
           <Route 
-            path="/create-tasks" 
+            path="/groups/:groupId" 
             element={
               <ProtectedRoute>
-                <CreateTasks />
+                <GroupDetail />
               </ProtectedRoute>
             } 
           />
+          <Route path="/groups/:groupId/member/:memberId" element={<ProtectedRoute><MemberStats /></ProtectedRoute>} />
           <Route 
             path="/task/:taskId" 
             element={
@@ -131,34 +132,9 @@ function App() {
               </ProtectedRoute>
             } 
           />
-          <Route
-            path="/payment-success"
-            element={
-              <ProtectedRoute>
-                <PaymentSuccess />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/groups"
-            element={
-              <ProtectedRoute>
-                <Groups />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/groups/:groupId"
-            element={
-              <ProtectedRoute>
-                <GroupDetail />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/groups/:groupId/member/:memberId" element={<ProtectedRoute><MemberStats /></ProtectedRoute>} />
           
           {/* 404 Not Found */}
-          <Route path="*" element={<NotFound />} />
+          <Route path="*" element={<Navigate to="/groups" replace />} />
         </Routes>
       </div>
     </div>

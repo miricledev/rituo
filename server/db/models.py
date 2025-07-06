@@ -134,6 +134,7 @@ class Group(db.Model):
     # Relationships
     leader = db.relationship('User', foreign_keys=[leader_id])
     active_challenge = db.relationship('GroupChallenge', foreign_keys=[active_challenge_id])
+    messages = db.relationship('Message', back_populates='group', cascade='all, delete-orphan')
     
     def to_dict(self):
         return {
@@ -171,3 +172,19 @@ class GroupChallenge(db.Model):
             'status': self.status,
             'createdAt': self.created_at.isoformat()
         }
+
+
+class Message(db.Model):
+    __tablename__ = 'messages'
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # Null for group chat, set for DMs
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    read_by = db.Column(db.Text, default='[]')  # JSON array of user IDs who have read this message
+    message_type = db.Column(db.String(20), default='user')  # 'user' for regular messages, 'system' for system messages
+
+    group = db.relationship('Group', back_populates='messages')
+    sender = db.relationship('User', foreign_keys=[sender_id])
+    recipient = db.relationship('User', foreign_keys=[recipient_id])
