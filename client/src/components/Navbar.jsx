@@ -61,7 +61,7 @@ const Navbar = () => {
   ];
 
   return (
-    <nav className="fixed top-0 left-0 right-0 bg-white dark:bg-secondary-800 shadow-md z-10 transition-colors duration-200">
+    <nav className="fixed top-0 left-0 right-0 bg-white dark:bg-secondary-800 shadow-md z-40 transition-colors duration-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
           {/* Logo and navigation links */}
@@ -127,7 +127,7 @@ const Navbar = () => {
                 
                 {/* Dropdown menu */}
                 {isMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-secondary-800 rounded-md shadow-lg py-1 animate-fade-in">
+                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-secondary-800 rounded-md shadow-lg py-1 animate-fade-in z-50">
                     <Link
                       to="/settings"
                       onClick={closeMenu}
@@ -224,7 +224,7 @@ const Navbar = () => {
       
       {/* Mobile menu */}
       {isMenuOpen && (
-        <div className="sm:hidden animate-slide-in">
+        <div className="sm:hidden animate-slide-in z-50">
           <div className="pt-2 pb-3 space-y-1">
             {navItems.map(item => (
               <Link

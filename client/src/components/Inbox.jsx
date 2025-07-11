@@ -201,7 +201,7 @@ const Inbox = () => {
       {/* Backdrop to close dropdown */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40"
+          className="fixed inset-0 z-30"
           onClick={() => setIsOpen(false)}
         />
       )}

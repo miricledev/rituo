@@ -216,7 +216,7 @@ const Groups = () => {
   return (
     <div className="relative min-h-screen overflow-x-hidden">
       <AnimatedBackground />
-      <div className="container mx-auto px-4 py-8 relative z-10">
+      <div className="container mx-auto px-4 py-8 relative z-20">
         <div className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-4">
           <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-primary-500 to-pink-500 bg-clip-text text-transparent drop-shadow-lg">My Groups</h1>
           <div className="space-x-4">

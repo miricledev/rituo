@@ -5,6 +5,14 @@ import TaskProgress from '../components/TaskProgress';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 
+// Helper to format date as YYYY-MM-DD in local time
+function formatDateLocal(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const MemberStats = () => {
   const { groupId, memberId } = useParams();
   const [group, setGroup] = React.useState(null);
@@ -57,18 +65,15 @@ const MemberStats = () => {
   // Transform memberHabit data for TaskProgress and TaskStats
   const analytics = useMemo(() => {
     if (!memberHabit) return null;
-    // For each habit, for each day from challenge start to yesterday, if no progress entry exists, count as missed.
+    // For each habit, for each day from challenge start to today, if no progress entry exists, count as missed.
     // This affects days_completed, completion_rate, streak, and daily_data.
     const allDates = [];
     if (startDate && endDate) {
-      const s = new Date(startDate);
-      const e = new Date(endDate);
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const numDays = Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
-      for (let i = 0; i < numDays; i++) {
-        const d = new Date(s);
-        d.setDate(s.getDate() + i);
-        allDates.push(d.toISOString().slice(0, 10));
+      let d = new Date(startDate);
+      const end = new Date(); // Use today for ongoing challenge
+      while (d <= end) {
+        allDates.push(formatDateLocal(d));
+        d.setDate(d.getDate() + 1);
       }
     }
     // For each habit, build a map of date->progress
@@ -79,23 +84,22 @@ const MemberStats = () => {
       let lastMissed = false;
       const progressMap = {};
       (habit.progress || []).forEach(p => {
-        progressMap[p.date.slice(0, 10)] = p.completed;
+        progressMap[formatDateLocal(new Date(p.date))] = p.completed;
       });
       allDates.forEach(dateStr => {
-        if (dateStr < today) {
-          if (progressMap[dateStr]) {
-            days_completed++;
-            if (!lastMissed) currentStreak++;
-            else currentStreak = 1;
-            lastMissed = false;
-          } else {
-            lastMissed = true;
-            currentStreak = 0;
-          }
+        if (progressMap[dateStr]) {
+          days_completed++;
+          if (!lastMissed) currentStreak++;
+          else currentStreak = 1;
+          lastMissed = false;
+        } else {
+          lastMissed = true;
+          currentStreak = 0;
         }
       });
       streak = currentStreak;
-      const completion_rate = allDates.length > 0 ? days_completed / (allDates.filter(d => d < today).length) : 0;
+      const daysElapsed = allDates.length;
+      const completion_rate = daysElapsed > 0 ? days_completed / daysElapsed : 0;
       return {
         task_id: idx,
         title: habit.name,
@@ -108,41 +112,40 @@ const MemberStats = () => {
     const completedDates = new Set();
     memberHabit.habits.forEach(habit => {
       (habit.progress || []).forEach(p => {
-        if (p.completed) {
-          completedDates.add(p.date.slice(0, 10));
-        }
+        completedDates.add(formatDateLocal(new Date(p.date)));
       });
     });
+    // Calculate days elapsed (from start date to today, inclusive)
+    const daysElapsed = allDates.length;
     const daysCompleted = completedDates.size;
-    const overallCompletionRate = totalDays * tasks_stats.length
-      ? tasks_stats.reduce((acc, t) => acc + t.days_completed, 0) / (totalDays * tasks_stats.length)
-      : 0;
+    // Calculate overall completion rate based on total possible completions
+    const totalPossibleCompletions = memberHabit.habits.length * daysElapsed;
+    const totalActualCompletions = tasks_stats.reduce((acc, t) => acc + t.days_completed, 0);
+    const overallCompletionRate = totalPossibleCompletions > 0 ? totalActualCompletions / totalPossibleCompletions : 0;
     return {
       completion_rate: overallCompletionRate * 100,
       current_streak: Math.max(...tasks_stats.map(t => t.current_streak)),
       days_completed: daysCompleted,
+      days_elapsed: daysElapsed,
       days_remaining: daysRemaining,
       cycle_start_date: startDate,
       cycle_end_date: endDate,
       has_active_cycle: true,
       tasks_stats,
     };
-  }, [memberHabit, totalDays, daysRemaining, startDate, endDate]);
+  }, [memberHabit, daysRemaining, startDate, endDate]);
 
   // Transform each habit for TaskStats
   const transformHabitToTaskStats = (habit) => {
-    // For each habit, for each day from challenge start to yesterday, if no progress entry exists, count as missed.
+    // For each habit, for each day from challenge start to today, if no progress entry exists, count as missed.
     // This affects days_completed, completion_rate, streak, and daily_data.
     const allDates = [];
     if (startDate && endDate) {
-      const s = new Date(startDate);
-      const e = new Date(endDate);
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const numDays = Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
-      for (let i = 0; i < numDays; i++) {
-        const d = new Date(s);
-        d.setDate(s.getDate() + i);
-        allDates.push(d.toISOString().slice(0, 10));
+      let d = new Date(startDate);
+      const end = new Date(); // Use today for ongoing challenge
+      while (d <= end) {
+        allDates.push(formatDateLocal(d));
+        d.setDate(d.getDate() + 1);
       }
     }
     let days_completed = 0;
@@ -151,23 +154,41 @@ const MemberStats = () => {
     let lastMissed = false;
     const progressMap = {};
     (habit.progress || []).forEach(p => {
-      progressMap[p.date.slice(0, 10)] = p.completed;
+      progressMap[formatDateLocal(new Date(p.date))] = p.completed;
     });
     allDates.forEach(dateStr => {
-      if (dateStr < today) {
-        if (progressMap[dateStr]) {
-          days_completed++;
-          if (!lastMissed) currentStreak++;
-          else currentStreak = 1;
-          lastMissed = false;
-        } else {
-          lastMissed = true;
-          currentStreak = 0;
-        }
+      if (progressMap[dateStr]) {
+        days_completed++;
+        if (!lastMissed) currentStreak++;
+        else currentStreak = 1;
+        lastMissed = false;
+      } else {
+        lastMissed = true;
+        currentStreak = 0;
       }
     });
     streak = currentStreak;
-    const completion_rate = allDates.length > 0 ? days_completed / (allDates.filter(d => d < today).length) : 0;
+    const daysElapsed = allDates.length;
+    const completion_rate = daysElapsed > 0 ? days_completed / daysElapsed : 0;
+    // Create complete daily data from start date to today (including today)
+    const completeDailyData = [];
+    if (startDate) {
+      let d = new Date(startDate);
+      const end = new Date();
+      const progressMap = {};
+      (habit.progress || []).forEach(p => {
+        progressMap[formatDateLocal(new Date(p.date))] = p.completed;
+      });
+      while (d <= end) {
+        const dateStr = formatDateLocal(d);
+        completeDailyData.push({
+          date: dateStr,
+          is_complete: progressMap[dateStr] !== undefined ? progressMap[dateStr] : false
+        });
+        d.setDate(d.getDate() + 1);
+      }
+    }
+
     return {
       task: {
         title: habit.name,
@@ -176,10 +197,7 @@ const MemberStats = () => {
       days_completed,
       completion_rate,
       current_streak: streak,
-      daily_data: (habit.progress || []).map(day => ({
-        date: day.date,
-        is_complete: day.completed,
-      })),
+      daily_data: completeDailyData,
     };
   };
 

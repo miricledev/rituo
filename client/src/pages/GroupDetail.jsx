@@ -9,6 +9,14 @@ import {
 import GroupChat from '../components/GroupChat';
 import DirectMessage from '../components/DirectMessage';
 
+// Helper to format date as YYYY-MM-DD in local time
+function formatDateLocal(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const GroupDetail = () => {
   // All hooks at the top!
   const { groupId } = useParams();
@@ -432,16 +440,20 @@ const GroupDetail = () => {
         const today = new Date().toISOString().slice(0, 10);
         const progressEntry = (habit.progress || []).find(p => p.date && p.date.slice(0, 10) === today);
         
+        // Always count the habit in total weight
+        totalWeight += 100;
+        
         if (progressEntry) {
           if (habit.habitType === 'numeric') {
             const progress = calculateNumericProgress(habit, progressEntry);
             totalProgress += progress;
-            totalWeight += 100;
           } else {
             // For boolean and text, it's either 0% or 100%
             totalProgress += progressEntry.completed ? 100 : 0;
-            totalWeight += 100;
           }
+        } else {
+          // If no progress entry exists, count as 0% (incomplete)
+          totalProgress += 0;
         }
       });
     });
@@ -588,46 +600,48 @@ const GroupDetail = () => {
               <div className="mt-8">
                 <h3 className="text-xl font-semibold mb-4">Group Progress Overview</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Daily Completion Rate */}
+                  {/* Average Overall Completion Rate */}
                   <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-4">
-                    <h4 className="text-lg font-medium mb-4">Daily Completion Rate</h4>
+                    <h4 className="text-lg font-medium mb-4">Average Overall Completion Rate</h4>
                     <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart
                           data={(() => {
                             const start = new Date(group.activeChallenge.startDate);
-                            const end = new Date(group.activeChallenge.endDate);
+                            // Use today if challenge is ongoing, otherwise use end date
+                            const challengeEnd = new Date(group.activeChallenge.endDate);
                             const today = new Date();
+                            const isOngoing = today < challengeEnd;
+                            const end = isOngoing ? today : challengeEnd;
                             const allDates = [];
-                            const numDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
-                            for (let i = 0; i < numDays; i++) {
-                              const date = new Date(start);
-                              date.setDate(start.getDate() + i);
-                              allDates.push(date);
+                            let d = new Date(start);
+                            while (d <= end) {
+                              allDates.push(formatDateLocal(d));
+                              d.setDate(d.getDate() + 1);
                             }
-                            return allDates.map(dateObj => {
-                              const dateStr = dateObj.toISOString().slice(0, 10);
-                              let totalProgress = 0;
-                              let totalTasks = 0;
-                              (group.activeChallenge.memberHabits || []).forEach(memberHabit => {
-                                (memberHabit.habits || []).forEach(habit => {
-                                  const progress = (habit.progress || []).find(p => p.date && p.date.slice(0, 10) === dateStr);
+                            return allDates.map(dateStr => {
+                              const userAverages = (group.activeChallenge.memberHabits || []).map(memberHabit => {
+                                const habits = memberHabit.habits || [];
+                                if (habits.length === 0) return null;
+                                let userTotal = 0;
+                                habits.forEach(habit => {
+                                  const progress = (habit.progress || []).find(p => p.date && formatDateLocal(new Date(p.date)) === dateStr);
                                   if (progress) {
-                                    totalTasks += 1;
                                     if (habit.habitType === 'numeric') {
-                                      totalProgress += calculateNumericProgress(habit, progress);
+                                      userTotal += calculateNumericProgress(habit, progress);
                                     } else {
-                                      // For boolean and text, it's either 0% or 100%
-                                      totalProgress += progress.completed ? 100 : 0;
+                                      userTotal += progress.completed ? 100 : 0;
                                     }
-                                  } else if (dateStr < new Date().toISOString().slice(0, 10)) {
-                                    totalTasks += 1;
+                                  } else {
+                                    userTotal += 0;
                                   }
                                 });
-                              });
+                                return userTotal / habits.length;
+                              }).filter(val => val !== null);
+                              const dayAvg = userAverages.length > 0 ? (userAverages.reduce((a, b) => a + b, 0) / userAverages.length) : 0;
                               return {
                                 date: dateStr,
-                                rate: totalTasks > 0 ? (totalProgress / totalTasks) : 0
+                                rate: dayAvg
                               };
                             });
                           })()}
@@ -636,8 +650,11 @@ const GroupDetail = () => {
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="date" />
                           <YAxis domain={[0, 100]} />
-                          <Tooltip formatter={(value) => [`${value.toFixed(1)}%`, 'Completion Rate']} />
-                          <Line type="monotone" dataKey="rate" stroke="#3b82f6" name="Completion Rate" />
+                          <Tooltip 
+                            formatter={(value) => [`${value.toFixed(1)}%`, 'Average Completion Rate']}
+                            labelFormatter={(label) => `Date: ${label}`}
+                          />
+                          <Line type="monotone" dataKey="rate" stroke="#3b82f6" name="Average Completion Rate" />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -651,7 +668,10 @@ const GroupDetail = () => {
                         <PieChart>
                           <Pie
                             data={group.activeChallenge.memberHabits?.map(memberHabit => {
-                              const member = group.members?.find(m => m.id === memberHabit.member);
+                              const member = group.members?.find(m => 
+                                String(m.id) === String(memberHabit.member) || 
+                                String(m.id) === String(memberHabit.member?.id)
+                              );
                               const totalHabits = memberHabit.habits?.length || 0;
                               const today = new Date().toISOString().slice(0, 10);
                               
@@ -664,11 +684,12 @@ const GroupDetail = () => {
                                     return acc + (progressEntry.completed ? 100 : 0);
                                   }
                                 }
-                                return acc;
+                                // If no progress entry exists, count as 0% (incomplete)
+                                return acc + 0;
                               }, 0) || 0;
                               
                               return {
-                                name: member?.username || 'Unknown',
+                                name: member?.username || 'Unknown Member',
                                 value: totalHabits > 0 ? (totalProgress / totalHabits) : 0
                               };
                             })}
@@ -684,7 +705,10 @@ const GroupDetail = () => {
                               <Cell key={`cell-${index}`} fill={['#3b82f6', '#10b981', '#f59e0b', '#ef4444'][index % 4]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(value) => [`${value.toFixed(1)}%`, 'Completion']} />
+                          <Tooltip formatter={(value, name, props) => [
+                            `${value.toFixed(1)}%`, 
+                            `${props.payload.name} - Completion Rate`
+                          ]} />
                         </PieChart>
                       </ResponsiveContainer>
                     </div>
