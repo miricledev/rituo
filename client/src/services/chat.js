@@ -11,7 +11,11 @@ class ChatService {
   connect() {
     if (this.socket && this.isConnected) return;
 
-    this.socket = io('http://localhost:5000', {
+    // Get WebSocket URL from environment or fallback to localhost
+    const wsUrl = import.meta.env.VITE_WS_URL || 
+                  (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000');
+
+    this.socket = io(wsUrl, {
       transports: ['websocket', 'polling'],
       withCredentials: true
     });

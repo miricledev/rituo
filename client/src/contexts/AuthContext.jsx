@@ -1,12 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 
-// API base URL from environment variable
-const API_URL = import.meta.env.VITE_API_URL || (
-  window.location.port === '4173' 
-    ? 'http://localhost:5000/api'  // Production preview
-    : 'http://localhost:5000/api'  // Development
-);
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 // Configure axios defaults
 axios.defaults.baseURL = API_URL;
