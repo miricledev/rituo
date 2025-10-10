@@ -5,6 +5,8 @@ class ChatService {
     this.socket = null;
     this.isConnected = false;
     this.messageHandlers = new Map();
+    // Get API base URL from environment
+    this.apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
   }
 
   // Connect to WebSocket server
@@ -188,7 +190,7 @@ class ChatService {
   // API calls for fetching message history
   async getGroupChatMessages(groupId) {
     try {
-      const response = await fetch(`/api/groups/${groupId}/chat`, {
+      const response = await fetch(`${this.apiBaseUrl}/groups/${groupId}/chat`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
@@ -203,7 +205,7 @@ class ChatService {
 
   async getDMMessages(groupId, userId) {
     try {
-      const response = await fetch(`/api/groups/${groupId}/dm/${userId}`, {
+      const response = await fetch(`${this.apiBaseUrl}/groups/${groupId}/dm/${userId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
@@ -219,7 +221,7 @@ class ChatService {
   // Get inbox messages
   async getInbox() {
     try {
-      const response = await fetch('/api/groups/inbox', {
+      const response = await fetch(`${this.apiBaseUrl}/groups/inbox`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
@@ -235,7 +237,7 @@ class ChatService {
   // Get unread message count
   async getUnreadCount() {
     try {
-      const response = await fetch('/api/groups/inbox/unread-count', {
+      const response = await fetch(`${this.apiBaseUrl}/groups/inbox/unread-count`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
@@ -252,7 +254,7 @@ class ChatService {
   // Mark message as read
   async markMessageRead(messageId) {
     try {
-      const response = await fetch(`/api/groups/messages/${messageId}/mark-read`, {
+      const response = await fetch(`${this.apiBaseUrl}/groups/messages/${messageId}/mark-read`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -269,7 +271,7 @@ class ChatService {
   // Mark all group chat messages as read
   async markAllGroupChatRead(groupId) {
     try {
-      const response = await fetch(`/api/groups/${groupId}/chat/mark-all-read`, {
+      const response = await fetch(`${this.apiBaseUrl}/groups/${groupId}/chat/mark-all-read`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -286,7 +288,7 @@ class ChatService {
   // Mark all DM messages as read
   async markAllDMRead(groupId, userId) {
     try {
-      const response = await fetch(`/api/groups/${groupId}/dm/${userId}/mark-all-read`, {
+      const response = await fetch(`${this.apiBaseUrl}/groups/${groupId}/dm/${userId}/mark-all-read`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
