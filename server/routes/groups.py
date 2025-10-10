@@ -5,7 +5,7 @@ import uuid
 import stripe
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, date
 import os
 import traceback
 from sqlalchemy.orm.attributes import flag_modified
@@ -115,6 +115,19 @@ def get_group(group_id):
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'Group not found'}), 404
+        # Auto-finalize an overdue active challenge
+        if group.active_challenge:
+            try:
+                challenge = group.active_challenge
+                # Compare using dates to avoid tz issues
+                challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+                if challenge_end and challenge_end < date.today():
+                    challenge.status = 'completed'
+                    group.active_challenge_id = None
+                    db.session.commit()
+            except Exception:
+                # Do not fail the request if finalization throws
+                db.session.rollback()
         return jsonify({'group': group.to_dict()}), 200
     except Exception as e:
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500

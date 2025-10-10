@@ -31,8 +31,7 @@ app = Flask(__name__)
 
 # Configure logging
 if not app.debug:
-    if not os.path.exists('logs'):
-        os.mkdir('logs')
+    os.makedirs('logs', exist_ok=True)
     file_handler = RotatingFileHandler('logs/rituo.log', maxBytes=10240, backupCount=10)
     file_handler.setFormatter(logging.Formatter(
         '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
