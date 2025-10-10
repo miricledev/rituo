@@ -70,8 +70,8 @@ const MemberStats = () => {
     const allDates = [];
     if (startDate && endDate) {
       let d = new Date(startDate);
-      const end = new Date(); // Use today for ongoing challenge
-      while (d <= end) {
+      const endBound = new Date(Math.min(new Date(endDate).getTime(), new Date().getTime()));
+      while (d <= endBound) {
         allDates.push(formatDateLocal(d));
         d.setDate(d.getDate() + 1);
       }
@@ -142,8 +142,8 @@ const MemberStats = () => {
     const allDates = [];
     if (startDate && endDate) {
       let d = new Date(startDate);
-      const end = new Date(); // Use today for ongoing challenge
-      while (d <= end) {
+      const endBound = new Date(Math.min(new Date(endDate).getTime(), new Date().getTime()));
+      while (d <= endBound) {
         allDates.push(formatDateLocal(d));
         d.setDate(d.getDate() + 1);
       }
@@ -174,12 +174,12 @@ const MemberStats = () => {
     const completeDailyData = [];
     if (startDate) {
       let d = new Date(startDate);
-      const end = new Date();
+      const endBound = new Date(Math.min(new Date(endDate || startDate).getTime(), new Date().getTime()));
       const progressMap = {};
       (habit.progress || []).forEach(p => {
         progressMap[formatDateLocal(new Date(p.date))] = p.completed;
       });
-      while (d <= end) {
+      while (d <= endBound) {
         const dateStr = formatDateLocal(d);
         completeDailyData.push({
           date: dateStr,

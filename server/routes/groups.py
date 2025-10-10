@@ -5,7 +5,7 @@ import uuid
 import stripe
 import logging
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import os
 import traceback
 from sqlalchemy.orm.attributes import flag_modified
@@ -598,3 +598,299 @@ def mark_all_dm_read(group_id, user_id):
             updated += 1
     db.session.commit()
     return jsonify({'success': True, 'updated': updated})
+
+
+@groups_bp.route('/<group_id>/archives', methods=['GET'])
+@jwt_required()
+def get_group_archives(group_id):
+    try:
+        user_id = get_jwt_identity()
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        # Check if user is group leader (only leaders can view archives)
+        if str(group.leader_id) != str(user_id):
+            return jsonify({'error': 'Only group leaders can view archives'}), 403
+        
+        # Get all completed challenges for this group
+        completed_challenges = GroupChallenge.query.filter_by(
+            group_id=group.id, 
+            status='completed'
+        ).order_by(GroupChallenge.end_date.desc()).all()
+        
+        archives = []
+        for challenge in completed_challenges:
+            # Calculate challenge statistics
+            total_days = (challenge.end_date - challenge.start_date).days + 1
+            total_members = len(challenge.member_habits)
+            
+            # Calculate overall completion rate
+            total_possible_completions = 0
+            total_actual_completions = 0
+            
+            member_stats = []
+            for member_habit in challenge.member_habits:
+                member_id = member_habit['member']
+                member = User.query.get(member_id)
+                if not member:
+                    continue
+                    
+                habits = member_habit.get('habits', [])
+                habit_details = []
+                
+                # Track which days the member completed ANY habit
+                completed_dates = set()
+                
+                # First, collect all progress data for all habits
+                all_habit_progress = {}
+                for habit in habits:
+                    habit_name = habit.get('name', 'Unknown Habit')
+                    habit_type = habit.get('habitType', 'boolean')
+                    progress = habit.get('progress', [])
+                    
+                    # Create a map of progress entries for this habit
+                    habit_progress_map = {}
+                    for progress_entry in progress:
+                        progress_date = datetime.fromisoformat(progress_entry['date']).date()
+                        if challenge.start_date.date() <= progress_date <= challenge.end_date.date():
+                            habit_progress_map[progress_date.isoformat()] = progress_entry.get('completed', False)
+                    
+                    all_habit_progress[habit_name] = {
+                        'type': habit_type,
+                        'progress_map': habit_progress_map
+                    }
+                
+                # Now calculate individual habit performance and track daily participation
+                for habit_name, habit_data in all_habit_progress.items():
+                    habit_type = habit_data['type']
+                    progress_map = habit_data['progress_map']
+                    
+                    # Count completions for this habit during challenge period
+                    habit_completed_days = 0
+                    habit_total_days = total_days  # Each habit should be done every day of the challenge
+                    
+                    # Check each day of the challenge for this habit
+                    for day_offset in range(total_days):
+                        current_date = challenge.start_date.date() + timedelta(days=day_offset)
+                        date_str = current_date.isoformat()
+                        
+                        if date_str in progress_map and progress_map[date_str]:
+                            habit_completed_days += 1
+                    
+                    habit_details.append({
+                        'name': habit_name,
+                        'type': habit_type,
+                        'completed_days': habit_completed_days,
+                        'total_days': habit_total_days,
+                        'completion_rate': round((habit_completed_days / habit_total_days * 100) if habit_total_days > 0 else 0, 1)
+                    })
+                
+                # Now calculate daily participation (days with ANY habit completed)
+                for day_offset in range(total_days):
+                    current_date = challenge.start_date.date() + timedelta(days=day_offset)
+                    date_str = current_date.isoformat()
+                    
+                    # Check if ANY habit was completed on this day
+                    day_has_completion = False
+                    for habit_data in all_habit_progress.values():
+                        if date_str in habit_data['progress_map'] and habit_data['progress_map'][date_str]:
+                            day_has_completion = True
+                            break
+                    
+                    if day_has_completion:
+                        completed_dates.add(date_str)
+                
+                # Member performance: days with ANY habit completed / total challenge days
+                member_days_completed = len(completed_dates)
+                member_total_days = total_days
+                member_completion_rate = (member_days_completed / member_total_days * 100) if member_total_days > 0 else 0
+                
+                # Debug logging
+                print(f"Member {member.username}: {member_days_completed}/{member_total_days} days = {member_completion_rate:.1f}%")
+                print(f"Completed dates: {sorted(completed_dates)}")
+                
+                # For overall stats, count total habit completions
+                total_habit_completions = sum(h['completed_days'] for h in habit_details)
+                total_possible_habit_completions = sum(h['total_days'] for h in habit_details)
+                
+                total_possible_completions += total_possible_habit_completions
+                total_actual_completions += total_habit_completions
+                
+                member_stats.append({
+                    'id': member_id,
+                    'username': member.username,
+                    'days_completed': member_days_completed,  # Days with ANY habit completed
+                    'total_days': member_total_days,  # Total challenge days
+                    'completion_rate': round(member_completion_rate, 1),  # Days with habits / total days
+                    'habit_details': habit_details,
+                    'total_habit_completions': total_habit_completions,  # Total individual habit completions
+                    'total_possible_habit_completions': total_possible_habit_completions
+                })
+            
+            overall_completion_rate = (total_actual_completions / total_possible_completions * 100) if total_possible_completions > 0 else 0
+            
+            # Generate daily progress data for graphs
+            daily_progress = []
+            for day_offset in range(total_days):
+                current_date = challenge.start_date.date() + timedelta(days=day_offset)
+                date_str = current_date.isoformat()
+                
+                # Calculate daily completion rate (average of user averages)
+                user_daily_averages = []
+                for member_habit in challenge.member_habits:
+                    habits = member_habit.get('habits', [])
+                    if not habits:
+                        continue
+                    
+                    user_daily_total = 0
+                    for habit in habits:
+                        progress = habit.get('progress', [])
+                        progress_entry = next((p for p in progress if p['date'][:10] == date_str), None)
+                        if progress_entry and progress_entry.get('completed', False):
+                            user_daily_total += 1
+                    
+                    user_daily_average = user_daily_total / len(habits) if habits else 0
+                    user_daily_averages.append(user_daily_average)
+                
+                daily_avg = sum(user_daily_averages) / len(user_daily_averages) if user_daily_averages else 0
+                
+                daily_progress.append({
+                    'date': date_str,
+                    'completion_rate': round(daily_avg * 100, 1)
+                })
+            
+            archives.append({
+                'id': challenge.id,
+                'title': f"{challenge.start_date.strftime('%b %d')} - {challenge.end_date.strftime('%b %d, %Y')} Challenge",
+                'start_date': challenge.start_date.isoformat(),
+                'end_date': challenge.end_date.isoformat(),
+                'duration_days': total_days,
+                'total_members': total_members,
+                'overall_completion_rate': round(overall_completion_rate, 1),
+                'total_completions': total_actual_completions,
+                'total_possible': total_possible_completions,
+                'member_stats': member_stats,
+                'daily_progress': daily_progress,
+                'created_at': challenge.created_at.isoformat()
+            })
+        
+        return jsonify({'archives': archives}), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/attendance', methods=['GET'])
+@jwt_required()
+def get_group_attendance(group_id):
+    try:
+        user_id = get_jwt_identity()
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        # Check if user is group leader (only leaders can view attendance)
+        if str(group.leader_id) != str(user_id):
+            return jsonify({'error': 'Only group leaders can view attendance'}), 403
+        
+        # Debug: Check what we have
+        print(f"DEBUG - Group ID: {group_id}")
+        print(f"DEBUG - Group name: {group.name}")
+        print(f"DEBUG - Active challenge ID: {group.active_challenge_id}")
+        print(f"DEBUG - Active challenge object: {group.active_challenge}")
+        
+        # Auto-finalize an overdue active challenge (same logic as get_group)
+        if group.active_challenge:
+            try:
+                challenge = group.active_challenge
+                print(f"DEBUG - Challenge found: {challenge.id}, Status: {challenge.status}")
+                print(f"DEBUG - Challenge dates: {challenge.start_date} to {challenge.end_date}")
+                # Compare using dates to avoid tz issues
+                challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+                today = date.today()
+                print(f"DEBUG - Challenge end: {challenge_end}, Today: {today}, Ended: {challenge_end < today}")
+                if challenge_end and challenge_end < today:
+                    print(f"DEBUG - Finalizing overdue challenge")
+                    challenge.status = 'completed'
+                    group.active_challenge_id = None
+                    db.session.commit()
+                    # Re-fetch group to reflect changes
+                    group = Group.query.filter_by(group_id=group_id).first()
+            except Exception as e:
+                # Do not fail the request if finalization throws
+                print(f"DEBUG - Error during finalization: {e}")
+                db.session.rollback()
+        
+        if not group.active_challenge:
+            print(f"DEBUG - No active challenge found, returning empty attendance")
+            return jsonify({'error': 'No active challenge', 'attendance': []}), 200
+        
+        print(f"DEBUG - Proceeding with attendance calculation for challenge {group.active_challenge.id}")
+        
+        challenge = group.active_challenge
+        total_days = (challenge.end_date - challenge.start_date).days + 1
+        
+        # Calculate attendance for each member
+        attendance_data = []
+        for member_habit in challenge.member_habits:
+            member_id = member_habit['member']
+            member = User.query.get(member_id)
+            if not member:
+                continue
+                
+            habits = member_habit.get('habits', [])
+            
+            # Track which days the member was active (completed ANY habit)
+            active_dates = set()
+            
+            # Collect all progress data for this member
+            for habit in habits:
+                progress = habit.get('progress', [])
+                for progress_entry in progress:
+                    progress_date = datetime.fromisoformat(progress_entry['date']).date()
+                    if challenge.start_date.date() <= progress_date <= challenge.end_date.date():
+                        if progress_entry.get('completed', False):
+                            active_dates.add(progress_date.isoformat())
+            
+            # Calculate attendance statistics
+            days_active = len(active_dates)
+            attendance_rate = (days_active / total_days * 100) if total_days > 0 else 0
+            
+            # Get recent activity (last 7 days)
+            recent_activity = []
+            today = datetime.utcnow().date()
+            for i in range(7):
+                check_date = today - timedelta(days=i)
+                date_str = check_date.isoformat()
+                recent_activity.append({
+                    'date': date_str,
+                    'active': date_str in active_dates
+                })
+            
+            attendance_data.append({
+                'member_id': member_id,
+                'username': member.username,
+                'days_active': days_active,
+                'total_days': total_days,
+                'attendance_rate': round(attendance_rate, 1),
+                'recent_activity': recent_activity,
+                'last_active': max(active_dates) if active_dates else None
+            })
+        
+        # Sort by attendance rate (highest first)
+        attendance_data.sort(key=lambda x: x['attendance_rate'], reverse=True)
+        
+        return jsonify({
+            'attendance': attendance_data,
+            'challenge_info': {
+                'start_date': challenge.start_date.isoformat(),
+                'end_date': challenge.end_date.isoformat(),
+                'total_days': total_days
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
