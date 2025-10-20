@@ -13,6 +13,16 @@ function formatDateLocal(date) {
   return `${year}-${month}-${day}`;
 }
 
+// Helper to parse date string in local timezone (avoiding UTC conversion)
+function parseDateLocal(dateStr) {
+  // If it's already YYYY-MM-DD format, parse it in local time
+  if (dateStr.includes('T')) {
+    dateStr = dateStr.split('T')[0];
+  }
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
 const MemberStats = () => {
   const { groupId, memberId } = useParams();
   const [group, setGroup] = React.useState(null);
@@ -21,22 +31,48 @@ const MemberStats = () => {
   const navigate = useNavigate();
   const { currentUser: user } = useAuth();
   const [selectedSection, setSelectedSection] = useState('overview'); // 'overview' or habit index
+  const [editMode, setEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const fetchGroupDetails = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await axios.get(`/groups/${groupId}`);
+      setGroup(response.data.group);
+    } catch (err) {
+      setError('Failed to load group data.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   React.useEffect(() => {
-    const fetchGroupDetails = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const response = await axios.get(`/groups/${groupId}`);
-        setGroup(response.data.group);
-      } catch (err) {
-        setError('Failed to load group data.');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchGroupDetails();
   }, [groupId]);
+
+  // Function to update habit for a specific day (boolean, numeric, or text)
+  const updateHabitDay = async (habitIndex, date, updateData) => {
+    try {
+      setSaving(true);
+      console.log('Updating habit:', { habitIndex, date, updateData });
+      const response = await axios.post(
+        `/groups/${groupId}/challenge/${group.activeChallenge.id}/member/${memberId}/habit/${habitIndex}/toggle-day`,
+        {
+          date: date,
+          ...updateData  // Can include: completed, numericValue, textValue
+        }
+      );
+      console.log('Update response:', response.data);
+      // Refresh group data to show the change
+      await fetchGroupDetails();
+    } catch (err) {
+      console.error('Error updating habit:', err);
+      alert('Failed to update habit. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // Find the member and their habits
   const memberHabit = useMemo(() => {
@@ -50,6 +86,12 @@ const MemberStats = () => {
     if (!group?.members) return null;
     return group.members.find(m => String(m.id) === String(memberId));
   }, [group, memberId]);
+
+  // Check if current user is the group leader
+  const isLeader = useMemo(() => {
+    if (!group?.leader || !user) return false;
+    return String(group.leader.id) === String(user.id);
+  }, [group, user]);
 
   // Calculate challenge dates and days
   const startDate = group?.activeChallenge?.startDate;
@@ -84,7 +126,7 @@ const MemberStats = () => {
       let lastMissed = false;
       const progressMap = {};
       (habit.progress || []).forEach(p => {
-        progressMap[formatDateLocal(new Date(p.date))] = p.completed;
+        progressMap[formatDateLocal(parseDateLocal(p.date))] = p.completed;
       });
       allDates.forEach(dateStr => {
         if (progressMap[dateStr]) {
@@ -112,7 +154,7 @@ const MemberStats = () => {
     const completedDates = new Set();
     memberHabit.habits.forEach(habit => {
       (habit.progress || []).forEach(p => {
-        completedDates.add(formatDateLocal(new Date(p.date)));
+        completedDates.add(formatDateLocal(parseDateLocal(p.date)));
       });
     });
     // Calculate days elapsed (from start date to today, inclusive)
@@ -177,7 +219,7 @@ const MemberStats = () => {
       const endBound = new Date(Math.min(new Date(endDate || startDate).getTime(), new Date().getTime()));
       const progressMap = {};
       (habit.progress || []).forEach(p => {
-        progressMap[formatDateLocal(new Date(p.date))] = p.completed;
+        progressMap[formatDateLocal(parseDateLocal(p.date))] = p.completed;
       });
       while (d <= endBound) {
         const dateStr = formatDateLocal(d);
@@ -201,6 +243,14 @@ const MemberStats = () => {
     };
   };
 
+  // Memoize the transformed task data for the selected habit
+  const selectedHabitTaskData = useMemo(() => {
+    if (selectedSection === 'overview' || !memberHabit?.habits?.[selectedSection]) {
+      return null;
+    }
+    return transformHabitToTaskStats(memberHabit.habits[selectedSection]);
+  }, [selectedSection, memberHabit, startDate, endDate]);
+
   if (loading) {
     return <div className="flex justify-center items-center min-h-[40vh]"><div className="w-10 h-10 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div></div>;
   }
@@ -212,39 +262,85 @@ const MemberStats = () => {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-colors duration-200 flex gap-8">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white dark:bg-secondary-800 rounded-lg shadow-card p-4 h-fit sticky top-24 self-start flex flex-col">
-        <button
-          className={`block w-full text-left px-4 py-2 rounded mb-2 font-semibold ${selectedSection === 'overview' ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'hover:bg-gray-100 dark:hover:bg-secondary-700'}`}
-          onClick={() => setSelectedSection('overview')}
-        >
-          Overview
-        </button>
-        <div className="mt-4">
-          <div className="text-xs uppercase text-secondary-500 dark:text-secondary-400 mb-2">Habits</div>
-          {memberHabit.habits.map((habit, idx) => (
+    <div className="max-w-6xl mx-auto px-2 sm:px-4 lg:px-8 py-4 sm:py-8 transition-colors duration-200 flex flex-col lg:flex-row gap-4 lg:gap-8">
+      {/* Sidebar - Mobile: Horizontal scroll, Desktop: Vertical sidebar */}
+      <aside className="w-full lg:w-64 bg-white dark:bg-secondary-800 rounded-lg shadow-card p-3 sm:p-4 lg:h-fit lg:sticky lg:top-24 lg:self-start">
+        {/* Mobile: Horizontal scrollable tabs */}
+        <div className="lg:hidden">
+          <div className="flex overflow-x-auto gap-2 pb-2 -mx-3 px-3 scrollbar-hide">
             <button
-              key={idx}
-              className={`block w-full text-left px-4 py-2 rounded mb-2 ${selectedSection === idx ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'hover:bg-gray-100 dark:hover:bg-secondary-700'}`}
-              onClick={() => setSelectedSection(idx)}
+              className={`flex-shrink-0 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap ${selectedSection === 'overview' ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'bg-gray-100 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-300'}`}
+              onClick={() => setSelectedSection('overview')}
             >
-              {habit.name}
+              Overview
             </button>
-          ))}
+            {memberHabit.habits.map((habit, idx) => (
+              <button
+                key={idx}
+                className={`flex-shrink-0 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap ${selectedSection === idx ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'bg-gray-100 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-300'}`}
+                onClick={() => setSelectedSection(idx)}
+              >
+                {habit.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Desktop: Vertical sidebar */}
+        <div className="hidden lg:flex lg:flex-col">
+          <button
+            className={`block w-full text-left px-4 py-2 rounded mb-2 font-semibold ${selectedSection === 'overview' ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'hover:bg-gray-100 dark:hover:bg-secondary-700'}`}
+            onClick={() => setSelectedSection('overview')}
+          >
+            Overview
+          </button>
+          <div className="mt-4">
+            <div className="text-xs uppercase text-secondary-500 dark:text-secondary-400 mb-2">Habits</div>
+            {memberHabit.habits.map((habit, idx) => (
+              <button
+                key={idx}
+                className={`block w-full text-left px-4 py-2 rounded mb-2 ${selectedSection === idx ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'hover:bg-gray-100 dark:hover:bg-secondary-700'}`}
+                onClick={() => setSelectedSection(idx)}
+              >
+                {habit.name}
+              </button>
+            ))}
+          </div>
         </div>
       </aside>
 
       {/* Main content */}
-      <div className="flex-1">
-        <button onClick={() => navigate(-1)} className="mb-4 text-primary-600 hover:underline">&larr; Back to Group</button>
-        <h1 className="text-2xl font-bold mb-2">Stats for {member.username}</h1>
+      <div className="flex-1 min-w-0">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+          <button onClick={() => navigate(-1)} className="text-sm sm:text-base text-primary-600 hover:underline">&larr; Back to Group</button>
+          {isLeader && selectedSection !== 'overview' && (
+            <button
+              onClick={() => setEditMode(!editMode)}
+              className={`w-full sm:w-auto px-4 py-2 rounded-lg font-medium text-sm sm:text-base transition-colors ${
+                editMode
+                  ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50'
+                  : 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50'
+              }`}
+              disabled={saving}
+            >
+              {saving ? '💾 Saving...' : editMode ? '✕ Cancel Edit' : '✏️ Edit Mode'}
+            </button>
+          )}
+        </div>
+        <h1 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-2">Stats for {member.username}</h1>
         {selectedSection === 'overview' ? (
           <div className="mb-8">
             <TaskProgress analytics={analytics} />
           </div>
         ) : (
-          <TaskStats key={selectedSection} taskData={transformHabitToTaskStats(memberHabit.habits[selectedSection])} />
+          <TaskStats 
+            key={selectedSection} 
+            taskData={selectedHabitTaskData} 
+            habitData={memberHabit.habits[selectedSection]}
+            editMode={editMode}
+            onUpdateDay={(date, updateData) => updateHabitDay(selectedSection, date, updateData)}
+            saving={saving}
+          />
         )}
       </div>
     </div>

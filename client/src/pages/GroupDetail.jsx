@@ -9,14 +9,6 @@ import {
 import GroupChat from '../components/GroupChat';
 import DirectMessage from '../components/DirectMessage';
 
-// Helper to format date as YYYY-MM-DD in local time
-function formatDateLocal(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 const GroupDetail = () => {
   // All hooks at the top!
   const { groupId } = useParams();
@@ -41,14 +33,46 @@ const GroupDetail = () => {
   const [tempTextValues, setTempTextValues] = useState({});
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedDMUser, setSelectedDMUser] = useState(null);
+  const [conversations, setConversations] = useState([]);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [archives, setArchives] = useState([]);
   const [archivesLoading, setArchivesLoading] = useState(false);
   const [attendance, setAttendance] = useState([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [showDeleteChallengeConfirm, setShowDeleteChallengeConfirm] = useState(false);
+  const [expandedAttendance, setExpandedAttendance] = useState({});
 
   // Calculate myMemberHabit early to avoid temporal dead zone
   const myMemberHabit = group?.activeChallenge?.memberHabits?.find(
     mh => String(mh.member) === String(user?.id) || String(mh.member?.id) === String(user?.id)
+  );
+
+  // Helper function to format relative time
+  const formatRelativeTime = (timestamp) => {
+    if (!timestamp) return '';
+    const now = new Date();
+    const messageTime = new Date(timestamp);
+    const diffInMinutes = Math.floor((now - messageTime) / (1000 * 60));
+    
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
+    if (diffInMinutes < 10080) return `${Math.floor(diffInMinutes / 1440)}d ago`;
+    return messageTime.toLocaleDateString();
+  };
+
+  // Helper to format date as YYYY-MM-DD in local time
+  const formatDateLocal = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Filter conversations based on search query
+  const filteredConversations = conversations.filter(conv => 
+    conv.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   // Calculate isLeader early to avoid temporal dead zone
@@ -67,6 +91,12 @@ const GroupDetail = () => {
   useEffect(() => {
     if (activeTab === 'attendance' && isLeader) {
       fetchAttendance();
+    }
+  }, [activeTab, isLeader, groupId]);
+
+  useEffect(() => {
+    if (activeTab === 'dms' && isLeader) {
+      fetchConversations();
     }
   }, [activeTab, isLeader, groupId]);
 
@@ -124,12 +154,82 @@ const GroupDetail = () => {
     try {
       setAttendanceLoading(true);
       const response = await axios.get(`/groups/${groupId}/attendance`);
+      console.log('Attendance data received:', response.data.attendance);
       setAttendance(response.data.attendance || []);
     } catch (error) {
       console.error('Error fetching attendance:', error);
       setAttendance([]);
     } finally {
       setAttendanceLoading(false);
+    }
+  };
+
+  const fetchConversations = async () => {
+    try {
+      setConversationsLoading(true);
+      // Get all members except current user for conversations
+      const otherMembers = group.members?.filter(member => member.id !== user?.id) || [];
+      
+      // For each member, get the latest message and unread count
+      const conversationPromises = otherMembers.map(async (member) => {
+        try {
+          const response = await axios.get(`/groups/${groupId}/dm/${member.id}`);
+          const messages = response.data.messages || [];
+          const latestMessage = messages[messages.length - 1];
+          const unreadCount = messages.filter(msg => 
+            msg.sender_id !== user?.id && 
+            !msg.read_by?.includes(user?.id)
+          ).length;
+          
+          return {
+            id: member.id,
+            username: member.username,
+            avatar: member.username?.[0]?.toUpperCase() || '?',
+            latestMessage: latestMessage?.content || 'No messages yet',
+            timestamp: latestMessage?.created_at || null,
+            unreadCount,
+            isOnline: false // We could add online status later
+          };
+        } catch (error) {
+          // If no messages exist, return empty conversation
+          return {
+            id: member.id,
+            username: member.username,
+            avatar: member.username?.[0]?.toUpperCase() || '?',
+            latestMessage: 'No messages yet',
+            timestamp: null,
+            unreadCount: 0,
+            isOnline: false
+          };
+        }
+      });
+      
+      const conversationResults = await Promise.all(conversationPromises);
+      // Sort by latest message timestamp (most recent first)
+      conversationResults.sort((a, b) => {
+        if (!a.timestamp && !b.timestamp) return 0;
+        if (!a.timestamp) return 1;
+        if (!b.timestamp) return -1;
+        return new Date(b.timestamp) - new Date(a.timestamp);
+      });
+      
+      setConversations(conversationResults);
+    } catch (error) {
+      console.error('Error fetching conversations:', error);
+    } finally {
+      setConversationsLoading(false);
+    }
+  };
+
+  const deleteActiveChallenge = async () => {
+    if (!group?.activeChallenge) return;
+    try {
+      await axios.delete(`/groups/${groupId}/challenge/${group.activeChallenge.id}`);
+      // Refresh group details
+      await fetchGroupDetails();
+      setShowDeleteChallengeConfirm(false);
+    } catch (e) {
+      alert('Failed to remove challenge.');
     }
   };
 
@@ -510,29 +610,38 @@ const GroupDetail = () => {
   console.log('isLeader:', isLeader);
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold">{group.name}</h1>
-          <p className="text-gray-600">Group ID: {group.groupId}</p>
+    <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4">
+        <div className="w-full sm:w-auto">
+          <h1 className="text-2xl sm:text-3xl font-bold break-words">{group.name}</h1>
+          <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400 break-all">Group ID: {group.groupId}</p>
         </div>
         {isLeader && (
-          <button
-            onClick={() => setShowCreateChallengeModal(true)}
-            className="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700"
-          >
-            Create Challenge
-          </button>
+          group.activeChallenge ? (
+            <button
+              onClick={() => setShowDeleteChallengeConfirm(true)}
+              className="bg-red-600 text-white py-2 px-4 rounded hover:bg-red-700 w-full sm:w-auto text-sm sm:text-base"
+            >
+              Remove Challenge
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowCreateChallengeModal(true)}
+              className="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 w-full sm:w-auto text-sm sm:text-base"
+            >
+              Create Challenge
+            </button>
+          )
         )}
       </div>
 
       {/* Tab Navigation */}
       <div className="mb-6">
-        <div className="border-b border-gray-200 dark:border-secondary-700">
-          <nav className="-mb-px flex space-x-8">
+        <div className="border-b border-gray-200 dark:border-secondary-700 overflow-x-auto">
+          <nav className="-mb-px flex space-x-4 sm:space-x-8">
             <button
               onClick={() => setActiveTab('overview')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                 activeTab === 'overview'
                   ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
@@ -542,7 +651,7 @@ const GroupDetail = () => {
             </button>
             <button
               onClick={() => setActiveTab('chat')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                 activeTab === 'chat'
                   ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
@@ -553,30 +662,30 @@ const GroupDetail = () => {
             {isLeader && (
               <button
                 onClick={() => setActiveTab('dms')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                   activeTab === 'dms'
                     ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
                 }`}
               >
-                Direct Messages
+                DMs
               </button>
             )}
             {!isLeader && (
               <button
                 onClick={() => setActiveTab('dm')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                   activeTab === 'dm'
                     ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
                 }`}
               >
-                Message Leader
+                Message
               </button>
             )}
             <button
               onClick={() => setActiveTab('leaderboard')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                 activeTab === 'leaderboard'
                   ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
@@ -587,7 +696,7 @@ const GroupDetail = () => {
             {isLeader && (
               <button
                 onClick={() => setActiveTab('archives')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                   activeTab === 'archives'
                     ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
@@ -599,7 +708,7 @@ const GroupDetail = () => {
             {isLeader && (
               <button
                 onClick={() => setActiveTab('attendance')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                   activeTab === 'attendance'
                     ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
@@ -665,12 +774,12 @@ const GroupDetail = () => {
             {/* Group Progress Overview */}
             {isLeader && (
               <div className="mt-8">
-                <h3 className="text-xl font-semibold mb-4">Group Progress Overview</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Group Progress Overview</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                   {/* Average Overall Completion Rate */}
-                  <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-4">
-                    <h4 className="text-lg font-medium mb-4">Average Overall Completion Rate</h4>
-                    <div className="h-64">
+                  <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-3 sm:p-4">
+                    <h4 className="text-base sm:text-lg font-medium mb-3 sm:mb-4">Average Overall Completion Rate</h4>
+                    <div className="h-56 sm:h-64">
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart
                           data={(() => {
@@ -752,9 +861,9 @@ const GroupDetail = () => {
                   </div>
 
                   {/* Member Progress Distribution */}
-                  <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-4">
-                    <h4 className="text-lg font-medium mb-4">Member Progress Distribution</h4>
-                    <div className="h-64">
+                  <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-3 sm:p-4">
+                    <h4 className="text-base sm:text-lg font-medium mb-3 sm:mb-4">Member Progress Distribution</h4>
+                    <div className="h-56 sm:h-64">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
@@ -810,17 +919,17 @@ const GroupDetail = () => {
 
             {/* Member Progress */}
             {isLeader && (
-              <div className="mt-8">
-                <h3 className="text-xl font-semibold mb-4">Member Progress</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 gap-6">
+              <div className="mt-6 sm:mt-8">
+                <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Member Progress</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                   {(group.activeChallenge.memberHabits || []).map((memberHabit, index) => {
                     const member = group.members?.find(m => String(m.id) === String(memberHabit.member) || String(m.id) === String(memberHabit.member?.id));
                     return (
                       <div
                         key={index}
-                        className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-6 flex flex-col gap-4 transition-transform transform hover:scale-[1.02] hover:shadow-2xl group"
+                        className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-4 sm:p-6 flex flex-col gap-3 sm:gap-4 transition-transform transform hover:scale-[1.02] hover:shadow-2xl group"
                       >
-                        <div className="flex items-center gap-4 mb-2">
+                        <div className="flex items-center gap-3 sm:gap-4 mb-2">
                           <Link to={`/groups/${groupId}/member/${member?.id || memberHabit.member}`} className="flex items-center gap-4 group-hover:underline">
                             <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200 group-hover:ring-4 group-hover:ring-primary-200/40">
                               {member?.username?.[0]?.toUpperCase() || '?'}
@@ -958,9 +1067,9 @@ const GroupDetail = () => {
 
       {/* Checklist for logged-in member */}
       {isMember && !isLeader && myMemberHabit && (
-        <div className="mb-10">
-          <h2 className="text-xl font-semibold mb-4">Today's Group Habits</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        <div className="mb-8 sm:mb-10">
+          <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Today's Group Habits</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {myMemberHabit.habits.map((habit, idx) => {
               // Find today's progress entry
               const today = new Date().toISOString().slice(0, 10);
@@ -973,14 +1082,14 @@ const GroupDetail = () => {
               return (
                 <div
                   key={idx}
-                  className={`rounded-lg shadow-md p-4 border transition-transform hover:scale-[1.01] ${
+                  className={`rounded-lg shadow-md p-3 sm:p-4 border transition-transform hover:scale-[1.01] ${
                     isComplete 
                       ? 'bg-green-100 dark:bg-green-900/40 border-green-300 dark:border-green-700' 
                       : 'bg-white dark:bg-secondary-800 border-gray-200 dark:border-secondary-700'
                   }`}
                 >
-                  <div className="flex-1 min-w-0 mb-3">
-                    <div className="font-medium text-secondary-900 dark:text-white">{habit.name}</div>
+                  <div className="flex-1 min-w-0 mb-2 sm:mb-3">
+                    <div className="font-medium text-sm sm:text-base text-secondary-900 dark:text-white">{habit.name}</div>
                     {habit.description && (
                       <div className="text-sm text-secondary-500 dark:text-secondary-300 mt-1">{habit.description}</div>
                     )}
@@ -1153,32 +1262,147 @@ const GroupDetail = () => {
         </div>
       )}
 
-      {/* Direct Messages Tab (for Leaders) */}
+      {/* Direct Messages Tab (for Leaders) - Inbox Style */}
       {activeTab === 'dms' && isLeader && (
-        <div>
-          <h2 className="text-xl font-semibold mb-4">Direct Messages</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {group.members.map(member => (
-              <div
-                key={member.id}
-                className="bg-white dark:bg-secondary-800 rounded-lg shadow-md p-4 border border-gray-200 dark:border-secondary-700 cursor-pointer hover:shadow-lg transition-shadow"
-                onClick={() => setSelectedDMUser(member)}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-lg font-bold text-primary-700 dark:text-primary-200">
-                    {member.username?.[0]?.toUpperCase() || '?'}
+        <div className="h-full flex flex-col">
+          {/* Header */}
+          <div className="flex-shrink-0 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold text-secondary-900 dark:text-white">💬 Direct Messages</h2>
+              <div className="text-sm text-secondary-500 dark:text-secondary-400">
+                {conversations.length} conversation{conversations.length !== 1 ? 's' : ''}
+              </div>
+            </div>
+            
+            {/* Search Bar */}
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                placeholder="Search conversations..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg leading-5 bg-white dark:bg-gray-700 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Conversations List */}
+          <div className="flex-1 overflow-hidden">
+            {conversationsLoading ? (
+              <div className="flex justify-center items-center h-full">
+                <div className="w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : filteredConversations.length > 0 ? (
+              <div className="space-y-2 overflow-y-auto h-full pr-2">
+                {filteredConversations.map((conversation) => (
+                  <div
+                    key={conversation.id}
+                    onClick={() => setSelectedDMUser({ id: conversation.id, username: conversation.username })}
+                    className={`p-4 rounded-xl cursor-pointer transition-all duration-200 hover:shadow-md ${
+                      selectedDMUser?.id === conversation.id
+                        ? 'bg-primary-50 dark:bg-primary-900/20 border-2 border-primary-200 dark:border-primary-800'
+                        : 'bg-white dark:bg-secondary-800 border border-gray-200 dark:border-secondary-700 hover:bg-gray-50 dark:hover:bg-secondary-700'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      {/* Avatar with online indicator */}
+                      <div className="relative flex-shrink-0">
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-lg font-bold text-primary-700 dark:text-primary-200">
+                          {conversation.avatar}
+                        </div>
+                        {conversation.isOnline && (
+                          <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-400 border-2 border-white dark:border-gray-800 rounded-full"></div>
+                        )}
+                      </div>
+
+                      {/* Conversation Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                            {conversation.username}
+                          </h3>
+                          {conversation.timestamp && (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">
+                              {formatRelativeTime(conversation.timestamp)}
+                            </span>
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center justify-between mt-1">
+                          <p className={`text-sm truncate ${
+                            conversation.unreadCount > 0 
+                              ? 'text-gray-900 dark:text-white font-medium' 
+                              : 'text-gray-500 dark:text-gray-400'
+                          }`}>
+                            {conversation.latestMessage}
+                          </p>
+                          
+                          {/* Unread indicator */}
+                          {conversation.unreadCount > 0 && (
+                            <div className="flex-shrink-0 ml-2">
+                              <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white bg-red-500 rounded-full">
+                                {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-medium text-secondary-900 dark:text-white">{member.username}</div>
-                    <div className="text-sm text-secondary-500 dark:text-secondary-400">Click to message</div>
-                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <div className="text-6xl mb-4">💬</div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  {searchQuery ? 'No conversations found' : 'No conversations yet'}
+                </h3>
+                <p className="text-gray-500 dark:text-gray-400">
+                  {searchQuery 
+                    ? `No conversations match "${searchQuery}"`
+                    : 'Start a conversation by clicking on a member'
+                  }
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Direct Message Chat View */}
+      {selectedDMUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-0 sm:p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-none sm:rounded-xl shadow-xl w-full max-w-4xl h-full sm:h-[80vh] flex flex-col">
+            {/* Chat Header */}
+            <div className="flex items-center justify-between p-3 sm:p-4 border-b border-gray-200 dark:border-secondary-700">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-lg font-bold text-primary-700 dark:text-primary-200">
+                  {selectedDMUser.username?.[0]?.toUpperCase() || '?'}
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
+                    {selectedDMUser.username}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Direct Message</p>
                 </div>
               </div>
-            ))}
-          </div>
-          
-          {selectedDMUser && (
-            <div className="mt-6 h-96">
+              <button
+                onClick={() => setSelectedDMUser(null)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-secondary-700 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Chat Component */}
+            <div className="flex-1 overflow-hidden">
               <DirectMessage 
                 groupId={group.groupId} 
                 targetUserId={selectedDMUser.id} 
@@ -1186,7 +1410,7 @@ const GroupDetail = () => {
                 isLeader={true}
               />
             </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -1473,12 +1697,12 @@ const GroupDetail = () => {
 
       {/* Create Challenge Modal */}
       {showCreateChallengeModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-secondary-800 rounded-lg p-6 w-full max-w-6xl max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-semibold mb-4 text-secondary-900 dark:text-white">Create New Challenge</h2>
-            <form onSubmit={handleCreateChallenge} className="space-y-6">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg p-4 sm:p-6 w-full max-w-6xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl sm:text-2xl font-semibold mb-3 sm:mb-4 text-secondary-900 dark:text-white">Create New Challenge</h2>
+            <form onSubmit={handleCreateChallenge} className="space-y-4 sm:space-y-6">
               {/* Date Selection */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Start Date</label>
                   <input
@@ -1893,6 +2117,32 @@ const GroupDetail = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Challenge Confirm Modal */}
+      {showDeleteChallengeConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg p-6 w-full max-w-lg">
+            <h2 className="text-xl font-semibold mb-3 text-secondary-900 dark:text-white">Remove Active Challenge</h2>
+            <p className="text-secondary-700 dark:text-secondary-300 mb-4">
+              Are you sure you want to remove this challenge? <strong>All data for this challenge will be permanently lost</strong> (member habits, progress, attendance, analytics). This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDeleteChallengeConfirm(false)}
+                className="px-4 py-2 rounded bg-gray-200 dark:bg-secondary-700 text-secondary-800 dark:text-white hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deleteActiveChallenge}
+                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+              >
+                Yes, remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Archives Tab */}
       {activeTab === 'archives' && (
         <div>
@@ -2177,28 +2427,99 @@ const GroupDetail = () => {
 
                     {/* Recent Activity */}
                     <div className="mb-4">
-                      <h4 className="text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">Recent Activity (Last 7 Days)</h4>
+                      <h4 className="text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">
+                        Recent Activity {member.recent_activity.length > 0 && `(Last ${member.recent_activity.length} Day${member.recent_activity.length !== 1 ? 's' : ''})`}
+                      </h4>
                       <div className="flex gap-2">
-                        {member.recent_activity.map((day, idx) => (
-                          <div
-                            key={idx}
-                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium ${
-                              day.active
-                                ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200'
-                                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-                            }`}
-                            title={`${new Date(day.date).toLocaleDateString()}: ${day.active ? 'Active' : 'Inactive'}`}
-                          >
-                            {new Date(day.date).getDate()}
-                          </div>
-                        ))}
+                        {member.recent_activity.map((day, idx) => {
+                          // Parse date in local timezone to avoid UTC conversion issues
+                          const dateParts = day.date.split('-');
+                          const localDate = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
+                          return (
+                            <div
+                              key={idx}
+                              className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium ${
+                                day.active
+                                  ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200'
+                                  : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                              }`}
+                              title={`${localDate.toLocaleDateString()}: ${day.active ? 'Active' : 'Inactive'}`}
+                            >
+                              {localDate.getDate()}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
                     {/* Last Active */}
                     {member.last_active && (
-                      <div className="text-sm text-secondary-500 dark:text-secondary-400">
-                        Last active: {new Date(member.last_active).toLocaleDateString()}
+                      <div className="text-sm text-secondary-500 dark:text-secondary-400 mb-4">
+                        Last active: {(() => {
+                          const dateParts = member.last_active.split('-');
+                          const localDate = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
+                          return localDate.toLocaleDateString();
+                        })()}
+                      </div>
+                    )}
+
+                    {/* View Full Attendance Button */}
+                    <button
+                      onClick={() => {
+                        console.log('Button clicked for member:', member.member_id);
+                        console.log('Full attendance data:', member.full_attendance);
+                        setExpandedAttendance(prev => {
+                          const newState = { ...prev, [member.member_id]: !prev[member.member_id] };
+                          console.log('New expanded state:', newState);
+                          return newState;
+                        });
+                      }}
+                      className="w-full mt-3 py-2 px-4 bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/40 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+                    >
+                      {expandedAttendance[member.member_id] ? '▲ Hide' : '▼ View'} Full Attendance History
+                    </button>
+
+                    {/* Full Attendance History */}
+                    {expandedAttendance[member.member_id] && (
+                      <div className="mt-4 p-4 bg-gray-50 dark:bg-secondary-900/50 rounded-lg border border-gray-200 dark:border-secondary-700">
+                        {member.full_attendance && member.full_attendance.length > 0 ? (
+                          <>
+                            <h4 className="text-sm font-semibold text-secondary-900 dark:text-white mb-3">
+                              Complete Attendance ({member.full_attendance.length} days)
+                            </h4>
+                            <div className="overflow-x-auto -mx-2 px-2">
+                              <div className="grid grid-cols-7 sm:grid-cols-10 md:grid-cols-14 gap-2 min-w-max">
+                              {member.full_attendance.map((day, idx) => {
+                            const dateParts = day.date.split('-');
+                            const localDate = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
+                            return (
+                              <div
+                                key={idx}
+                                className={`aspect-square rounded-lg flex flex-col items-center justify-center text-xs font-medium p-1 ${
+                                  day.active
+                                    ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 border-2 border-green-300 dark:border-green-700'
+                                    : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border border-gray-300 dark:border-gray-600'
+                                }`}
+                                title={`${localDate.toLocaleDateString()}: ${day.active ? 'Active' : 'Inactive'}`}
+                              >
+                                <div className="text-[10px] text-gray-500 dark:text-gray-400">
+                                  {localDate.toLocaleDateString('en-US', { month: 'short' })}
+                                </div>
+                                <div className="font-bold">
+                                  {localDate.getDate()}
+                                </div>
+                              </div>
+                            );
+                              })}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-center text-secondary-500 dark:text-secondary-400 py-4">
+                            <p>No attendance data available</p>
+                            <p className="text-xs mt-2">Debug: {JSON.stringify(member.full_attendance)}</p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

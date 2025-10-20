@@ -11,6 +11,7 @@ import {
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaCrown, FaUserFriends, FaStar, FaRegStar, FaCopy, FaCheckCircle } from 'react-icons/fa';
+import PinUnlock from '../components/PinUnlock';
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
 
@@ -31,6 +32,7 @@ const getColor = (idx) => groupColors[idx % groupColors.length];
 const Groups = () => {
   const [groups, setGroups] = useState({ memberOf: [], leading: [] });
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showPinUnlock, setShowPinUnlock] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [newGroup, setNewGroup] = useState({
     name: '',
@@ -214,23 +216,23 @@ const Groups = () => {
   };
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden">
+    <div className="relative min-h-screen overflow-x-hidden w-full">
       <AnimatedBackground />
-      <div className="container mx-auto px-4 py-8 relative z-20">
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-4">
-          <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-primary-500 to-pink-500 bg-clip-text text-transparent drop-shadow-lg">My Groups</h1>
-          <div className="space-x-4">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 py-4 sm:py-8 relative z-20">
+        <div className="flex flex-col sm:flex-row justify-between items-center mb-6 sm:mb-8 gap-4">
+          <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-primary-500 to-pink-500 bg-clip-text text-transparent drop-shadow-lg text-center sm:text-left">My Groups</h1>
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 w-full sm:w-auto">
             <motion.button
               whileTap={{ scale: 0.95 }}
-              onClick={() => setShowCreateModal(true)}
-              className="bg-blue-600 text-white py-2 px-4 rounded-lg shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 transition-all"
+              onClick={() => setShowPinUnlock(true)}
+              className="bg-blue-600 text-white py-2 px-4 rounded-lg shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 transition-all w-full sm:w-auto"
             >
               Create Group
             </motion.button>
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowJoinModal(true)}
-              className="bg-green-600 text-white py-2 px-4 rounded-lg shadow hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-2 transition-all"
+              className="bg-green-600 text-white py-2 px-4 rounded-lg shadow hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-2 transition-all w-full sm:w-auto"
             >
               Join Group
             </motion.button>
@@ -260,6 +262,25 @@ const Groups = () => {
             </div>
           </AnimatePresence>
         </div>
+
+        {/* PIN Unlock Modal for Create Group */}
+        {showPinUnlock && (
+          <div className="fixed inset-0 z-50">
+            <PinUnlock 
+              onUnlock={() => {
+                setShowPinUnlock(false);
+                setShowCreateModal(true);
+              }} 
+              title="Create Group" 
+            />
+            <button
+              className="absolute top-4 right-4 text-white text-2xl hover:text-gray-300 z-10"
+              onClick={() => setShowPinUnlock(false)}
+            >
+              &times;
+            </button>
+          </div>
+        )}
 
         {/* Create Group Modal */}
         {showCreateModal && (

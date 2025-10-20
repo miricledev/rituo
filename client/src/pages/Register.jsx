@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import PinUnlock from '../components/PinUnlock';
 
 const Register = () => {
+  const [unlocked, setUnlocked] = useState(false);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -12,6 +14,10 @@ const Register = () => {
   
   const { register } = useAuth();
   const navigate = useNavigate();
+
+  if (!unlocked) {
+    return <PinUnlock onUnlock={() => setUnlocked(true)} title="Admin Registration" />;
+  }
 
   const validateEmail = (email) => {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

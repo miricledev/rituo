@@ -51,11 +51,8 @@ const Landing = () => {
               </a>
             </div>
             <div className="flex items-center space-x-4">
-              <Link to="/login" className="text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-300 font-medium transition-colors duration-200">
+              <Link to="/login" className="btn btn-primary transform hover:scale-105 active:scale-95 transition-all duration-200">
                 Log In
-              </Link>
-              <Link to="/register" className="btn btn-primary transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Sign Up
               </Link>
             </div>
           </div>
@@ -75,8 +72,8 @@ const Landing = () => {
               Inner Performance helps you create and maintain daily habits through a 30-day locked-in commitment system. Track your progress, visualize your success, and build discipline.
             </p>
             <div className="flex flex-col sm:flex-row justify-center gap-4 animate-fade-in" style={{ animationDelay: '0.4s' }}>
-              <Link to="/register" className="btn btn-primary text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Start Your 30-Day Journey
+              <Link to="/login" className="btn btn-primary text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200">
+                Get Started
               </Link>
               <a href="#features" className="btn btn-outline text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200">
                 Learn More
@@ -256,11 +253,8 @@ const Landing = () => {
             <p className="text-xl mb-8 max-w-3xl mx-auto animate-fade-in" style={{ animationDelay: '0.2s' }}>
               Join thousands of people who have already changed their lives with Inner Performance's 30-day commitment system. Start your journey today - completely free!
             </p>
-            <div className="flex flex-col sm:flex-row justify-center gap-4 animate-fade-in" style={{ animationDelay: '0.4s' }}>
-              <Link to="/register" className="btn bg-white text-primary-600 hover:bg-gray-100 dark:hover:bg-gray-200 px-8 py-3 text-lg font-medium transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Create Free Account
-              </Link>
-              <Link to="/login" className="btn bg-primary-700 hover:bg-primary-800 text-white px-8 py-3 text-lg font-medium transform hover:scale-105 active:scale-95 transition-all duration-200">
+            <div className="flex justify-center animate-fade-in" style={{ animationDelay: '0.4s' }}>
+              <Link to="/login" className="btn bg-white text-primary-600 hover:bg-gray-100 dark:hover:bg-gray-200 px-8 py-3 text-lg font-medium transform hover:scale-105 active:scale-95 transition-all duration-200">
                 Login
               </Link>
             </div>

@@ -6,6 +6,13 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: hidden;
+  width: 100%;
+}
+
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 @layer base {
@@ -36,33 +43,37 @@ html {
   }
 
   .dark {
-    --primary-50: 234 240 251;
-    --primary-100: 212 225 247;
-    --primary-200: 169 195 239;
-    --primary-300: 126 165 231;
-    --primary-400: 83 135 223;
-    --primary-500: 65 105 225; /* Royal Blue */
-    --primary-600: 55 89 194;
-    --primary-700: 45 73 158;
-    --primary-800: 34 56 122;
-    --primary-900: 24 40 86;
-    --secondary-50: 16 23 42;
-    --secondary-100: 16 23 42;
-    --secondary-200: 16 23 42;
-    --secondary-300: 16 23 42;
-    --secondary-400: 16 23 42;
-    --secondary-500: 16 23 42; /* Deep Blue */
-    --secondary-600: 24 33 54;
-    --secondary-700: 34 48 77;
-    --secondary-800: 44 63 100;
-    --secondary-900: 54 78 123;
+    --primary-50: 15 31 71;
+    --primary-100: 20 40 90;
+    --primary-200: 25 50 110;
+    --primary-300: 30 58 138;
+    --primary-400: 30 64 175;
+    --primary-500: 30 58 138; /* Dark Royal Blue */
+    --primary-600: 37 99 235;
+    --primary-700: 30 58 138;
+    --primary-800: 23 37 84;
+    --primary-900: 15 23 42;
+    --secondary-50: 255 255 255;
+    --secondary-100: 250 250 250;
+    --secondary-200: 245 245 245;
+    --secondary-300: 212 212 216;
+    --secondary-400: 161 161 170;
+    --secondary-500: 113 113 122;
+    --secondary-600: 82 82 91;
+    --secondary-700: 63 63 70;
+    --secondary-800: 39 39 42;
+    --secondary-900: 24 24 27;
     --gold-400: 255 215 0;
-    --gold-500: 230 190 0;
-    --gold-600: 191 161 0;
+    --gold-500: 255 193 7;
+    --gold-600: 245 158 11;
   }
 
   body {
-    @apply font-sans text-secondary-800 dark:text-secondary-200 antialiased transition-colors duration-200;
+    @apply font-sans text-secondary-800 dark:text-white antialiased transition-colors duration-200;
+  }
+
+  .dark body {
+    background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #1e3a8a 100%);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -76,7 +87,11 @@ html {
   }
   
   .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white shadow-sm dark:bg-primary-400 dark:hover:bg-primary-300;
+    @apply bg-primary-600 hover:bg-primary-700 text-white shadow-sm dark:bg-primary-700 dark:hover:bg-primary-600 dark:shadow-gold;
+  }
+  
+  .shadow-gold {
+    box-shadow: 0 4px 6px -1px rgba(255, 193, 7, 0.3), 0 2px 4px -1px rgba(255, 215, 0, 0.2);
   }
   
   .btn-secondary {
@@ -92,11 +107,11 @@ html {
   }
   
   .card {
-    @apply bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 transition-all duration-300 hover:shadow-lg;
+    @apply bg-white dark:bg-primary-900 rounded-lg shadow-card p-6 transition-all duration-300 hover:shadow-lg dark:border dark:border-gold-500/30;
   }
   
   .input-field {
-    @apply w-full px-4 py-2 border border-secondary-300 dark:border-secondary-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-transparent dark:bg-secondary-700 dark:text-white transition-all duration-200;
+    @apply w-full px-4 py-2 border border-secondary-300 dark:border-gold-500/30 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-400 dark:focus:ring-gold-500 focus:border-transparent dark:bg-primary-900 dark:text-white transition-all duration-200;
   }
   
   .checkbox-container {
@@ -116,7 +131,11 @@ html {
   }
   
   .task-item {
-    @apply flex items-center p-4 bg-white dark:bg-secondary-800 rounded-lg shadow-task mb-3 transition-all duration-300 hover:shadow-md hover:scale-[1.02] dark:shadow-secondary-900/50;
+    @apply flex items-center p-4 bg-white dark:bg-primary-900 rounded-lg shadow-task mb-3 transition-all duration-300 hover:shadow-md hover:scale-[1.02] dark:border dark:border-gold-500/20;
+  }
+  
+  .dark .task-item {
+    box-shadow: 0 4px 6px -1px rgba(255, 193, 7, 0.1), 0 2px 4px -1px rgba(255, 215, 0, 0.05);
   }
   
   .task-label {
@@ -124,7 +143,23 @@ html {
   }
   
   .streak-badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary-100 dark:bg-primary-900 text-primary-800 dark:text-primary-200;
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary-100 dark:bg-primary-900 text-primary-800 dark:text-gold-500 dark:border dark:border-gold-500/50;
+  }
+  
+  .gold-border {
+    @apply border-2 border-gold-500 dark:shadow-[0_0_15px_rgba(255,193,7,0.3)];
+  }
+  
+  .gold-glow {
+    box-shadow: 0 0 20px rgba(255, 193, 7, 0.4), 0 0 40px rgba(255, 215, 0, 0.2);
+  }
+  
+  .gold-text {
+    @apply text-gold-500 dark:text-gold-400;
+  }
+  
+  .gold-accent {
+    @apply border-l-4 border-gold-500;
   }
 }
 
@@ -229,8 +264,12 @@ html {
 }
 
 /* Royal Blue Background and Gold Particles */
+.dark {
+  background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #1e3a8a 100%);
+  min-height: 100vh;
+}
+
 body {
-  background: #182856; /* dark royal blue */
   min-height: 100vh;
   position: relative;
   overflow-x: hidden;
@@ -285,4 +324,14 @@ body {
   100% {
     background-position: -200% 0;
   }
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;  /* Chrome, Safari and Opera */
 }

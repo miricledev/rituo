@@ -54,11 +54,11 @@ function App() {
   const showNavbar = isAuthenticated && location.pathname !== '/';
 
   return (
-    <div className="min-h-screen bg-primary-50 dark:bg-secondary-900">
+    <div className="min-h-screen bg-primary-50 dark:bg-secondary-900 overflow-x-hidden w-full">
       <GoldParticlesBackground />
       {showNavbar && <Navbar />}
       
-      <div className={`${showNavbar ? 'pt-16' : ''}`}>
+      <div className={`${showNavbar ? 'pt-16' : ''} w-full overflow-x-hidden`}>
         <Routes>
           {/* Public routes */}
           <Route 

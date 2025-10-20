@@ -3,12 +3,32 @@ import { useParams, Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useTask } from '../contexts/TaskContext';
 
-const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
+// Helper to parse date string in local timezone (avoiding UTC conversion)
+function parseDateLocal(dateStr) {
+  if (!dateStr) return new Date();
+  // If it's already YYYY-MM-DD format, parse it in local time
+  if (dateStr.includes('T')) {
+    dateStr = dateStr.split('T')[0];
+  }
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, editMode = false, onUpdateDay, saving = false }) => {
   const { taskId } = useParams();
   const { fetchTaskAnalytics, loading: loadingContext } = useTask ? useTask() : {};
   const [taskData, setTaskData] = useState(taskDataProp || null);
   const [isLoading, setIsLoading] = useState(!taskDataProp);
   const [error, setError] = useState('');
+  const [editingDay, setEditingDay] = useState(null);  // {date, currentValue}
+  const [editValue, setEditValue] = useState('');
+
+  // Update local state when prop changes
+  useEffect(() => {
+    if (taskDataProp) {
+      setTaskData(taskDataProp);
+    }
+  }, [taskDataProp]);
 
   useEffect(() => {
     if (!taskDataProp && taskId && fetchTaskAnalytics) {
@@ -30,6 +50,55 @@ const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
   }, [taskId, fetchTaskAnalytics, taskDataProp]);
 
   const loading = typeof loadingProp === 'boolean' ? loadingProp : isLoading || loadingContext;
+
+  // Handler for clicking on a day to edit
+  const handleDayClick = (day) => {
+    if (!editMode || !onUpdateDay) return;
+    
+    // Check if it's today - can't edit today
+    const today = new Date().toISOString().slice(0, 10);
+    if (day.date === today) {
+      alert('Cannot modify today\'s data. Students must log their own progress for today.');
+      return;
+    }
+    
+    const habitType = habitData?.habitType || 'boolean';
+    
+    if (habitType === 'numeric') {
+      // Open modal for numeric input
+      const progressEntry = habitData?.progress?.find(p => p.date.startsWith(day.date));
+      setEditingDay({ date: day.date, currentValue: progressEntry?.numericValue || habitData?.minValue || 0 });
+      setEditValue(progressEntry?.numericValue?.toString() || '');
+    } else if (habitType === 'text') {
+      // Open modal for text input
+      const progressEntry = habitData?.progress?.find(p => p.date.startsWith(day.date));
+      setEditingDay({ date: day.date, currentValue: progressEntry?.textValue || '' });
+      setEditValue(progressEntry?.textValue || '');
+    } else {
+      // Boolean: just toggle
+      onUpdateDay(day.date, { completed: !day.is_complete });
+    }
+  };
+
+  const handleSaveEdit = () => {
+    if (!editingDay || !onUpdateDay) return;
+    
+    const habitType = habitData?.habitType || 'boolean';
+    
+    if (habitType === 'numeric') {
+      const numValue = parseFloat(editValue);
+      if (isNaN(numValue)) {
+        alert('Please enter a valid number');
+        return;
+      }
+      onUpdateDay(editingDay.date, { numericValue: numValue });
+    } else if (habitType === 'text') {
+      onUpdateDay(editingDay.date, { textValue: editValue });
+    }
+    
+    setEditingDay(null);
+    setEditValue('');
+  };
 
   if (loading) {
     return (
@@ -66,13 +135,16 @@ const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
 
   // Format chart data
   const chartData = (taskData.daily_data || []).map(day => ({
-    date: new Date(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    date: parseDateLocal(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     completed: day.is_complete ? 1 : 0,
     originalDate: day.date // Keep the original date for sorting
   }));
 
   // Sort chart data by date
-  chartData.sort((a, b) => new Date(a.originalDate) - new Date(b.originalDate));
+  chartData.sort((a, b) => parseDateLocal(a.originalDate) - parseDateLocal(b.originalDate));
+
+  // Convert ratio (0..1) to percentage for display
+  const completionRatePct = Math.round(((taskData.completion_rate ?? 0) * 100));
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-colors duration-200">
@@ -101,7 +173,7 @@ const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
           </div>
           
           <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4 text-center transition-colors duration-200">
-            <div className="text-3xl font-bold text-primary-600 dark:text-primary-400">{Math.round(taskData.completion_rate)}%</div>
+            <div className="text-3xl font-bold text-primary-600 dark:text-primary-400">{completionRatePct}%</div>
             <div className="text-sm text-secondary-600 dark:text-secondary-300">Completion Rate</div>
           </div>
           
@@ -121,12 +193,12 @@ const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
         <div className="mt-4">
           <div className="flex justify-between text-sm mb-1">
             <span>Overall Progress</span>
-            <span>{Math.round(taskData.completion_rate)}%</span>
+            <span>{completionRatePct}%</span>
           </div>
           <div className="progress-bar">
             <div 
               className="progress-bar-fill" 
-              style={{ width: `${taskData.completion_rate}%` }}
+              style={{ width: `${completionRatePct}%` }}
             ></div>
           </div>
         </div>
@@ -181,6 +253,14 @@ const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
       <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 transition-colors duration-200">
         <h3 className="text-lg font-semibold mb-4 text-secondary-900 dark:text-white">Completion Log</h3>
         
+        {editMode && (
+          <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p className="text-sm text-blue-800 dark:text-blue-200 flex items-center gap-2">
+              ✏️ <strong>Edit Mode Active:</strong> Click on any row to edit past days. Today's entry cannot be modified - students must log their own progress.
+            </p>
+          </div>
+        )}
+        
         <div className="overflow-hidden">
           <div className="max-h-96 overflow-y-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-secondary-700">
@@ -195,29 +275,116 @@ const TaskStats = ({ taskData: taskDataProp, loading: loadingProp }) => {
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-secondary-800 divide-y divide-gray-200 dark:divide-secondary-700">
-                {taskData.daily_data.map((day, index) => (
-                  <tr key={index}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-secondary-700 dark:text-secondary-300">
-                      {new Date(day.date).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {day.is_complete ? (
-                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300">
-                          Completed
-                        </span>
-                      ) : (
-                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300">
-                          Missed
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {taskData.daily_data.map((day, index) => {
+                  const isToday = day.date === new Date().toISOString().slice(0, 10);
+                  const isEditable = editMode && !isToday;
+                  
+                  return (
+                    <tr 
+                      key={index}
+                      className={`${isEditable ? 'hover:bg-gray-50 dark:hover:bg-secondary-700 cursor-pointer transition-colors' : ''} ${isToday && editMode ? 'opacity-50' : ''}`}
+                      onClick={() => handleDayClick(day)}
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-secondary-700 dark:text-secondary-300">
+                        {parseDateLocal(day.date).toLocaleDateString()}
+                        {isToday && (
+                          <span className="ml-2 text-xs font-semibold text-blue-600 dark:text-blue-400">
+                            (Today)
+                          </span>
+                        )}
+                        {isEditable && !isToday && (
+                          <span className="ml-2 text-xs text-primary-600 dark:text-primary-400">
+                            (click to edit)
+                          </span>
+                        )}
+                        {isToday && editMode && (
+                          <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                            (not editable)
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <button
+                          disabled={!isEditable || saving}
+                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            day.is_complete
+                              ? 'bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300'
+                              : 'bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300'
+                          } ${isEditable ? 'cursor-pointer hover:opacity-75' : ''}`}
+                        >
+                          {day.is_complete ? 'Completed' : 'Missed'}
+                          {isEditable && ' ✏️'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       </div>
+
+      {/* Edit Modal for Numeric/Text Habits */}
+      {editingDay && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
+              Edit Value for {parseDateLocal(editingDay.date).toLocaleDateString()}
+            </h3>
+            
+            {habitData?.habitType === 'numeric' ? (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">
+                  Value ({habitData.minValue || 0} - {habitData.maxValue || 100})
+                </label>
+                <input
+                  type="number"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  min={habitData.minValue || 0}
+                  max={habitData.maxValue || 100}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-secondary-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  autoFocus
+                />
+              </div>
+            ) : habitData?.habitType === 'text' ? (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">
+                  Text Entry
+                </label>
+                <textarea
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  rows={4}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-secondary-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  autoFocus
+                />
+              </div>
+            ) : null}
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setEditingDay(null);
+                  setEditValue('');
+                }}
+                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-secondary-700 dark:text-secondary-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

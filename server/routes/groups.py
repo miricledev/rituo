@@ -850,8 +850,19 @@ def get_group_attendance(group_id):
             for habit in habits:
                 progress = habit.get('progress', [])
                 for progress_entry in progress:
-                    progress_date = datetime.fromisoformat(progress_entry['date']).date()
-                    if challenge.start_date.date() <= progress_date <= challenge.end_date.date():
+                    # Parse the date string consistently
+                    progress_date_str = progress_entry['date']
+                    # Handle both ISO datetime strings and date-only strings
+                    if 'T' in progress_date_str:
+                        progress_date = datetime.fromisoformat(progress_date_str.replace('Z', '+00:00')).date()
+                    else:
+                        progress_date = datetime.fromisoformat(progress_date_str).date()
+                    
+                    # Ensure challenge dates are date objects
+                    challenge_start = challenge.start_date.date() if isinstance(challenge.start_date, datetime) else challenge.start_date
+                    challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+                    
+                    if challenge_start <= progress_date <= challenge_end:
                         if progress_entry.get('completed', False):
                             active_dates.add(progress_date.isoformat())
             
@@ -859,16 +870,38 @@ def get_group_attendance(group_id):
             days_active = len(active_dates)
             attendance_rate = (days_active / total_days * 100) if total_days > 0 else 0
             
-            # Get recent activity (last 7 days)
+            # Get recent activity (last 7 days including today, but not before challenge start)
             recent_activity = []
-            today = datetime.utcnow().date()
-            for i in range(7):
+            today = date.today()  # Use date.today() for consistent local date
+            challenge_start = challenge.start_date.date() if isinstance(challenge.start_date, datetime) else challenge.start_date
+            challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+            
+            # Calculate how many days to show (min of 7 or days since challenge start)
+            days_since_start = (today - challenge_start).days + 1  # +1 to include today
+            days_to_show = min(7, days_since_start)
+            
+            for i in range(days_to_show):
                 check_date = today - timedelta(days=i)
-                date_str = check_date.isoformat()
-                recent_activity.append({
+                # Don't show dates before challenge started
+                if check_date >= challenge_start:
+                    date_str = check_date.isoformat()
+                    recent_activity.append({
+                        'date': date_str,
+                        'active': date_str in active_dates
+                    })
+            
+            # Generate full attendance history (all days from challenge start to today or end date)
+            full_attendance = []
+            current_date = challenge_start
+            end_date_for_display = min(today, challenge_end)
+            
+            while current_date <= end_date_for_display:
+                date_str = current_date.isoformat()
+                full_attendance.append({
                     'date': date_str,
                     'active': date_str in active_dates
                 })
+                current_date += timedelta(days=1)
             
             attendance_data.append({
                 'member_id': member_id,
@@ -877,6 +910,7 @@ def get_group_attendance(group_id):
                 'total_days': total_days,
                 'attendance_rate': round(attendance_rate, 1),
                 'recent_activity': recent_activity,
+                'full_attendance': full_attendance,
                 'last_active': max(active_dates) if active_dates else None
             })
         
@@ -888,9 +922,159 @@ def get_group_attendance(group_id):
             'challenge_info': {
                 'start_date': challenge.start_date.isoformat(),
                 'end_date': challenge.end_date.isoformat(),
-                'total_days': total_days
+                'total_days': total_days,
+                'server_date': date.today().isoformat()  # For debugging
             }
         }), 200
         
     except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/challenge/<int:challenge_id>', methods=['DELETE'])
+@jwt_required()
+def delete_group_challenge(group_id, challenge_id):
+    """Allow group leader to permanently remove an active challenge and all its data."""
+    try:
+        user_id = get_jwt_identity()
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+
+        # Only the group leader can delete a challenge
+        if str(group.leader_id) != str(user_id):
+            return jsonify({'error': 'Only group leaders can remove a challenge'}), 403
+
+        challenge = GroupChallenge.query.get(challenge_id)
+        if not challenge or challenge.group_id != group.id:
+            return jsonify({'error': 'Challenge not found'}), 404
+
+        # If this is the active challenge, clear the reference
+        if group.active_challenge_id == challenge.id:
+            group.active_challenge_id = None
+
+        # Delete the challenge (member_habits data will be removed with it)
+        db.session.delete(challenge)
+        db.session.commit()
+
+        return jsonify({'message': 'Challenge removed successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/challenge/<int:challenge_id>/member/<int:member_id>/habit/<int:habit_index>/toggle-day', methods=['POST'])
+@jwt_required()
+def toggle_habit_day_status(group_id, challenge_id, member_id, habit_index):
+    """Allow group leader to manually toggle a member's habit completion status for a specific day"""
+    try:
+        user_id = get_jwt_identity()
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        # Only group leaders can modify member habits
+        if str(group.leader_id) != str(user_id):
+            return jsonify({'error': 'Only group leaders can modify member habits'}), 403
+        
+        challenge = GroupChallenge.query.get(challenge_id)
+        if not challenge or challenge.group_id != group.id:
+            return jsonify({'error': 'Challenge not found'}), 404
+        
+        data = request.get_json()
+        target_date = data.get('date')  # Should be ISO date string YYYY-MM-DD
+        new_status = data.get('completed')  # True or False (for boolean habits)
+        numeric_value = data.get('numericValue')  # Number (for numeric habits)
+        text_value = data.get('textValue')  # String (for text habits)
+        
+        print(f"DEBUG - Received update request: date={target_date}, completed={new_status}, numeric={numeric_value}, text={text_value}")
+        
+        if not target_date:
+            return jsonify({'error': 'Missing date'}), 400
+        
+        # Prevent modification of today's data
+        today = date.today().isoformat()
+        if target_date == today:
+            return jsonify({'error': 'Cannot modify today\'s data. Students must log their own progress for today.'}), 403
+        
+        # Find the member's habits
+        member_habit = None
+        for mh in challenge.member_habits:
+            if str(mh.get('member')) == str(member_id):
+                member_habit = mh
+                break
+        
+        if not member_habit:
+            return jsonify({'error': 'Member not found in challenge'}), 404
+        
+        habits = member_habit.get('habits', [])
+        if habit_index < 0 or habit_index >= len(habits):
+            return jsonify({'error': 'Invalid habit index'}), 400
+        
+        habit = habits[habit_index]
+        habit_type = habit.get('habitType', 'boolean')
+        progress = habit.get('progress', [])
+        
+        print(f"DEBUG - Habit type: {habit_type}, Habit name: {habit.get('name')}")
+        print(f"DEBUG - Current progress entries: {len(progress)}")
+        
+        # Check if progress entry already exists for this date
+        existing_entry = None
+        for p in progress:
+            if p['date'].startswith(target_date):  # Handle both date and datetime strings
+                existing_entry = p
+                print(f"DEBUG - Found existing entry: {existing_entry}")
+                break
+        
+        if not existing_entry:
+            print(f"DEBUG - No existing entry found for date {target_date}")
+        
+        if existing_entry:
+            # Update existing entry based on habit type
+            if habit_type == 'numeric' and numeric_value is not None:
+                existing_entry['numericValue'] = numeric_value
+                existing_entry['completed'] = True  # Auto-mark as completed when value is set
+                print(f"DEBUG - Updated numeric value to {numeric_value}")
+            elif habit_type == 'text' and text_value is not None:
+                existing_entry['textValue'] = text_value
+                existing_entry['completed'] = True  # Auto-mark as completed when value is set
+                print(f"DEBUG - Updated text value to {text_value}")
+            elif new_status is not None:
+                print(f"DEBUG - Updating completed status from {existing_entry.get('completed')} to {new_status}")
+                existing_entry['completed'] = new_status
+        else:
+            # Create new progress entry
+            new_entry = {
+                'date': f"{target_date}T00:00:00",  # Store as ISO datetime
+                'completed': new_status if new_status is not None else False
+            }
+            
+            if habit_type == 'numeric' and numeric_value is not None:
+                new_entry['numericValue'] = numeric_value
+                new_entry['completed'] = True
+                print(f"DEBUG - Created new entry with numeric value {numeric_value}")
+            elif habit_type == 'text' and text_value is not None:
+                new_entry['textValue'] = text_value
+                new_entry['completed'] = True
+                print(f"DEBUG - Created new entry with text value {text_value}")
+            else:
+                print(f"DEBUG - Created new boolean entry with completed={new_entry['completed']}")
+            
+            progress.append(new_entry)
+        
+        habit['progress'] = progress
+        
+        # Mark the field as modified for SQLAlchemy to detect the change
+        flag_modified(challenge, 'member_habits')
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Habit status updated successfully',
+            'date': target_date,
+            'completed': new_status
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
