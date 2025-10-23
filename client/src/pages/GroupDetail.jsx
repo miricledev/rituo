@@ -23,6 +23,21 @@ const GroupDetail = () => {
   });
   const [bulkCreate, setBulkCreate] = useState(false);
   const [bulkHabits, setBulkHabits] = useState([]);
+  const [currentHabit, setCurrentHabit] = useState({
+    name: '',
+    description: '',
+    habitType: 'boolean',
+    minValue: 0,
+    maxValue: 10,
+    prompt: '',
+    assignedMembers: [], // Array of member IDs
+    applyToAll: false
+  });
+  const [memberHabits, setMemberHabits] = useState({}); // { memberId: [habits] }
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [collapsedMembersInModal, setCollapsedMembersInModal] = useState({}); // Track which members are collapsed in the modal
+  const [lockedHabits, setLockedHabits] = useState({}); // { memberId: [habits] } - locked habits for overview
+  const [isEditingHabits, setIsEditingHabits] = useState(true); // true = editing mode, false = overview mode
   const { currentUser: user } = useAuth();
   const navigate = useNavigate();
   const [ticking, setTicking] = useState({});
@@ -42,11 +57,29 @@ const GroupDetail = () => {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [showDeleteChallengeConfirm, setShowDeleteChallengeConfirm] = useState(false);
   const [expandedAttendance, setExpandedAttendance] = useState({});
+  const [collapsedMembers, setCollapsedMembers] = useState({});
 
   // Calculate myMemberHabit early to avoid temporal dead zone
   const myMemberHabit = group?.activeChallenge?.memberHabits?.find(
     mh => String(mh.member) === String(user?.id) || String(mh.member?.id) === String(user?.id)
   );
+
+  // Check if there are any habits added
+  const hasHabitsAdded = Object.values(memberHabits).flat().length > 0 || Object.values(lockedHabits).flat().length > 0;
+
+  // Handle page refresh warning when habits are added
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (showCreateChallengeModal && hasHabitsAdded) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved habits. Are you sure you want to leave?';
+        return 'You have unsaved habits. Are you sure you want to leave?';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [showCreateChallengeModal, hasHabitsAdded]);
 
   // Helper function to format relative time
   const formatRelativeTime = (timestamp) => {
@@ -233,12 +266,102 @@ const GroupDetail = () => {
     }
   };
 
+  const toggleMemberCollapse = (memberId) => {
+    setCollapsedMembers(prev => ({
+      ...prev,
+      [memberId]: !prev[memberId]
+    }));
+  };
+
+  // Helper function to get date string for a given number of days from today
+  const getDateString = (daysFromToday) => {
+    const date = new Date();
+    date.setDate(date.getDate() + daysFromToday);
+    return date.toISOString().slice(0, 10);
+  };
+
+  // Handle cancel with confirmation
+  const handleCancel = () => {
+    if (hasHabitsAdded) {
+      setShowCancelConfirm(true);
+    } else {
+      setShowCreateChallengeModal(false);
+    }
+  };
+
+  // Confirm cancel and reset form
+  const confirmCancel = () => {
+    setShowCreateChallengeModal(false);
+    setShowCancelConfirm(false);
+    setMemberHabits({});
+    setLockedHabits({});
+    setCollapsedMembersInModal({});
+    setIsEditingHabits(true);
+    setCurrentHabit({
+      name: '',
+      description: '',
+      habitType: 'boolean',
+      minValue: 0,
+      maxValue: 10,
+      prompt: '',
+      assignedMembers: [],
+      applyToAll: false
+    });
+  };
+
+  // Toggle individual member collapse in modal
+  const toggleMemberCollapseInModal = (memberId) => {
+    setCollapsedMembersInModal(prev => ({
+      ...prev,
+      [memberId]: !prev[memberId]
+    }));
+  };
+
+  // Expand all members in modal
+  const expandAllMembersInModal = () => {
+    setCollapsedMembersInModal({});
+  };
+
+  // Collapse all members in modal
+  const collapseAllMembersInModal = () => {
+    const allCollapsed = {};
+    Object.keys(memberHabits).forEach(memberId => {
+      allCollapsed[memberId] = true;
+    });
+    setCollapsedMembersInModal(allCollapsed);
+  };
+
+  // Lock habits and switch to overview mode
+  const lockHabitsAndShowOverview = () => {
+    if (Object.values(memberHabits).flat().length > 0) {
+      setLockedHabits({ ...memberHabits });
+      setIsEditingHabits(false);
+    }
+  };
+
+  // Go back to editing mode
+  const goBackToEditing = () => {
+    setIsEditingHabits(true);
+    // Keep the current memberHabits for editing
+  };
+
   const handleCreateChallenge = async (e) => {
     e.preventDefault();
     try {
+      // Use locked habits if in overview mode, otherwise use current memberHabits
+      const habitsToSubmit = isEditingHabits ? memberHabits : lockedHabits;
+      
+      // Convert habits to the format expected by the backend
+      const memberHabitsArray = Object.entries(habitsToSubmit).map(([memberId, habits]) => ({
+        member: memberId,
+        habits: habits
+      }));
+
       const response = await axios.post('/groups/challenge', {
         groupId,
-        ...newChallenge
+        startDate: newChallenge.startDate,
+        endDate: newChallenge.endDate,
+        memberHabits: memberHabitsArray
       });
       setShowCreateChallengeModal(false);
       fetchGroupDetails();
@@ -302,21 +425,22 @@ const GroupDetail = () => {
   };
 
   const getMembersWithHabits = () => {
-    return newChallenge.memberHabits
-      .filter(mh => mh.member && mh.habits && mh.habits.length > 0)
-      .map(mh => mh.member);
+    const habitsToCheck = isEditingHabits ? memberHabits : lockedHabits;
+    return Object.keys(habitsToCheck).filter(memberId => 
+      habitsToCheck[memberId] && habitsToCheck[memberId].length > 0
+    );
   };
 
   const getMissingMembers = () => {
     const allMembers = getAllMembers();
     const membersWithHabits = getMembersWithHabits();
-    return allMembers.filter(member => !membersWithHabits.includes(member.id));
+    return allMembers.filter(member => !membersWithHabits.includes(String(member.id)));
   };
 
   const isChallengeValid = () => {
     const allMembers = getAllMembers();
     const membersWithHabits = getMembersWithHabits();
-    return allMembers.length > 0 && allMembers.every(member => membersWithHabits.includes(member.id));
+    return allMembers.length > 0 && allMembers.every(member => membersWithHabits.includes(String(member.id)));
   };
 
   // Bulk habit functions
@@ -924,13 +1048,17 @@ const GroupDetail = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                   {(group.activeChallenge.memberHabits || []).map((memberHabit, index) => {
                     const member = group.members?.find(m => String(m.id) === String(memberHabit.member) || String(m.id) === String(memberHabit.member?.id));
+                    const memberId = member?.id || memberHabit.member;
+                    const isCollapsed = collapsedMembers[memberId];
+                    const completionRate = calculateOverallCompletionRate([memberHabit]);
+                    
                     return (
                       <div
                         key={index}
                         className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-4 sm:p-6 flex flex-col gap-3 sm:gap-4 transition-transform transform hover:scale-[1.02] hover:shadow-2xl group"
                       >
                         <div className="flex items-center gap-3 sm:gap-4 mb-2">
-                          <Link to={`/groups/${groupId}/member/${member?.id || memberHabit.member}`} className="flex items-center gap-4 group-hover:underline">
+                          <Link to={`/groups/${groupId}/member/${memberId}`} className="flex items-center gap-4 group-hover:underline flex-1">
                             <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200 group-hover:ring-4 group-hover:ring-primary-200/40">
                               {member?.username?.[0]?.toUpperCase() || '?'}
                             </div>
@@ -941,10 +1069,31 @@ const GroupDetail = () => {
                               <div className="text-xs text-secondary-500 dark:text-secondary-400 truncate">
                                 {member?.email || ''}
                               </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-400">
+                                {completionRate.toFixed(0)}% Complete
+                              </div>
                             </div>
                           </Link>
+                          <button
+                            onClick={() => toggleMemberCollapse(memberId)}
+                            className="flex-shrink-0 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors"
+                            aria-label={isCollapsed ? "Expand habits" : "Collapse habits"}
+                          >
+                            <svg
+                              className={`w-5 h-5 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${
+                                isCollapsed ? 'rotate-180' : ''
+                              }`}
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
                         </div>
-                        <div className="space-y-3 mt-2">
+                        <div className={`space-y-3 mt-2 transition-all duration-300 ease-in-out overflow-hidden ${
+                          isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[1000px] opacity-100'
+                        }`}>
                           {(memberHabit.habits || []).map((habit, habitIndex) => {
                             // Find today's progress entry
                             const today = new Date().toISOString().slice(0, 10);
@@ -1698,422 +1847,613 @@ const GroupDetail = () => {
       {/* Create Challenge Modal */}
       {showCreateChallengeModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
-          <div className="bg-white dark:bg-secondary-800 rounded-lg p-4 sm:p-6 w-full max-w-6xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl sm:text-2xl font-semibold mb-3 sm:mb-4 text-secondary-900 dark:text-white">Create New Challenge</h2>
-            <form onSubmit={handleCreateChallenge} className="space-y-4 sm:space-y-6">
-              {/* Date Selection */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Start Date</label>
-                  <input
-                    type="date"
-                    value={newChallenge.startDate}
-                    onChange={(e) => setNewChallenge({ ...newChallenge, startDate: e.target.value })}
-                    className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">End Date</label>
-                  <input
-                    type="date"
-                    value={newChallenge.endDate}
-                    onChange={(e) => setNewChallenge({ ...newChallenge, endDate: e.target.value })}
-                    className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Bulk Create Section */}
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">Bulk Create Habits</h3>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={bulkCreate}
-                        onChange={(e) => setBulkCreate(e.target.checked)}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Apply same habits to all members</span>
-                    </label>
-                  </div>
-                  {bulkCreate && (
-                    <button
-                      type="button"
-                      onClick={addBulkHabit}
-                      className="bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700 transition-colors"
-                    >
-                      Add Habit Template
-                    </button>
-                  )}
-                </div>
-
-                {bulkCreate && (
-                  <div className="space-y-4 mb-6">
-                    {bulkHabits.map((habit, habitIndex) => (
-                      <div key={habitIndex} className="border border-gray-200 dark:border-gray-600 rounded-lg p-4 space-y-4">
-                        <div className="flex justify-between items-center">
-                          <h4 className="font-medium text-secondary-900 dark:text-white">Habit Template {habitIndex + 1}</h4>
-                          <button
-                            type="button"
-                            onClick={() => removeBulkHabit(habitIndex)}
-                            className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        
-                        {/* Basic Habit Info */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Habit Name</label>
-                            <input
-                              type="text"
-                              value={habit.name}
-                              onChange={(e) => updateBulkHabit(habitIndex, 'name', e.target.value)}
-                              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                              required
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Description</label>
-                            <input
-                              type="text"
-                              value={habit.description}
-                              onChange={(e) => updateBulkHabit(habitIndex, 'description', e.target.value)}
-                              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Habit Type Selection */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Habit Type</label>
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-                              <input
-                                type="radio"
-                                name={`bulk-habit-type-${habitIndex}`}
-                                value="boolean"
-                                checked={habit.habitType === 'boolean'}
-                                onChange={(e) => updateBulkHabit(habitIndex, 'habitType', e.target.value)}
-                                className="mr-2"
-                              />
-                              <div>
-                                <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
-                                <div className="text-sm text-gray-500 dark:text-gray-400">Simple yes/no</div>
-                              </div>
-                            </label>
-                            <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-                              <input
-                                type="radio"
-                                name={`bulk-habit-type-${habitIndex}`}
-                                value="numeric"
-                                checked={habit.habitType === 'numeric'}
-                                onChange={(e) => updateBulkHabit(habitIndex, 'habitType', e.target.value)}
-                                className="mr-2"
-                              />
-                              <div>
-                                <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
-                                <div className="text-sm text-gray-500 dark:text-gray-400">Set min/max values</div>
-                              </div>
-                            </label>
-                            <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-                              <input
-                                type="radio"
-                                name={`bulk-habit-type-${habitIndex}`}
-                                value="text"
-                                checked={habit.habitType === 'text'}
-                                onChange={(e) => updateBulkHabit(habitIndex, 'habitType', e.target.value)}
-                                className="mr-2"
-                              />
-                              <div>
-                                <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
-                                <div className="text-sm text-gray-500 dark:text-gray-400">Written response</div>
-                              </div>
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Conditional Fields based on Habit Type */}
-                        {habit.habitType === 'numeric' && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Value</label>
-                              <input
-                                type="number"
-                                value={habit.minValue}
-                                onChange={(e) => updateBulkHabit(habitIndex, 'minValue', parseInt(e.target.value))}
-                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                required
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Maximum Value</label>
-                              <input
-                                type="number"
-                                value={habit.maxValue}
-                                onChange={(e) => updateBulkHabit(habitIndex, 'maxValue', parseInt(e.target.value))}
-                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                required
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {habit.habitType === 'text' && (
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Prompt/Question</label>
-                            <input
-                              type="text"
-                              value={habit.prompt}
-                              onChange={(e) => updateBulkHabit(habitIndex, 'prompt', e.target.value)}
-                              placeholder="e.g., What did you learn today?"
-                              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                              required
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    
-                    {bulkHabits.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={applyBulkHabits}
-                        className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                      >
-                        Apply to All Members ({getAllMembers().length} members)
-                      </button>
-                    )}
+          <div className="bg-white dark:bg-secondary-800 rounded-lg w-full max-w-7xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl sm:text-2xl font-semibold text-secondary-900 dark:text-white">Create New Challenge</h2>
+                {hasHabitsAdded && (
+                  <div className="flex items-center gap-2 text-sm text-orange-600 dark:text-orange-400">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <span>Unsaved changes</span>
                   </div>
                 )}
               </div>
-
-              {/* Individual Member Habits (only show if not using bulk create) */}
-              {!bulkCreate && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">Individual Member Habits</h3>
-                    <button
-                      type="button"
-                      onClick={addMemberHabit}
-                      className="bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700 transition-colors"
-                    >
-                      Add Member
-                    </button>
+            </div>
+            
+            {/* Two Panel Layout */}
+            <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+              {/* Left Panel - Member Habits */}
+              <div className="w-full lg:w-1/2 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-700 p-4 sm:p-6 overflow-y-auto max-h-96 lg:max-h-none">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
+                    {isEditingHabits ? 'Assigned Habits' : 'Challenge Overview'}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      {(isEditingHabits ? Object.values(memberHabits) : Object.values(lockedHabits)).flat().length} total habits
+                    </span>
+                    {isEditingHabits && Object.keys(memberHabits).length > 1 && (
+                      <div className="flex gap-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                        <button
+                          type="button"
+                          onClick={expandAllMembersInModal}
+                          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                          title="Expand all"
+                        >
+                          <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={collapseAllMembersInModal}
+                          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                          title="Collapse all"
+                        >
+                          <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4m16 0l-4-4m4 4l-4 4" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div className="space-y-4">
-                    {newChallenge.memberHabits.map((memberHabit, memberIndex) => (
-                      <div key={memberIndex} className="border border-gray-200 dark:border-gray-600 rounded-lg p-4">
-                        <div className="mb-4">
-                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Member</label>
-                          <select
-                            value={memberHabit.member}
-                            onChange={(e) => updateMemberSelection(memberIndex, e.target.value)}
-                            className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                            required
+                </div>
+                
+                {(() => {
+                  const habitsToShow = isEditingHabits ? memberHabits : lockedHabits;
+                  const hasHabits = Object.keys(habitsToShow).length > 0;
+                  
+                  if (!hasHabits) {
+                    return (
+                      <div className="text-center py-12">
+                        <div className="text-6xl mb-4">👥</div>
+                        <p className="text-gray-500 dark:text-gray-400 mb-2">
+                          {isEditingHabits ? 'No habits assigned yet' : 'No habits in overview'}
+                        </p>
+                        <p className="text-sm text-gray-400 dark:text-gray-500">
+                          {isEditingHabits ? 'Add habits and assign them to members' : 'Go back to editing to add habits'}
+                        </p>
+                      </div>
+                    );
+                  }
+                  
+                  return (
+                    <div className="space-y-4">
+                      {Object.entries(habitsToShow).map(([memberId, habits]) => {
+                      const member = group?.members?.find(m => String(m.id) === String(memberId));
+                      const isCollapsed = collapsedMembersInModal[memberId];
+                      return (
+                        <div key={memberId} className="bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+                          <div 
+                            className={`flex items-center gap-3 p-4 ${isEditingHabits ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors' : ''}`}
+                            onClick={isEditingHabits ? () => toggleMemberCollapseInModal(memberId) : undefined}
                           >
-                            <option value="">Select Member</option>
-                            {group.members.map((member) => (
-                              <option key={member.id} value={member.id}>
-                                {member.username}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between items-center mb-2">
-                            <h4 className="font-medium text-secondary-900 dark:text-white">Habits</h4>
-                            <button
-                              type="button"
-                              onClick={() => addHabitToMember(memberIndex)}
-                              className="bg-blue-600 text-white py-1 px-3 rounded hover:bg-blue-700 text-sm transition-colors"
-                            >
-                              Add Habit
-                            </button>
-                          </div>
-                          <div className="space-y-4">
-                            {memberHabit.habits.map((habit, habitIndex) => (
-                              <div key={habitIndex} className="border border-gray-200 dark:border-gray-600 rounded-lg p-4 space-y-4">
-                                {/* Basic Habit Info */}
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  <div>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Habit Name</label>
-                                    <input
-                                      type="text"
-                                      value={habit.name}
-                                      onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'name', e.target.value)}
-                                      className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                      required
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Description</label>
-                                    <input
-                                      type="text"
-                                      value={habit.description}
-                                      onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'description', e.target.value)}
-                                      className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                    />
-                                  </div>
-                                </div>
-
-                                {/* Habit Type Selection */}
-                                <div>
-                                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Habit Type</label>
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-                                      <input
-                                        type="radio"
-                                        name={`habit-type-${memberIndex}-${habitIndex}`}
-                                        value="boolean"
-                                        checked={habit.habitType === 'boolean'}
-                                        onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'habitType', e.target.value)}
-                                        className="mr-2"
-                                      />
-                                      <div>
-                                        <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
-                                        <div className="text-sm text-gray-500 dark:text-gray-400">Simple yes/no</div>
-                                      </div>
-                                    </label>
-                                    <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-                                      <input
-                                        type="radio"
-                                        name={`habit-type-${memberIndex}-${habitIndex}`}
-                                        value="numeric"
-                                        checked={habit.habitType === 'numeric'}
-                                        onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'habitType', e.target.value)}
-                                        className="mr-2"
-                                      />
-                                      <div>
-                                        <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
-                                        <div className="text-sm text-gray-500 dark:text-gray-400">Set min/max values</div>
-                                      </div>
-                                    </label>
-                                    <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-                                      <input
-                                        type="radio"
-                                        name={`habit-type-${memberIndex}-${habitIndex}`}
-                                        value="text"
-                                        checked={habit.habitType === 'text'}
-                                        onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'habitType', e.target.value)}
-                                        className="mr-2"
-                                      />
-                                      <div>
-                                        <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
-                                        <div className="text-sm text-gray-500 dark:text-gray-400">Written response</div>
-                                      </div>
-                                    </label>
-                                  </div>
-                                </div>
-
-                                {/* Conditional Fields based on Habit Type */}
-                                {habit.habitType === 'numeric' && (
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Value</label>
-                                      <input
-                                        type="number"
-                                        value={habit.minValue}
-                                        onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'minValue', parseInt(e.target.value))}
-                                        className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                        required
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Maximum Value</label>
-                                      <input
-                                        type="number"
-                                        value={habit.maxValue}
-                                        onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'maxValue', parseInt(e.target.value))}
-                                        className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                        required
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-
-                                {habit.habitType === 'text' && (
-                                  <div>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Prompt/Question</label>
-                                    <input
-                                      type="text"
-                                      value={habit.prompt}
-                                      onChange={(e) => updateMemberHabit(memberIndex, habitIndex, 'prompt', e.target.value)}
-                                      placeholder="e.g., What did you learn today?"
-                                      className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                                      required
-                                    />
-                                  </div>
-                                )}
+                            {isEditingHabits && (
+                              <button
+                                type="button"
+                                className="flex-shrink-0 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                              >
+                                <svg
+                                  className={`w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${
+                                    isCollapsed ? 'rotate-180' : ''
+                                  }`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                            )}
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200 flex-shrink-0">
+                              {member?.username?.[0]?.toUpperCase() || '?'}
+                            </div>
+                            <div className="flex-1">
+                              <h4 className="font-medium text-secondary-900 dark:text-white">{member?.username || 'Unknown Member'}</h4>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">{habits.length} habit{habits.length !== 1 ? 's' : ''}</p>
+                            </div>
+                            {!isEditingHabits && (
+                              <div className="flex-shrink-0">
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                                  ✓ Locked
+                                </span>
                               </div>
-                            ))}
+                            )}
+                          </div>
+                          <div className={`px-4 pb-4 transition-all duration-300 ease-in-out overflow-hidden ${
+                            isEditingHabits && isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[1000px] opacity-100'
+                          }`}>
+                            <div className="space-y-2">
+                              {habits.map((habit, habitIndex) => (
+                              <div key={habitIndex} className="bg-white dark:bg-gray-800 rounded p-3 border border-gray-200 dark:border-gray-600">
+                                <div className="flex items-start justify-between">
+                                  <div className="flex-1">
+                                    <h5 className="font-medium text-sm text-secondary-900 dark:text-white">{habit.name}</h5>
+                                    {habit.description && (
+                                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">{habit.description}</p>
+                                    )}
+                                    <div className="flex items-center gap-2 mt-2">
+                                      <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs">
+                                        {habit.habitType === 'boolean' ? 'Checkbox' : 
+                                         habit.habitType === 'numeric' ? 'Numeric' : 'Text'}
+                                      </span>
+                                      {habit.habitType === 'numeric' && (
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">{habit.minValue} - {habit.maxValue}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {isEditingHabits && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const newMemberHabits = { ...memberHabits };
+                                        newMemberHabits[memberId] = newMemberHabits[memberId].filter((_, idx) => idx !== habitIndex);
+                                        if (newMemberHabits[memberId].length === 0) {
+                                          delete newMemberHabits[memberId];
+                                        }
+                                        setMemberHabits(newMemberHabits);
+                                      }}
+                                      className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 p-1"
+                                    >
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Right Panel - Add Habit Form or Overview */}
+              <div className="w-full lg:w-1/2 p-4 sm:p-6 overflow-y-auto">
+                {isEditingHabits ? (
+                  <form onSubmit={handleCreateChallenge} className="space-y-6">
+                    {/* Challenge Settings */}
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Challenge Settings</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Start Date</label>
+                        <div className="space-y-2">
+                          <input
+                            type="date"
+                            value={newChallenge.startDate}
+                            onChange={(e) => setNewChallenge({ ...newChallenge, startDate: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                            required
+                          />
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={newChallenge.startDate === getDateString(0)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setNewChallenge({ ...newChallenge, startDate: getDateString(0) });
+                                }
+                              }}
+                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <span className="text-gray-700 dark:text-gray-300">Start today</span>
+                          </label>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">End Date</label>
+                        <div className="space-y-2">
+                          <input
+                            type="date"
+                            value={newChallenge.endDate}
+                            onChange={(e) => setNewChallenge({ ...newChallenge, endDate: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                            required
+                          />
+                          <div className="flex flex-wrap gap-3">
+                            <label className="flex items-center gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={newChallenge.endDate === getDateString(7)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewChallenge({ ...newChallenge, endDate: getDateString(7) });
+                                  }
+                                }}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                              />
+                              <span className="text-gray-700 dark:text-gray-300">7 days</span>
+                            </label>
+                            <label className="flex items-center gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={newChallenge.endDate === getDateString(14)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewChallenge({ ...newChallenge, endDate: getDateString(14) });
+                                  }
+                                }}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                              />
+                              <span className="text-gray-700 dark:text-gray-300">14 days</span>
+                            </label>
+                            <label className="flex items-center gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={newChallenge.endDate === getDateString(30)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewChallenge({ ...newChallenge, endDate: getDateString(30) });
+                                  }
+                                }}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                              />
+                              <span className="text-gray-700 dark:text-gray-300">30 days</span>
+                            </label>
                           </div>
                         </div>
                       </div>
-                    ))}
+                    </div>
                   </div>
-                </div>
-              )}
 
-              {/* Validation Status */}
-              {!isChallengeValid() && (
-                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                    <span className="font-medium text-yellow-800 dark:text-yellow-200">Challenge Setup Incomplete</span>
+                  {/* Add Habit Form */}
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Add New Habit</h3>
+                    <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
+
+                      {/* Basic Habit Info */}
+                      <div className="grid grid-cols-1 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Habit Name</label>
+                          <input
+                            type="text"
+                            value={currentHabit.name}
+                            onChange={(e) => setCurrentHabit({ ...currentHabit, name: e.target.value })}
+                            placeholder="e.g., Drink 8 glasses of water"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description (Optional)</label>
+                          <input
+                            type="text"
+                            value={currentHabit.description}
+                            onChange={(e) => setCurrentHabit({ ...currentHabit, description: e.target.value })}
+                            placeholder="Brief description of the habit"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Habit Type Selection */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Habit Type</label>
+                        <div className="grid grid-cols-1 gap-3">
+                          <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                            <input
+                              type="radio"
+                              name="habit-type"
+                              value="boolean"
+                              checked={currentHabit.habitType === 'boolean'}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
+                              className="mr-3"
+                            />
+                            <div>
+                              <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400">Simple yes/no completion</div>
+                            </div>
+                          </label>
+                          <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                            <input
+                              type="radio"
+                              name="habit-type"
+                              value="numeric"
+                              checked={currentHabit.habitType === 'numeric'}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
+                              className="mr-3"
+                            />
+                            <div>
+                              <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400">Track numbers with min/max values</div>
+                            </div>
+                          </label>
+                          <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                            <input
+                              type="radio"
+                              name="habit-type"
+                              value="text"
+                              checked={currentHabit.habitType === 'text'}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
+                              className="mr-3"
+                            />
+                            <div>
+                              <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400">Written response or journal entry</div>
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Member Assignment */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Assign to Members</label>
+                        
+                        {/* Apply to All Toggle */}
+                        <div className="mb-4">
+                          <label className="flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={currentHabit.applyToAll}
+                              onChange={(e) => {
+                                const applyToAll = e.target.checked;
+                                setCurrentHabit({
+                                  ...currentHabit,
+                                  applyToAll,
+                                  assignedMembers: applyToAll ? group?.members?.map(m => m.id) || [] : []
+                                });
+                              }}
+                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <div>
+                              <div className="font-medium text-secondary-900 dark:text-white">Apply to All Members</div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400">Assign this habit to all group members</div>
+                            </div>
+                          </label>
+                        </div>
+
+                        {/* Individual Member Selection */}
+                        {!currentHabit.applyToAll && (
+                          <div className="space-y-2 max-h-40 overflow-y-auto">
+                            {group?.members?.map((member) => (
+                              <label key={member.id} className="flex items-center gap-3 p-2 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                                <input
+                                  type="checkbox"
+                                  checked={currentHabit.assignedMembers.includes(member.id)}
+                                  onChange={(e) => {
+                                    const isChecked = e.target.checked;
+                                    setCurrentHabit({
+                                      ...currentHabit,
+                                      assignedMembers: isChecked
+                                        ? [...currentHabit.assignedMembers, member.id]
+                                        : currentHabit.assignedMembers.filter(id => id !== member.id)
+                                    });
+                                  }}
+                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                />
+                                <div className="flex items-center gap-3">
+                                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">
+                                    {member.username[0].toUpperCase()}
+                                  </div>
+                                  <span className="text-sm font-medium text-secondary-900 dark:text-white">{member.username}</span>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* Validation message for member selection */}
+                        {!currentHabit.applyToAll && currentHabit.assignedMembers.length === 0 && (
+                          <p className="text-sm text-red-500 dark:text-red-400 mt-2">
+                            Please select at least one member or choose "Apply to All Members"
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Conditional Fields based on Habit Type */}
+                      {currentHabit.habitType === 'numeric' && (
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Minimum Value</label>
+                            <input
+                              type="number"
+                              value={currentHabit.minValue}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, minValue: parseInt(e.target.value) })}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Maximum Value</label>
+                            <input
+                              type="number"
+                              value={currentHabit.maxValue}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, maxValue: parseInt(e.target.value) })}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
+                              required
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {currentHabit.habitType === 'text' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Prompt/Question</label>
+                          <input
+                            type="text"
+                            value={currentHabit.prompt}
+                            onChange={(e) => setCurrentHabit({ ...currentHabit, prompt: e.target.value })}
+                            placeholder="e.g., What did you learn today?"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Add Habit Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (currentHabit.name.trim() && currentHabit.assignedMembers.length > 0) {
+                            const newMemberHabits = { ...memberHabits };
+                            
+                            // Add the habit to each assigned member
+                            currentHabit.assignedMembers.forEach(memberId => {
+                              if (!newMemberHabits[memberId]) {
+                                newMemberHabits[memberId] = [];
+                              }
+                              newMemberHabits[memberId].push({
+                                name: currentHabit.name,
+                                description: currentHabit.description,
+                                habitType: currentHabit.habitType,
+                                minValue: currentHabit.minValue,
+                                maxValue: currentHabit.maxValue,
+                                prompt: currentHabit.prompt
+                              });
+                            });
+                            
+                            setMemberHabits(newMemberHabits);
+                            setCurrentHabit({
+                              name: '',
+                              description: '',
+                              habitType: 'boolean',
+                              minValue: 0,
+                              maxValue: 10,
+                              prompt: '',
+                              assignedMembers: [],
+                              applyToAll: false
+                            });
+                          }
+                        }}
+                        disabled={!currentHabit.name.trim() || currentHabit.assignedMembers.length === 0}
+                        className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+                      >
+                        Add Habit to Challenge
+                      </button>
+                    </div>
                   </div>
-                  <p className="text-yellow-700 dark:text-yellow-300 text-sm">
-                    {getMissingMembers().length > 0 
-                      ? `${getMissingMembers().length} member(s) still need habits assigned: ${getMissingMembers().map(m => m.username).join(', ')}`
-                      : 'All members need at least one habit assigned.'
-                    }
-                  </p>
-                </div>
-              )}
 
-              {/* Submit Buttons */}
-              <div className="flex justify-end space-x-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateChallengeModal(false)}
-                  className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 py-2 px-4 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-                >
-                  Cancel
-                </button>
-                <div className="relative group">
-                  <button
-                    type="submit"
-                    disabled={!isChallengeValid()}
-                    className={`py-2 px-6 rounded font-medium transition-all ${
-                      isChallengeValid()
-                        ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg hover:shadow-xl'
-                        : 'bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed opacity-50'
-                    }`}
-                  >
-                    Create Challenge
-                  </button>
-                  
-                  {/* Tooltip for disabled state */}
-                  {!isChallengeValid() && (
-                    <div className="absolute bottom-full right-0 mb-2 px-3 py-2 bg-gray-900 text-white text-sm rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
-                      {getMissingMembers().length > 0 
-                        ? `Missing habits for: ${getMissingMembers().map(m => m.username).join(', ')}`
-                        : 'All members need habits assigned'
-                      }
-                      <div className="absolute top-full right-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
+                  {/* Done Adding Habits Button */}
+                  {Object.values(memberHabits).flat().length > 0 && (
+                    <div className="mb-6">
+                      <button
+                        type="button"
+                        onClick={lockHabitsAndShowOverview}
+                        className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                      >
+                        ✓ Done Adding Habits - Review & Create Challenge
+                      </button>
                     </div>
                   )}
-                </div>
+
+                  {/* Validation Status */}
+                  {!isChallengeValid() && (
+                    <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        <span className="font-medium text-yellow-800 dark:text-yellow-200">Challenge Setup Incomplete</span>
+                      </div>
+                      <p className="text-yellow-700 dark:text-yellow-300 text-sm">
+                        {getMissingMembers().length > 0 
+                          ? `${getMissingMembers().length} member(s) still need habits assigned: ${getMissingMembers().map(m => m.username).join(', ')}`
+                          : 'All members need at least one habit assigned.'
+                        }
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Cancel Button */}
+                  <div className="flex justify-end pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button
+                      type="button"
+                      onClick={handleCancel}
+                      className={`px-6 py-2 rounded-lg transition-colors ${
+                        hasHabitsAdded 
+                          ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 hover:bg-orange-200 dark:hover:bg-orange-900/50 border border-orange-200 dark:border-orange-800' 
+                          : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
+                      }`}
+                    >
+                      {hasHabitsAdded ? 'Cancel (Unsaved)' : 'Cancel'}
+                    </button>
+                  </div>
+                </form>
+                ) : (
+                  /* Overview Mode */
+                  <div className="space-y-6">
+                    {/* Challenge Settings Summary */}
+                    <div className="mb-6">
+                      <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Challenge Summary</h3>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date</label>
+                            <p className="text-sm text-gray-900 dark:text-gray-100">{newChallenge.startDate}</p>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date</label>
+                            <p className="text-sm text-gray-900 dark:text-gray-100">{newChallenge.endDate}</p>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Total Habits</label>
+                          <p className="text-sm text-gray-900 dark:text-gray-100">{Object.values(lockedHabits).flat().length} habits across {Object.keys(lockedHabits).length} members</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Go Back and Edit Button */}
+                    <div className="mb-6">
+                      <button
+                        type="button"
+                        onClick={goBackToEditing}
+                        className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                      >
+                        ← Go Back and Edit Habits
+                      </button>
+                    </div>
+
+                    {/* Create Challenge Button */}
+                    <div className="mb-6">
+                      <button
+                        type="button"
+                        onClick={(e) => handleCreateChallenge(e)}
+                        className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                      >
+                        🚀 Create Challenge
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Confirmation Modal */}
+      {showCancelConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-semibold mb-3 text-secondary-900 dark:text-white">Discard Changes?</h2>
+            <p className="text-secondary-700 dark:text-secondary-300 mb-6">
+              You have {Object.values(memberHabits).flat().length} habit{Object.values(memberHabits).flat().length !== 1 ? 's' : ''} added. 
+              Are you sure you want to cancel and lose all your progress?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+              >
+                Keep Editing
+              </button>
+              <button
+                onClick={confirmCancel}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
+              >
+                Discard Changes
+              </button>
+            </div>
           </div>
         </div>
       )}
