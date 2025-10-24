@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import GroupChat from '../components/GroupChat';
 import DirectMessage from '../components/DirectMessage';
+import ColorChart from '../components/ColorChart';
 
 const GroupDetail = () => {
   // All hooks at the top!
@@ -48,6 +49,7 @@ const GroupDetail = () => {
   const [tempTextValues, setTempTextValues] = useState({});
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedDMUser, setSelectedDMUser] = useState(null);
+  const [selectedColorChartMember, setSelectedColorChartMember] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -817,6 +819,16 @@ const GroupDetail = () => {
             >
               Leaderboard
             </button>
+            <button
+              onClick={() => setActiveTab('colorChart')}
+              className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
+                activeTab === 'colorChart'
+                  ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
+              }`}
+            >
+              Color Chart
+            </button>
             {isLeader && (
               <button
                 onClick={() => setActiveTab('archives')}
@@ -881,17 +893,22 @@ const GroupDetail = () => {
         <div className="mb-8">
           <h2 className="text-2xl font-semibold mb-4">Active Challenge</h2>
           <div className="border rounded-lg p-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <p className="text-gray-600">
+                <p className="text-gray-600 dark:text-gray-400">
                   Start Date: {new Date(group.activeChallenge.startDate).toLocaleDateString()}
                 </p>
-                <p className="text-gray-600">
+                <p className="text-gray-600 dark:text-gray-400">
                   End Date: {new Date(group.activeChallenge.endDate).toLocaleDateString()}
                 </p>
               </div>
               <div>
-                <p className="text-gray-600">Status: {group.activeChallenge.status}</p>
+                <p className="text-gray-600 dark:text-gray-400">Status: {group.activeChallenge.status}</p>
+              </div>
+              <div>
+                <p className="text-gray-600 dark:text-gray-400">
+                  Today's Date: {new Date().toLocaleDateString()}
+                </p>
               </div>
             </div>
 
@@ -1844,6 +1861,108 @@ const GroupDetail = () => {
         </div>
       )}
 
+      {/* Color Chart Tab */}
+      {activeTab === 'colorChart' && (
+                <div>
+          {isLeader ? (
+            // Leader view - show member list or individual chart
+            !selectedColorChartMember ? (
+              // Show member list
+                <div>
+                <div className="mb-8">
+                  <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">🎨 Skill Development Charts</h2>
+                  <p className="text-secondary-600 dark:text-secondary-400 mb-4">Select a member to manage their skill development chart.</p>
+              </div>
+
+                {group.members && group.members.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {group.members.map(member => (
+                      <div 
+                        key={member.id} 
+                        className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 cursor-pointer transition-transform transform hover:scale-105 hover:shadow-xl border border-gray-200 dark:border-secondary-700"
+                        onClick={() => setSelectedColorChartMember(member)}
+                      >
+                        <div className="text-center">
+                          <div className="w-16 h-16 bg-primary-100 dark:bg-primary-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <span className="text-2xl font-bold text-primary-600 dark:text-primary-400">
+                              {member.username.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-2">
+                            {member.username}
+                          </h3>
+                          <p className="text-sm text-secondary-600 dark:text-secondary-400">
+                            Click to view skill chart
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <div className="text-6xl mb-4">👥</div>
+                    <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">
+                      No Members Yet
+                    </h3>
+                    <p className="text-secondary-600 dark:text-secondary-400">
+                      Add members to the group to manage their skill development charts.
+                    </p>
+                  </div>
+                  )}
+                </div>
+            ) : (
+              // Show individual member's chart
+              <div>
+                <div className="mb-6 flex items-center gap-4">
+                          <button
+                    onClick={() => setSelectedColorChartMember(null)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
+                          >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back to Members
+                          </button>
+                        </div>
+                        
+                <div className="mb-8">
+                  <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">
+                    🎨 {selectedColorChartMember.username}'s Skill Development Chart
+                  </h2>
+                  <p className="text-secondary-600 dark:text-secondary-400 mb-4">
+                    Manage skill development chart for {selectedColorChartMember.username}.
+                  </p>
+                        </div>
+
+                <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6">
+                  <ColorChart 
+                    memberHabit={{ member: selectedColorChartMember.id }}
+                    isLeader={isLeader}
+                    groupId={groupId}
+                  />
+                              </div>
+                              </div>
+            )
+          ) : (
+            // Student view - show their own chart
+                              <div>
+              <div className="mb-8">
+                <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">🎨 Your Skill Development Chart</h2>
+                <p className="text-secondary-600 dark:text-secondary-400 mb-4">Track your skill development progress across different areas.</p>
+                        </div>
+
+              <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6">
+                <ColorChart 
+                  memberHabit={{ member: user.id }}
+                  isLeader={false}
+                  groupId={groupId}
+                              />
+                            </div>
+                            </div>
+          )}
+                          </div>
+                        )}
+
       {/* Create Challenge Modal */}
       {showCreateChallengeModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
@@ -1858,9 +1977,9 @@ const GroupDetail = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
                     </svg>
                     <span>Unsaved changes</span>
-                  </div>
-                )}
-              </div>
+                          </div>
+                        )}
+                      </div>
             </div>
             
             {/* Two Panel Layout */}
@@ -1877,16 +1996,16 @@ const GroupDetail = () => {
                     </span>
                     {isEditingHabits && Object.keys(memberHabits).length > 1 && (
                       <div className="flex gap-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
-                        <button
-                          type="button"
+                      <button
+                        type="button"
                           onClick={expandAllMembersInModal}
                           className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
                           title="Expand all"
-                        >
+                      >
                           <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                           </svg>
-                        </button>
+                      </button>
                         <button
                           type="button"
                           onClick={collapseAllMembersInModal}
@@ -1897,11 +2016,11 @@ const GroupDetail = () => {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4m16 0l-4-4m4 4l-4 4" />
                           </svg>
                         </button>
-                      </div>
-                    )}
                   </div>
-                </div>
-                
+                )}
+                  </div>
+              </div>
+
                 {(() => {
                   const habitsToShow = isEditingHabits ? memberHabits : lockedHabits;
                   const hasHabits = Object.keys(habitsToShow).length > 0;
@@ -1932,8 +2051,8 @@ const GroupDetail = () => {
                             onClick={isEditingHabits ? () => toggleMemberCollapseInModal(memberId) : undefined}
                           >
                             {isEditingHabits && (
-                              <button
-                                type="button"
+                    <button
+                      type="button"
                                 className="flex-shrink-0 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                               >
                                 <svg
@@ -1946,15 +2065,15 @@ const GroupDetail = () => {
                                 >
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                 </svg>
-                              </button>
+                    </button>
                             )}
                             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200 flex-shrink-0">
                               {member?.username?.[0]?.toUpperCase() || '?'}
-                            </div>
+                  </div>
                             <div className="flex-1">
                               <h4 className="font-medium text-secondary-900 dark:text-white">{member?.username || 'Unknown Member'}</h4>
                               <p className="text-xs text-gray-500 dark:text-gray-400">{habits.length} habit{habits.length !== 1 ? 's' : ''}</p>
-                            </div>
+                        </div>
                             {!isEditingHabits && (
                               <div className="flex-shrink-0">
                                 <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
@@ -1986,8 +2105,8 @@ const GroupDetail = () => {
                                     </div>
                                   </div>
                                   {isEditingHabits && (
-                                    <button
-                                      type="button"
+                            <button
+                              type="button"
                                       onClick={() => {
                                         const newMemberHabits = { ...memberHabits };
                                         newMemberHabits[memberId] = newMemberHabits[memberId].filter((_, idx) => idx !== habitIndex);
@@ -2001,9 +2120,9 @@ const GroupDetail = () => {
                                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                       </svg>
-                                    </button>
+                            </button>
                                   )}
-                                </div>
+                          </div>
                               </div>
                               ))}
                             </div>
@@ -2110,79 +2229,79 @@ const GroupDetail = () => {
                     <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Add New Habit</h3>
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
 
-                      {/* Basic Habit Info */}
+                                {/* Basic Habit Info */}
                       <div className="grid grid-cols-1 gap-4">
-                        <div>
+                                  <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Habit Name</label>
-                          <input
-                            type="text"
+                                    <input
+                                      type="text"
                             value={currentHabit.name}
                             onChange={(e) => setCurrentHabit({ ...currentHabit, name: e.target.value })}
                             placeholder="e.g., Drink 8 glasses of water"
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                            required
-                          />
-                        </div>
-                        <div>
+                                      required
+                                    />
+                                  </div>
+                                  <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description (Optional)</label>
-                          <input
-                            type="text"
+                                    <input
+                                      type="text"
                             value={currentHabit.description}
                             onChange={(e) => setCurrentHabit({ ...currentHabit, description: e.target.value })}
                             placeholder="Brief description of the habit"
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                          />
-                        </div>
-                      </div>
+                                    />
+                                  </div>
+                                </div>
 
-                      {/* Habit Type Selection */}
-                      <div>
+                                {/* Habit Type Selection */}
+                                <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Habit Type</label>
                         <div className="grid grid-cols-1 gap-3">
                           <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                            <input
-                              type="radio"
+                                      <input
+                                        type="radio"
                               name="habit-type"
-                              value="boolean"
+                                        value="boolean"
                               checked={currentHabit.habitType === 'boolean'}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
                               className="mr-3"
-                            />
-                            <div>
-                              <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
+                                      />
+                                      <div>
+                                        <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">Simple yes/no completion</div>
-                            </div>
-                          </label>
+                                      </div>
+                                    </label>
                           <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                            <input
-                              type="radio"
+                                      <input
+                                        type="radio"
                               name="habit-type"
-                              value="numeric"
+                                        value="numeric"
                               checked={currentHabit.habitType === 'numeric'}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
                               className="mr-3"
-                            />
-                            <div>
-                              <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
+                                      />
+                                      <div>
+                                        <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">Track numbers with min/max values</div>
-                            </div>
-                          </label>
+                                      </div>
+                                    </label>
                           <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                            <input
-                              type="radio"
+                                      <input
+                                        type="radio"
                               name="habit-type"
-                              value="text"
+                                        value="text"
                               checked={currentHabit.habitType === 'text'}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
                               className="mr-3"
-                            />
-                            <div>
-                              <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
+                                      />
+                                      <div>
+                                        <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">Written response or journal entry</div>
-                            </div>
-                          </label>
-                        </div>
-                      </div>
+                                      </div>
+                                    </label>
+                                  </div>
+                                </div>
 
                       {/* Member Assignment */}
                       <div>
@@ -2249,45 +2368,45 @@ const GroupDetail = () => {
                         )}
                       </div>
 
-                      {/* Conditional Fields based on Habit Type */}
+                                {/* Conditional Fields based on Habit Type */}
                       {currentHabit.habitType === 'numeric' && (
                         <div className="grid grid-cols-2 gap-4">
-                          <div>
+                                    <div>
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Minimum Value</label>
-                            <input
-                              type="number"
+                                      <input
+                                        type="number"
                               value={currentHabit.minValue}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, minValue: parseInt(e.target.value) })}
                               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                              required
-                            />
-                          </div>
-                          <div>
+                                        required
+                                      />
+                                    </div>
+                                    <div>
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Maximum Value</label>
-                            <input
-                              type="number"
+                                      <input
+                                        type="number"
                               value={currentHabit.maxValue}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, maxValue: parseInt(e.target.value) })}
                               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                              required
-                            />
-                          </div>
-                        </div>
-                      )}
+                                        required
+                                      />
+                                    </div>
+                                  </div>
+                                )}
 
                       {currentHabit.habitType === 'text' && (
-                        <div>
+                                  <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Prompt/Question</label>
-                          <input
-                            type="text"
+                                    <input
+                                      type="text"
                             value={currentHabit.prompt}
                             onChange={(e) => setCurrentHabit({ ...currentHabit, prompt: e.target.value })}
-                            placeholder="e.g., What did you learn today?"
+                                      placeholder="e.g., What did you learn today?"
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                            required
-                          />
-                        </div>
-                      )}
+                                      required
+                                    />
+                                  </div>
+                                )}
 
                       {/* Add Habit Button */}
                       <button
@@ -2329,44 +2448,33 @@ const GroupDetail = () => {
                       >
                         Add Habit to Challenge
                       </button>
-                    </div>
-                  </div>
+                              </div>
+                          </div>
 
-                  {/* Done Adding Habits Button */}
-                  {Object.values(memberHabits).flat().length > 0 && (
-                    <div className="mb-6">
-                      <button
-                        type="button"
-                        onClick={lockHabitsAndShowOverview}
-                        className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium"
-                      >
-                        ✓ Done Adding Habits - Review & Create Challenge
-                      </button>
-                    </div>
-                  )}
 
-                  {/* Validation Status */}
-                  {!isChallengeValid() && (
+              {/* Validation Status */}
+              {!isChallengeValid() && (
                     <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                        </svg>
-                        <span className="font-medium text-yellow-800 dark:text-yellow-200">Challenge Setup Incomplete</span>
-                      </div>
-                      <p className="text-yellow-700 dark:text-yellow-300 text-sm">
-                        {getMissingMembers().length > 0 
-                          ? `${getMissingMembers().length} member(s) still need habits assigned: ${getMissingMembers().map(m => m.username).join(', ')}`
-                          : 'All members need at least one habit assigned.'
-                        }
-                      </p>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2 mb-2">
+                    <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium text-yellow-800 dark:text-yellow-200">Challenge Setup Incomplete</span>
+                  </div>
+                  <p className="text-yellow-700 dark:text-yellow-300 text-sm">
+                    {getMissingMembers().length > 0 
+                      ? `${getMissingMembers().length} member(s) still need habits assigned: ${getMissingMembers().map(m => m.username).join(', ')}`
+                      : 'All members need at least one habit assigned.'
+                    }
+                  </p>
+                </div>
+              )}
 
-                  {/* Cancel Button */}
-                  <div className="flex justify-end pt-4 border-t border-gray-200 dark:border-gray-700">
-                    <button
-                      type="button"
+                  {/* Action Buttons */}
+                  <div className="flex justify-between items-center pt-4 border-t border-gray-200 dark:border-gray-700 gap-4">
+                    {/* Cancel Button */}
+                <button
+                  type="button"
                       onClick={handleCancel}
                       className={`px-6 py-2 rounded-lg transition-colors ${
                         hasHabitsAdded 
@@ -2375,7 +2483,18 @@ const GroupDetail = () => {
                       }`}
                     >
                       {hasHabitsAdded ? 'Cancel (Unsaved)' : 'Cancel'}
-                    </button>
+                </button>
+
+                    {/* Done Adding Habits Button */}
+                    {Object.values(memberHabits).flat().length > 0 && (
+                  <button
+                        type="button"
+                        onClick={lockHabitsAndShowOverview}
+                        className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium shadow-lg border-2 border-green-500"
+                      >
+                        ✓ Done Adding Habits
+                  </button>
+                    )}
                   </div>
                 </form>
                 ) : (
@@ -2423,10 +2542,10 @@ const GroupDetail = () => {
                         🚀 Create Challenge
                       </button>
                     </div>
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
           </div>
         </div>
       )}

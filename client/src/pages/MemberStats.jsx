@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import TaskStats from './TaskStats';
 import TaskProgress from '../components/TaskProgress';
+import HabitCalendar from '../components/HabitCalendar';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 
@@ -329,8 +330,18 @@ const MemberStats = () => {
         </div>
         <h1 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-2">Stats for {member.username}</h1>
         {selectedSection === 'overview' ? (
-          <div className="mb-8">
-            <TaskProgress analytics={analytics} />
+          <div className="space-y-8">
+            <div>
+              <TaskProgress analytics={analytics} />
+            </div>
+            <div>
+              <HabitCalendar 
+                habits={memberHabit.habits}
+                startDate={startDate}
+                endDate={endDate}
+                memberHabit={memberHabit}
+              />
+            </div>
           </div>
         ) : (
           <TaskStats 

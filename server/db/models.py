@@ -49,7 +49,8 @@ class User(db.Model):
             'email': self.email,
             'created_at': self.created_at.isoformat(),
             'current_cycle_start_date': self.current_cycle_start_date.isoformat() if self.current_cycle_start_date else None,
-            'current_cycle_end_date': self.current_cycle_end_date.isoformat() if self.current_cycle_end_date else None
+            'current_cycle_end_date': self.current_cycle_end_date.isoformat() if self.current_cycle_end_date else None,
+            'groups': [{'groupId': group.group_id, 'name': group.name} for group in self.groups]
         }
 
 
@@ -188,3 +189,34 @@ class Message(db.Model):
     group = db.relationship('Group', back_populates='messages')
     sender = db.relationship('User', foreign_keys=[sender_id])
     recipient = db.relationship('User', foreign_keys=[recipient_id])
+
+
+class SkillDevelopmentChart(db.Model):
+    __tablename__ = 'skill_development_charts'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False)
+    member_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    term = db.Column(db.String(20), nullable=False)  # 'easter' or 'summer'
+    skill_levels = db.Column(db.JSON, nullable=False)  # Store skill level data as JSON
+    color_scheme = db.Column(db.JSON, nullable=True)  # Store custom color scheme as JSON
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    group = db.relationship('Group', foreign_keys=[group_id])
+    member = db.relationship('User', foreign_keys=[member_id])
+    
+    __table_args__ = (db.UniqueConstraint('group_id', 'member_id', 'term', name='uq_skill_chart_group_member_term'),)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'groupId': self.group.group_id if self.group else None,  # Return the string group_id
+            'memberId': self.member_id,
+            'term': self.term,
+            'skillLevels': self.skill_levels,
+            'colorScheme': self.color_scheme,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'updatedAt': self.updated_at.isoformat() if self.updated_at else None
+        }

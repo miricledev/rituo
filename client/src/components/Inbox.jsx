@@ -101,13 +101,27 @@ const Inbox = () => {
 
       {/* Inbox Dropdown */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
-          <div className="p-4 border-b border-gray-700">
-            <h3 className="text-lg font-semibold text-white">Inbox</h3>
-            <p className="text-sm text-gray-400">
-              {unreadCount > 0 ? `${unreadCount} unread message${unreadCount !== 1 ? 's' : ''}` : 'No unread messages'}
-            </p>
-          </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50"
+             onClick={() => setIsOpen(false)}>
+          <div className="w-80 max-w-[calc(100vw-2rem)] bg-gray-800 border border-gray-700 rounded-lg shadow-lg"
+               onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Inbox</h3>
+                <p className="text-sm text-gray-400">
+                  {unreadCount > 0 ? `${unreadCount} unread message${unreadCount !== 1 ? 's' : ''}` : 'No unread messages'}
+                </p>
+              </div>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="text-gray-400 hover:text-white transition-colors p-1"
+                aria-label="Close inbox"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
 
           <div className="max-h-96 overflow-y-auto">
             {loading ? (
@@ -195,16 +209,10 @@ const Inbox = () => {
               </button>
             </div>
           )}
+          </div>
         </div>
       )}
 
-      {/* Backdrop to close dropdown */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-30"
-          onClick={() => setIsOpen(false)}
-        />
-      )}
     </div>
   );
 };

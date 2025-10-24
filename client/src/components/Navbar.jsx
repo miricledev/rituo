@@ -11,13 +11,13 @@ const Navbar = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
 
   useEffect(() => {
-    // Always start in light mode
-    setIsDarkMode(false);
-    document.documentElement.classList.remove('dark');
-    localStorage.setItem('theme', 'light');
+    // Always start in dark mode
+    setIsDarkMode(true);
+    document.documentElement.classList.add('dark');
+    localStorage.setItem('theme', 'dark');
   }, []);
 
   useEffect(() => {
@@ -64,9 +64,9 @@ const Navbar = () => {
           {/* Logo and navigation links */}
           <div className="flex">
             <div className="flex-shrink-0 flex items-center">
-              <Link to="/groups" className="flex items-center font-display text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200 gap-2">
-                <img src={ipLogo} alt="Inner Performance Logo" className="h-8 w-8 object-contain" />
-                Inner Performance
+              <Link to="/groups" className="flex items-center font-display text-lg sm:text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200 gap-2">
+                <img src={ipLogo} alt="Inner Performance Logo" className="h-10 w-10 sm:h-12 sm:w-12 object-cover rounded-full border-2 border-primary-600 dark:border-primary-400" />
+                <span className="hidden sm:block">Inner Performance</span>
               </Link>
             </div>
             

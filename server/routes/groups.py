@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from db.models import db, User, Group, GroupChallenge, Message
+from db.models import db, User, Group, GroupChallenge, Message, SkillDevelopmentChart
 import uuid
 import stripe
 import logging
@@ -1073,6 +1073,167 @@ def toggle_habit_day_status(group_id, challenge_id, member_id, habit_index):
             'message': 'Habit status updated successfully',
             'date': target_date,
             'completed': new_status
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+# Skill Development Chart endpoints
+@groups_bp.route('/<group_id>/members/<int:member_id>/skill-charts/<term>', methods=['GET'])
+@jwt_required()
+def get_skill_chart(group_id, member_id, term):
+    """Get skill development chart for a specific member and term"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        # Verify user is group owner or the member themselves
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+            
+        if group.leader_id != current_user_id and current_user_id != member_id:
+            return jsonify({'error': 'Unauthorized'}), 403
+            
+        # Check if member is in the group
+        if not any(member.id == member_id for member in group.members):
+            return jsonify({'error': 'Member not found in group'}), 404
+            
+        # Get or create skill chart
+        skill_chart = SkillDevelopmentChart.query.filter_by(
+            group_id=group.id,  # Use the integer id for the database query
+            member_id=member_id,
+            term=term
+        ).first()
+        
+        if not skill_chart:
+            # Create default chart if it doesn't exist
+            default_skill_levels = {}
+            default_color_scheme = {
+                'urgent': '#ef4444',      # red
+                'development': '#f97316', # orange
+                'growth': '#eab308',      # yellow
+                'aboveAverage': '#22c55e', # green
+                'excellent': '#15803d'    # dark green
+            }
+            
+            skill_chart = SkillDevelopmentChart(
+                group_id=group.id,  # Use the integer id for the database query
+                member_id=member_id,
+                term=term,
+                skill_levels=default_skill_levels,
+                color_scheme=default_color_scheme
+            )
+            db.session.add(skill_chart)
+            db.session.commit()
+        
+        return jsonify(skill_chart.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/members/<int:member_id>/skill-charts/<term>', methods=['PUT'])
+@jwt_required()
+def update_skill_chart(group_id, member_id, term):
+    """Update skill development chart for a specific member and term"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        # Verify user is group owner (only group owners can edit skill charts)
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group owners can edit skill charts'}), 403
+            
+        # Check if member is in the group
+        if not any(member.id == member_id for member in group.members):
+            return jsonify({'error': 'Member not found in group'}), 404
+        
+        data = request.get_json()
+        skill_levels = data.get('skillLevels', {})
+        color_scheme = data.get('colorScheme', {})
+        
+        # Get or create skill chart
+        skill_chart = SkillDevelopmentChart.query.filter_by(
+            group_id=group.id,  # Use the integer id for the database query
+            member_id=member_id,
+            term=term
+        ).first()
+        
+        if not skill_chart:
+            skill_chart = SkillDevelopmentChart(
+                group_id=group.id,  # Use the integer id for the database query
+                member_id=member_id,
+                term=term,
+                skill_levels=skill_levels,
+                color_scheme=color_scheme
+            )
+            db.session.add(skill_chart)
+        else:
+            skill_chart.skill_levels = skill_levels
+            skill_chart.color_scheme = color_scheme
+            skill_chart.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Skill chart updated successfully',
+            'skillChart': skill_chart.to_dict()
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/members/<int:member_id>/skill-charts/<term>/reset', methods=['POST'])
+@jwt_required()
+def reset_skill_chart(group_id, member_id, term):
+    """Reset skill development chart to default values"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        # Verify user is group owner
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group owners can reset skill charts'}), 403
+            
+        # Check if member is in the group
+        if not any(member.id == member_id for member in group.members):
+            return jsonify({'error': 'Member not found in group'}), 404
+        
+        # Get skill chart
+        skill_chart = SkillDevelopmentChart.query.filter_by(
+            group_id=group.id,  # Use the integer id for the database query
+            member_id=member_id,
+            term=term
+        ).first()
+        
+        if skill_chart:
+            # Reset to default values
+            skill_chart.skill_levels = {}
+            skill_chart.color_scheme = {
+                'urgent': '#ef4444',      # red
+                'development': '#f97316', # orange
+                'growth': '#eab308',      # yellow
+                'aboveAverage': '#22c55e', # green
+                'excellent': '#15803d'    # dark green
+            }
+            skill_chart.updated_at = datetime.utcnow()
+            db.session.commit()
+        
+        return jsonify({
+            'message': 'Skill chart reset successfully',
+            'skillChart': skill_chart.to_dict() if skill_chart else None
         }), 200
         
     except Exception as e:
