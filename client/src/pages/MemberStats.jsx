@@ -31,7 +31,7 @@ const MemberStats = () => {
   const [error, setError] = React.useState(null);
   const navigate = useNavigate();
   const { currentUser: user } = useAuth();
-  const [selectedSection, setSelectedSection] = useState('overview'); // 'overview' or habit index
+  const [selectedSection, setSelectedSection] = useState('overview'); // 'overview', 'calendar', or habit index
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -275,6 +275,12 @@ const MemberStats = () => {
             >
               Overview
             </button>
+            <button
+              className={`flex-shrink-0 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap ${selectedSection === 'calendar' ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'bg-gray-100 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-300'}`}
+              onClick={() => setSelectedSection('calendar')}
+            >
+              Calendar
+            </button>
             {memberHabit.habits.map((habit, idx) => (
               <button
                 key={idx}
@@ -295,6 +301,12 @@ const MemberStats = () => {
           >
             Overview
           </button>
+          <button
+            className={`block w-full text-left px-4 py-2 rounded mb-2 font-semibold ${selectedSection === 'calendar' ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'hover:bg-gray-100 dark:hover:bg-secondary-700'}`}
+            onClick={() => setSelectedSection('calendar')}
+          >
+            Calendar
+          </button>
           <div className="mt-4">
             <div className="text-xs uppercase text-secondary-500 dark:text-secondary-400 mb-2">Habits</div>
             {memberHabit.habits.map((habit, idx) => (
@@ -314,7 +326,7 @@ const MemberStats = () => {
       <div className="flex-1 min-w-0">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
           <button onClick={() => navigate(-1)} className="text-sm sm:text-base text-primary-600 hover:underline">&larr; Back to Group</button>
-          {isLeader && selectedSection !== 'overview' && (
+          {isLeader && selectedSection !== 'overview' && selectedSection !== 'calendar' && (
             <button
               onClick={() => setEditMode(!editMode)}
               className={`w-full sm:w-auto px-4 py-2 rounded-lg font-medium text-sm sm:text-base transition-colors ${
@@ -330,18 +342,17 @@ const MemberStats = () => {
         </div>
         <h1 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-2">Stats for {member.username}</h1>
         {selectedSection === 'overview' ? (
-          <div className="space-y-8">
-            <div>
-              <TaskProgress analytics={analytics} />
-            </div>
-            <div>
-              <HabitCalendar 
-                habits={memberHabit.habits}
-                startDate={startDate}
-                endDate={endDate}
-                memberHabit={memberHabit}
-              />
-            </div>
+          <div>
+            <TaskProgress analytics={analytics} />
+          </div>
+        ) : selectedSection === 'calendar' ? (
+          <div>
+            <HabitCalendar 
+              habits={memberHabit.habits}
+              startDate={startDate}
+              endDate={endDate}
+              memberHabit={memberHabit}
+            />
           </div>
         ) : (
           <TaskStats 

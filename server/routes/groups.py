@@ -132,6 +132,37 @@ def get_group(group_id):
     except Exception as e:
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
+@groups_bp.route('/<group_id>', methods=['PUT'])
+@jwt_required()
+def update_group(group_id):
+    """Update group name - only group leader can update"""
+    try:
+        user_id = get_jwt_identity()
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        # Check if user is the group leader
+        if str(group.leader_id) != str(user_id):
+            return jsonify({'error': 'Only group leader can update group name'}), 403
+        
+        data = request.get_json()
+        new_name = data.get('name')
+        
+        if not new_name or not new_name.strip():
+            return jsonify({'error': 'Group name cannot be empty'}), 400
+        
+        # Update group name
+        group.name = new_name.strip()
+        db.session.commit()
+        
+        return jsonify({'group': group.to_dict()}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
 @groups_bp.route('/<group_id>/challenge/<int:challenge_id>/habit/<int:habit_index>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_group_habit(group_id, challenge_id, habit_index):

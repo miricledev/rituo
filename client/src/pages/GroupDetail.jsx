@@ -9,6 +9,7 @@ import {
 import GroupChat from '../components/GroupChat';
 import DirectMessage from '../components/DirectMessage';
 import ColorChart from '../components/ColorChart';
+import HabitCalendar from '../components/HabitCalendar';
 
 const GroupDetail = () => {
   // All hooks at the top!
@@ -60,6 +61,8 @@ const GroupDetail = () => {
   const [showDeleteChallengeConfirm, setShowDeleteChallengeConfirm] = useState(false);
   const [expandedAttendance, setExpandedAttendance] = useState({});
   const [collapsedMembers, setCollapsedMembers] = useState({});
+  const [isEditingGroupName, setIsEditingGroupName] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
 
   // Calculate myMemberHabit early to avoid temporal dead zone
   const myMemberHabit = group?.activeChallenge?.memberHabits?.find(
@@ -309,6 +312,35 @@ const GroupDetail = () => {
       assignedMembers: [],
       applyToAll: false
     });
+  };
+
+  // Handle edit group name
+  const handleEditGroupName = () => {
+    setNewGroupName(group.name);
+    setIsEditingGroupName(true);
+  };
+
+  // Handle save group name
+  const handleSaveGroupName = async () => {
+    if (!newGroupName.trim()) {
+      alert('Group name cannot be empty');
+      return;
+    }
+
+    try {
+      await axios.put(`/groups/${groupId}`, { name: newGroupName });
+      setGroup(prev => ({ ...prev, name: newGroupName }));
+      setIsEditingGroupName(false);
+    } catch (error) {
+      console.error('Error updating group name:', error);
+      alert('Failed to update group name');
+    }
+  };
+
+  // Handle cancel editing group name
+  const handleCancelEditGroupName = () => {
+    setIsEditingGroupName(false);
+    setNewGroupName('');
   };
 
   // Toggle individual member collapse in modal
@@ -739,7 +771,55 @@ const GroupDetail = () => {
     <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4">
         <div className="w-full sm:w-auto">
-          <h1 className="text-2xl sm:text-3xl font-bold break-words">{group.name}</h1>
+          {isEditingGroupName && isLeader ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                className="text-2xl sm:text-3xl font-bold bg-white dark:bg-secondary-700 border-2 border-primary-500 rounded px-3 py-2 text-secondary-900 dark:text-white"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSaveGroupName();
+                  }
+                }}
+                autoFocus
+              />
+              <button
+                onClick={handleSaveGroupName}
+                className="p-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                title="Save"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+              <button
+                onClick={handleCancelEditGroupName}
+                className="p-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
+                title="Cancel"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl sm:text-3xl font-bold break-words">{group.name}</h1>
+              {isLeader && (
+                <button
+                  onClick={handleEditGroupName}
+                  className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+                  title="Edit group name"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
           <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400 break-all">Group ID: {group.groupId}</p>
         </div>
         {isLeader && (
@@ -828,6 +908,16 @@ const GroupDetail = () => {
               }`}
             >
               Color Chart
+            </button>
+            <button
+              onClick={() => setActiveTab('calendar')}
+              className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
+                activeTab === 'calendar'
+                  ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
+              }`}
+            >
+              Calendar
             </button>
             {isLeader && (
               <button
@@ -1962,6 +2052,39 @@ const GroupDetail = () => {
           )}
                           </div>
                         )}
+
+      {/* Calendar Tab */}
+      {activeTab === 'calendar' && (
+        <div>
+          <div className="mb-8">
+            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">📅 Habit Calendar</h2>
+            <p className="text-secondary-600 dark:text-secondary-400 mb-4">
+              {isLeader ? 'View habit completion calendar for all members' : 'View your habit completion calendar'}
+            </p>
+          </div>
+
+          {group.activeChallenge && myMemberHabit ? (
+            <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6">
+              <HabitCalendar 
+                habits={myMemberHabit.habits}
+                startDate={group.activeChallenge.startDate}
+                endDate={group.activeChallenge.endDate}
+                memberHabit={myMemberHabit}
+              />
+            </div>
+          ) : (
+            <div className="text-center py-12 bg-white dark:bg-secondary-800 rounded-lg shadow-card">
+              <div className="text-6xl mb-4">📅</div>
+              <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">
+                No Active Challenge
+              </h3>
+              <p className="text-secondary-600 dark:text-secondary-400">
+                {isLeader ? 'Create a challenge to see habit completion calendars.' : 'Join an active challenge to see your habit completion calendar.'}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Create Challenge Modal */}
       {showCreateChallengeModal && (
