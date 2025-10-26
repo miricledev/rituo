@@ -33,7 +33,9 @@ const GroupDetail = () => {
     maxValue: 10,
     prompt: '',
     assignedMembers: [], // Array of member IDs
-    applyToAll: false
+    applyToAll: false,
+    scheduleDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], // Default to everyday
+    combatType: 'neutral' // 'attack', 'defence', or 'neutral'
   });
   const [memberHabits, setMemberHabits] = useState({}); // { memberId: [habits] }
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -60,9 +62,10 @@ const GroupDetail = () => {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [showDeleteChallengeConfirm, setShowDeleteChallengeConfirm] = useState(false);
   const [expandedAttendance, setExpandedAttendance] = useState({});
-  const [collapsedMembers, setCollapsedMembers] = useState({});
+  const [collapsedMembers, setCollapsedMembers] = useState({}); // Will be initialized to collapse all members
   const [isEditingGroupName, setIsEditingGroupName] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const [timeUntilMidnight, setTimeUntilMidnight] = useState('');
 
   // Calculate myMemberHabit early to avoid temporal dead zone
   const myMemberHabit = group?.activeChallenge?.memberHabits?.find(
@@ -108,6 +111,55 @@ const GroupDetail = () => {
     return `${year}-${month}-${day}`;
   };
 
+  // Helper to get day name from date
+  const getDayName = (date) => {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    // Handle both Date objects and date strings
+    let dateObj;
+    if (typeof date === 'string') {
+      // Parse YYYY-MM-DD string as local date to avoid timezone issues
+      const [year, month, day] = date.split('-').map(Number);
+      dateObj = new Date(year, month - 1, day);
+    } else {
+      dateObj = date;
+    }
+    const dayIndex = dateObj.getDay();
+    return days[dayIndex];
+  };
+
+  // Helper to check if a habit is available today
+  const isHabitAvailableToday = (habit) => {
+    // If no scheduleDays specified, treat as everyday (backward compatibility)
+    if (!habit.scheduleDays || habit.scheduleDays.length === 0) {
+      return true;
+    }
+    const today = new Date();
+    const todayName = getDayName(today);
+    return habit.scheduleDays.includes(todayName);
+  };
+
+  // Helper to get next available day for a habit
+  const getNextAvailableDay = (habit) => {
+    if (!habit.scheduleDays || habit.scheduleDays.length === 0) {
+      return null; // Available every day
+    }
+    
+    const today = new Date();
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const todayIndex = today.getDay();
+    
+    // Find the next scheduled day
+    for (let i = 1; i <= 7; i++) {
+      const nextIndex = (todayIndex + i) % 7;
+      const nextDay = days[nextIndex];
+      if (habit.scheduleDays.includes(nextDay)) {
+        return { day: nextDay, hoursUntil: i * 24 };
+      }
+    }
+    
+    return null;
+  };
+
   // Filter conversations based on search query
   const filteredConversations = conversations.filter(conv => 
     conv.username.toLowerCase().includes(searchQuery.toLowerCase())
@@ -137,6 +189,40 @@ const GroupDetail = () => {
       fetchConversations();
     }
   }, [activeTab, isLeader, groupId]);
+
+  // Initialize all member sections as collapsed on page load
+  useEffect(() => {
+    if (group?.activeChallenge?.memberHabits) {
+      const allCollapsed = {};
+      group.activeChallenge.memberHabits.forEach(memberHabit => {
+        const member = group.members?.find(m => String(m.id) === String(memberHabit.member) || String(m.id) === String(memberHabit.member?.id));
+        const memberId = member?.id || memberHabit.member;
+        allCollapsed[memberId] = true; // Start collapsed
+      });
+      setCollapsedMembers(allCollapsed);
+    }
+  }, [group?.activeChallenge?.memberHabits]);
+
+  // Timer to show time until midnight (habit reset)
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = new Date();
+      const midnight = new Date(now);
+      midnight.setHours(24, 0, 0, 0);
+      
+      const diff = midnight - now;
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      
+      setTimeUntilMidnight(`${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+    };
+    
+    updateTimer(); // Run immediately
+    const interval = setInterval(updateTimer, 1000); // Update every second
+    
+    return () => clearInterval(interval);
+  }, []);
 
   // Initialize values from existing progress when group data loads
   useEffect(() => {
@@ -381,9 +467,22 @@ const GroupDetail = () => {
 
   const handleCreateChallenge = async (e) => {
     e.preventDefault();
+    
+    // Validate dates
+    if (!newChallenge.startDate || !newChallenge.endDate) {
+      alert('Please select both start and end dates for the challenge.');
+      return;
+    }
+    
     try {
       // Use locked habits if in overview mode, otherwise use current memberHabits
       const habitsToSubmit = isEditingHabits ? memberHabits : lockedHabits;
+      
+      // Validate that habits exist
+      if (Object.keys(habitsToSubmit).length === 0) {
+        alert('Please add at least one habit before creating the challenge.');
+        return;
+      }
       
       // Convert habits to the format expected by the backend
       const memberHabitsArray = Object.entries(habitsToSubmit).map(([memberId, habits]) => ({
@@ -762,6 +861,45 @@ const GroupDetail = () => {
     return totalWeight > 0 ? totalProgress / totalWeight : 0;
   };
 
+  // Helper function to calculate today's completion rate (only scheduled habits)
+  const calculateTodayCompletionRate = (memberHabit) => {
+    if (!memberHabit?.habits || memberHabit.habits.length === 0) return 0;
+
+    const today = new Date().toISOString().slice(0, 10);
+    let totalProgress = 0;
+    let scheduledCount = 0;
+
+    memberHabit.habits.forEach(habit => {
+      // Only count habits that are scheduled for today
+      if (isHabitAvailableToday(habit)) {
+        scheduledCount++;
+        const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+        const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
+        
+        if (progressEntry && progressEntry.completed) {
+          if (habit.habitType === 'numeric') {
+            // For numeric habits, calculate the percentage based on the actual value
+            const progress = calculateNumericProgress(habit, progressEntry);
+            totalProgress += progress;
+          } else {
+            // For boolean and text habits, it's either 0% or 100%
+            totalProgress += 100;
+          }
+        }
+      }
+    });
+
+    return scheduledCount > 0 ? totalProgress / scheduledCount : 0;
+  };
+
+  // Helper function to get color based on percentage
+  const getPercentageColor = (percentage) => {
+    if (percentage === 0) return 'text-red-500 dark:text-red-400';
+    if (percentage < 50) return 'text-orange-500 dark:text-orange-400';
+    if (percentage < 100) return 'text-yellow-500 dark:text-yellow-400';
+    return 'text-green-500 dark:text-green-400';
+  };
+
   // Debug logs
   console.log('user:', user);
   console.log('group.leader:', group.leader);
@@ -806,7 +944,7 @@ const GroupDetail = () => {
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl sm:text-3xl font-bold break-words">{group.name}</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold break-words">{group.name}</h1>
               {isLeader && (
                 <button
                   onClick={handleEditGroupName}
@@ -909,16 +1047,18 @@ const GroupDetail = () => {
             >
               Color Chart
             </button>
-            <button
-              onClick={() => setActiveTab('calendar')}
-              className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
-                activeTab === 'calendar'
-                  ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
-              }`}
-            >
-              Calendar
-            </button>
+            {!isLeader && (
+              <button
+                onClick={() => setActiveTab('calendar')}
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
+                  activeTab === 'calendar'
+                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
+                }`}
+              >
+                Calendar
+              </button>
+            )}
             {isLeader && (
               <button
                 onClick={() => setActiveTab('archives')}
@@ -1031,9 +1171,18 @@ const GroupDetail = () => {
                                 const habits = memberHabit.habits || [];
                                 if (habits.length === 0) return null;
                                 let userTotal = 0;
+                                let scheduledCount = 0;
                                 habits.forEach(habit => {
+                                  // Check if habit is scheduled for this day
+                                  const dayName = getDayName(dateStr);
+                                  const isScheduled = !habit.scheduleDays || habit.scheduleDays.length === 0 || habit.scheduleDays.includes(dayName);
+                                  
+                                  if (isScheduled) {
+                                    scheduledCount++;
+                                    // Ensure progress is always an array
+                                    const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
                                   // Look for progress entry for this date - try multiple date formats
-                                  const progress = (habit.progress || []).find(p => {
+                                    const progress = habitProgress.find(p => {
                                     if (!p.date) return false;
                                     const progressDate = new Date(p.date);
                                     const targetDate = new Date(dateStr);
@@ -1050,25 +1199,16 @@ const GroupDetail = () => {
                                     }
                                   } else {
                                     userTotal += 0;
+                                    }
                                   }
                                 });
-                                return userTotal / habits.length;
+                                // Only count habits that are scheduled for this day
+                                // Return null if no habits scheduled (member excluded from average)
+                                return scheduledCount > 0 ? userTotal / scheduledCount : null;
                               }).filter(val => val !== null);
                               const dayAvg = userAverages.length > 0 ? (userAverages.reduce((a, b) => a + b, 0) / userAverages.length) : 0;
                               
-                              // Debug logging for first day
-                              if (dateStr === formatDateLocal(new Date())) {
-                                console.log(`DEBUG - Date: ${dateStr}`);
-                                console.log(`DEBUG - User averages:`, userAverages);
-                                console.log(`DEBUG - Day average: ${dayAvg}%`);
-                                console.log(`DEBUG - Member habits:`, group.activeChallenge.memberHabits?.map(mh => ({
-                                  member: mh.member,
-                                  habits: mh.habits?.map(h => ({
-                                    name: h.name,
-                                    progress: h.progress
-                                  }))
-                                })));
-                              }
+
                               
                               return {
                                 date: dateStr,
@@ -1103,11 +1243,19 @@ const GroupDetail = () => {
                                 String(m.id) === String(memberHabit.member) || 
                                 String(m.id) === String(memberHabit.member?.id)
                               );
-                              const totalHabits = memberHabit.habits?.length || 0;
-                              const today = new Date().toISOString().slice(0, 10);
+                              const today = new Date();
+                              const dayName = getDayName(today);
                               
-                              const totalProgress = memberHabit.habits?.reduce((acc, habit) => {
-                                const progressEntry = (habit.progress || []).find(p => p.date && p.date.slice(0, 10) === today);
+                              // Count habits scheduled for today
+                              const scheduledHabits = memberHabit.habits?.filter(habit => 
+                                !habit.scheduleDays || habit.scheduleDays.length === 0 || habit.scheduleDays.includes(dayName)
+                              ) || [];
+                              
+                              const totalProgress = scheduledHabits.reduce((acc, habit) => {
+                                const todayStr = today.toISOString().slice(0, 10);
+                                // Ensure progress is always an array
+                                const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+                                const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === todayStr);
                                 if (progressEntry) {
                                   if (habit.habitType === 'numeric') {
                                     return acc + calculateNumericProgress(habit, progressEntry);
@@ -1117,11 +1265,11 @@ const GroupDetail = () => {
                                 }
                                 // If no progress entry exists, count as 0% (incomplete)
                                 return acc + 0;
-                              }, 0) || 0;
+                              }, 0);
                               
                               return {
                                 name: member?.username || 'Unknown Member',
-                                value: totalHabits > 0 ? (totalProgress / totalHabits) : 0
+                                value: scheduledHabits.length > 0 ? (totalProgress / scheduledHabits.length) : 0
                               };
                             })}
                             cx="50%"
@@ -1151,27 +1299,55 @@ const GroupDetail = () => {
             {/* Member Progress */}
             {isLeader && (
               <div className="mt-6 sm:mt-8">
-                <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Member Progress</h3>
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                  <h3 className="text-lg sm:text-xl font-semibold">Member Progress</h3>
+                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-blue-600 dark:text-blue-400">
+                      <circle cx="12" cy="12" r="10"/>
+                      <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    <span className="text-sm font-mono font-bold text-blue-700 dark:text-blue-300">
+                      {timeUntilMidnight}
+                    </span>
+                    <span className="text-xs text-blue-600 dark:text-blue-400">until reset</span>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 sm:mb-4 italic">
+                  Click on a member's name to view their individual stats
+                </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                   {(group.activeChallenge.memberHabits || []).map((memberHabit, index) => {
                     const member = group.members?.find(m => String(m.id) === String(memberHabit.member) || String(m.id) === String(memberHabit.member?.id));
                     const memberId = member?.id || memberHabit.member;
                     const isCollapsed = collapsedMembers[memberId];
                     const completionRate = calculateOverallCompletionRate([memberHabit]);
+                    const todayCompletionRate = calculateTodayCompletionRate(memberHabit);
+                    
+                    // Check if any habits have combatType
+                    const hasCombatHabits = (memberHabit.habits || []).some(habit => habit.combatType === 'attack' || habit.combatType === 'defence');
+                    
+                    // Separate habits by combat type
+                    const attackHabits = (memberHabit.habits || []).filter(habit => habit.combatType === 'attack' || (!habit.combatType && !hasCombatHabits));
+                    const defenceHabits = (memberHabit.habits || []).filter(habit => habit.combatType === 'defence');
                     
                     return (
                       <div
                         key={index}
                         className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-4 sm:p-6 flex flex-col gap-3 sm:gap-4 transition-transform transform hover:scale-[1.02] hover:shadow-2xl group"
                       >
-                        <div className="flex items-center gap-3 sm:gap-4 mb-2">
-                          <Link to={`/groups/${groupId}/member/${memberId}`} className="flex items-center gap-4 group-hover:underline flex-1">
+                        <div className="flex items-center gap-2 sm:gap-4 mb-2">
+                          <Link to={`/groups/${groupId}/member/${memberId}`} className="flex items-center gap-3 sm:gap-4 flex-1 hover:opacity-80 transition-opacity">
                             <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200 group-hover:ring-4 group-hover:ring-primary-200/40">
                               {member?.username?.[0]?.toUpperCase() || '?'}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-semibold text-lg text-primary-600 dark:text-primary-300 truncate">
-                                {member?.username || 'Unknown Member'}
+                              <div className="flex items-center gap-2">
+                                <div className="font-semibold text-lg text-primary-600 dark:text-primary-300 truncate">
+                                  {member?.username || 'Unknown Member'}
+                                </div>
+                                <svg className="w-4 h-4 text-primary-500 dark:text-primary-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
                               </div>
                               <div className="text-xs text-secondary-500 dark:text-secondary-400 truncate">
                                 {member?.email || ''}
@@ -1181,15 +1357,25 @@ const GroupDetail = () => {
                               </div>
                             </div>
                           </Link>
+                          {/* Today's completion rate - large number */}
+                          <div className="flex flex-col items-center mr-1 sm:mr-3">
+                            <div className={`text-3xl sm:text-5xl font-bold ${getPercentageColor(todayCompletionRate)}`}>
+                              {todayCompletionRate.toFixed(0)}%
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">today</div>
+                          </div>
                           <button
                             onClick={() => toggleMemberCollapse(memberId)}
-                            className="flex-shrink-0 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-secondary-700 transition-colors"
+                            className="flex-shrink-0 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-secondary-700 transition-all duration-200 shadow-lg hover:shadow-xl active:scale-95"
                             aria-label={isCollapsed ? "Expand habits" : "Collapse habits"}
                           >
                             <svg
-                              className={`w-5 h-5 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${
+                              className={`w-6 h-6 text-gray-600 dark:text-gray-300 transition-all duration-200 ${
                                 isCollapsed ? 'rotate-180' : ''
                               }`}
+                              style={{
+                                filter: 'drop-shadow(0 0 8px rgba(0, 0, 0, 0.3))',
+                              }}
                               fill="none"
                               stroke="currentColor"
                               viewBox="0 0 24 24"
@@ -1201,10 +1387,26 @@ const GroupDetail = () => {
                         <div className={`space-y-3 mt-2 transition-all duration-300 ease-in-out overflow-hidden ${
                           isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[1000px] opacity-100'
                         }`}>
-                          {(memberHabit.habits || []).map((habit, habitIndex) => {
+                          {hasCombatHabits ? (
+                            /* Show attack and defence sections */
+                            <div className="space-y-4">
+                              {/* Attack Habits */}
+                              {attackHabits.length > 0 && (
+                                <div>
+                                  <h4 className="text-sm font-semibold mb-2 flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                                      <path d="M21 3l-1 1M3 21l1-1M21 3l-10 10M3 21l10-10M9 3l3 3M15 21l-3-3M21 9l-3 3M3 15l3-3M21 21l-1-1M3 3l1 1" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                    Attack Habits
+                                  </h4>
+                                  <div className="space-y-2">
+                                    {attackHabits.map((habit, habitIndex) => {
+                            // Ensure progress is always an array (handles undefined from backend)
+                            const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+                            
                             // Find today's progress entry
                             const today = new Date().toISOString().slice(0, 10);
-                            const progressEntry = (habit.progress || []).find(p => p.date && p.date.slice(0, 10) === today);
+                            const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
                             const isComplete = progressEntry?.completed;
                             const numericValue = progressEntry?.numericValue;
                             const textValue = progressEntry?.textValue;
@@ -1303,13 +1505,280 @@ const GroupDetail = () => {
 
                                 {/* Show incomplete status */}
                                 {!isComplete && (
+                                  <div className="flex items-center gap-2">
+                                    {!isHabitAvailableToday(habit) ? (
+                                      <>
+                                        <div className="flex flex-col items-center gap-1 opacity-50">
+                                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-400">
+                                            <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                          </svg>
+                                          {getNextAvailableDay(habit) && (
+                                            <span className="text-xs text-gray-400 text-center">
+                                              In {getNextAvailableDay(habit).hoursUntil}h
+                                            </span>
+                                          )}
+                                        </div>
+                                      </>
+                                    ) : (
                                   <div className="text-xs text-gray-500 dark:text-gray-400">
                                     Not completed today
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
                             );
-                          })}
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Defence Habits */}
+                              {defenceHabits.length > 0 && (
+                                <div>
+                                  <h4 className="text-sm font-semibold mb-2 flex items-center gap-2 text-red-600 dark:text-red-400">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                    Defence Habits
+                                  </h4>
+                                  <div className="space-y-2">
+                                    {defenceHabits.map((habit, habitIndex) => {
+                                      // Same habit rendering logic as attack habits
+                                      const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+                                      const today = new Date().toISOString().slice(0, 10);
+                                      const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
+                                      const isComplete = progressEntry?.completed;
+                                      const numericValue = progressEntry?.numericValue;
+                                      const textValue = progressEntry?.textValue;
+                                      
+                                      let progressPercentage = 0;
+                                      let colorClasses = {
+                                        bg: 'bg-gray-100 dark:bg-secondary-700',
+                                        border: 'border-gray-200 dark:border-secondary-600',
+                                        text: 'text-gray-800 dark:text-gray-200'
+                                      };
+                                      
+                                      if (isComplete) {
+                                        if (habit.habitType === 'numeric') {
+                                          progressPercentage = calculateNumericProgress(habit, progressEntry);
+                                          colorClasses = getProgressColorClasses(progressPercentage);
+                                        } else {
+                                          progressPercentage = 100;
+                                          colorClasses = {
+                                            bg: 'bg-green-100 dark:bg-green-900/40',
+                                            border: 'border-green-300 dark:border-green-700',
+                                            text: 'text-green-800 dark:text-green-200'
+                                          };
+                                        }
+                                      }
+
+                                      return (
+                                        <div
+                                          key={habitIndex}
+                                          className={`rounded-lg p-3 flex flex-col gap-2 border transition-colors duration-200 ${colorClasses.bg} ${colorClasses.border}`}
+                                        >
+                                          <div className="flex items-center justify-between">
+                                            <span className={`font-medium ${colorClasses.text}`}>{habit.name}</span>
+                                            {isComplete && (
+                                              <div className="flex items-center gap-1">
+                                                {habit.habitType === 'numeric' && (
+                                                  <span className={`text-xs font-medium ${colorClasses.text}`}>
+                                                    {progressPercentage.toFixed(0)}%
+                                                  </span>
+                                                )}
+                                                <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-3 h-3">
+                                                    <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                                                  </svg>
+                                                </div>
+                                              </div>
+                                            )}
+                                          </div>
+                                          
+                                          {habit.description && (
+                                            <span className={`text-xs ${colorClasses.text} opacity-80`}>{habit.description}</span>
+                                          )}
+
+                                          {/* Show detailed information for completed habits */}
+                                          {isComplete && (
+                                            <div className={`mt-2 p-2 rounded border ${colorClasses.border} ${colorClasses.bg} bg-opacity-50`}>
+                                              {habit.habitType === 'numeric' && (
+                                                <div className="space-y-1">
+                                                  <div className={`text-sm font-medium ${colorClasses.text}`}>
+                                                    Value: {numericValue !== undefined ? numericValue : (habit.minValue || 0)}
+                                                  </div>
+                                                  <div className="text-xs text-gray-600 dark:text-gray-400">
+                                                    Range: {habit.minValue || 0} - {habit.maxValue || 10}
+                                                  </div>
+                                                </div>
+                                              )}
+                                              
+                                              {habit.habitType === 'text' && (
+                                                <div className="space-y-1">
+                                                  <div className={`text-sm font-medium ${colorClasses.text}`}>
+                                                    Response:
+                                                  </div>
+                                                  <div className={`text-sm ${colorClasses.text} bg-white dark:bg-gray-800 p-2 rounded border`}>
+                                                    {textValue || 'No response provided'}
+                                                  </div>
+                                                </div>
+                                              )}
+                                              
+                                              {(habit.habitType === 'boolean' || !habit.habitType) && (
+                                                <div className={`text-sm ${colorClasses.text}`}>
+                                                  ✓ Completed
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
+
+                                          {/* Show incomplete status */}
+                                          {!isComplete && (
+                                            <div className="flex items-center gap-2">
+                                              {!isHabitAvailableToday(habit) ? (
+                                                <>
+                                                  <div className="flex flex-col items-center gap-1 opacity-50">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-400">
+                                                      <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                                    </svg>
+                                                    {getNextAvailableDay(habit) && (
+                                                      <span className="text-xs text-gray-400 text-center">
+                                                        In {getNextAvailableDay(habit).hoursUntil}h
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </>
+                                              ) : (
+                                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                  Not completed today
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            /* Old single-column layout for habits without combat types */
+                            (memberHabit.habits || []).map((habit, habitIndex) => {
+                              const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+                              const today = new Date().toISOString().slice(0, 10);
+                              const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
+                              const isComplete = progressEntry?.completed;
+                              const numericValue = progressEntry?.numericValue;
+                              const textValue = progressEntry?.textValue;
+                              
+                              let progressPercentage = 0;
+                              let colorClasses = {
+                                bg: 'bg-gray-100 dark:bg-secondary-700',
+                                border: 'border-gray-200 dark:border-secondary-600',
+                                text: 'text-gray-800 dark:text-gray-200'
+                              };
+                              
+                              if (isComplete) {
+                                if (habit.habitType === 'numeric') {
+                                  progressPercentage = calculateNumericProgress(habit, progressEntry);
+                                  colorClasses = getProgressColorClasses(progressPercentage);
+                                } else {
+                                  progressPercentage = 100;
+                                  colorClasses = {
+                                    bg: 'bg-green-100 dark:bg-green-900/40',
+                                    border: 'border-green-300 dark:border-green-700',
+                                    text: 'text-green-800 dark:text-green-200'
+                                  };
+                                }
+                              }
+
+                              return (
+                                <div
+                                  key={habitIndex}
+                                  className={`rounded-lg p-3 flex flex-col gap-2 border transition-colors duration-200 ${colorClasses.bg} ${colorClasses.border}`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className={`font-medium ${colorClasses.text}`}>{habit.name}</span>
+                                    {isComplete && (
+                                      <div className="flex items-center gap-1">
+                                        {habit.habitType === 'numeric' && (
+                                          <span className={`text-xs font-medium ${colorClasses.text}`}>
+                                            {progressPercentage.toFixed(0)}%
+                                          </span>
+                                        )}
+                                        <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-3 h-3">
+                                            <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                                          </svg>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  {habit.description && (
+                                    <span className={`text-xs ${colorClasses.text} opacity-80`}>{habit.description}</span>
+                                  )}
+
+                                  {isComplete && (
+                                    <div className={`mt-2 p-2 rounded border ${colorClasses.border} ${colorClasses.bg} bg-opacity-50`}>
+                                      {habit.habitType === 'numeric' && (
+                                        <div className="space-y-1">
+                                          <div className={`text-sm font-medium ${colorClasses.text}`}>
+                                            Value: {numericValue !== undefined ? numericValue : (habit.minValue || 0)}
+                                          </div>
+                                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                                            Range: {habit.minValue || 0} - {habit.maxValue || 10}
+                                          </div>
+                                        </div>
+                                      )}
+                                      
+                                      {habit.habitType === 'text' && (
+                                        <div className="space-y-1">
+                                          <div className={`text-sm font-medium ${colorClasses.text}`}>
+                                            Response:
+                                          </div>
+                                          <div className={`text-sm ${colorClasses.text} bg-white dark:bg-gray-800 p-2 rounded border`}>
+                                            {textValue || 'No response provided'}
+                                          </div>
+                                        </div>
+                                      )}
+                                      
+                                      {(habit.habitType === 'boolean' || !habit.habitType) && (
+                                        <div className={`text-sm ${colorClasses.text}`}>
+                                          ✓ Completed
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {!isComplete && (
+                                    <div className="flex items-center gap-2">
+                                      {!isHabitAvailableToday(habit) ? (
+                                        <>
+                                          <div className="flex flex-col items-center gap-1 opacity-50">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-400">
+                                              <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                            </svg>
+                                            {getNextAvailableDay(habit) && (
+                                              <span className="text-xs text-gray-400 text-center">
+                                                In {getNextAvailableDay(habit).hoursUntil}h
+                                              </span>
+                                            )}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                                          Not completed today
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
                         </div>
                       </div>
                     );
@@ -1322,14 +1791,47 @@ const GroupDetail = () => {
       )}
 
       {/* Checklist for logged-in member */}
-      {isMember && !isLeader && myMemberHabit && (
+      {isMember && !isLeader && myMemberHabit && (() => {
+        // Check if any habits have combatType
+        const hasCombatHabits = myMemberHabit.habits.some(habit => habit.combatType === 'attack' || habit.combatType === 'defence');
+        
+        return (
         <div className="mb-8 sm:mb-10">
-          <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Today's Group Habits</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-            {myMemberHabit.habits.map((habit, idx) => {
+          <div className="flex items-center justify-between mb-3 sm:mb-4 flex-wrap gap-2">
+            <h2 className="text-lg sm:text-xl font-semibold">Today's Group Habits</h2>
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-blue-600 dark:text-blue-400">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <span className="text-sm font-mono font-bold text-blue-700 dark:text-blue-300">
+                {timeUntilMidnight}
+              </span>
+              <span className="text-xs text-blue-600 dark:text-blue-400">until reset</span>
+            </div>
+          </div>
+          
+          {hasCombatHabits ? (
+            /* Separate attack and defence habits */
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Attack Habits - Left Side */}
+            <div>
+              <h3 className="text-base font-semibold mb-3 flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+                  <path d="M21 3l-1 1M3 21l1-1M21 3l-10 10M3 21l10-10M9 3l3 3M15 21l-3-3M21 9l-3 3M3 15l3-3M21 21l-1-1M3 3l1 1" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Attack Habits
+              </h3>
+              <div className="space-y-3">
+                {myMemberHabit.habits.map((habit, originalIdx) => {
+                  if (habit.combatType !== 'attack' && habit.combatType) return null;
+                  const idx = originalIdx;
+              // Ensure progress is always an array (handles undefined from backend)
+              const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+              
               // Find today's progress entry
               const today = new Date().toISOString().slice(0, 10);
-              const progressEntry = (habit.progress || []).find(p => p.date && p.date.slice(0, 10) === today);
+              const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
               const isComplete = progressEntry?.completed;
               const numericValue = progressEntry?.numericValue;
               const textValue = progressEntry?.textValue;
@@ -1391,6 +1893,8 @@ const GroupDetail = () => {
                   {(!isComplete || isEditing) && (
                     <>
                       {(habit.habitType === 'boolean' || !habit.habitType) && (
+                        <>
+                          {isHabitAvailableToday(habit) ? (
                         <button
                           onClick={() => handleToggleHabit(idx)}
                           disabled={ticking[idx]}
@@ -1405,10 +1909,36 @@ const GroupDetail = () => {
                             <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
                           )}
                         </button>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center gap-1 opacity-50">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-gray-400">
+                                <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                              </svg>
+                              {getNextAvailableDay(habit) && (
+                                <span className="text-xs text-gray-400 text-center">
+                                  Available in {getNextAvailableDay(habit).hoursUntil}h
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </>
                       )}
 
                       {habit.habitType === 'numeric' && (
                         <div className="space-y-2">
+                          {!isHabitAvailableToday(habit) ? (
+                            <div className="flex flex-col items-center justify-center gap-2 py-4 opacity-50">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-gray-400">
+                                <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                              </svg>
+                              {getNextAvailableDay(habit) && (
+                                <span className="text-sm text-gray-400 text-center">
+                                  Available in {getNextAvailableDay(habit).hoursUntil}h
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <>
                           <div className="text-sm text-secondary-600 dark:text-secondary-400">
                             Range: {habit.minValue || 0} - {habit.maxValue || 10}
                           </div>
@@ -1460,11 +1990,267 @@ const GroupDetail = () => {
                               </button>
                             </div>
                           </div>
+                            </>
+                            )}
                         </div>
                       )}
 
                       {habit.habitType === 'text' && (
                         <div className="space-y-2">
+                          {!isHabitAvailableToday(habit) ? (
+                            <div className="flex flex-col items-center justify-center gap-2 py-4 opacity-50">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-gray-400">
+                                <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                              </svg>
+                              {getNextAvailableDay(habit) && (
+                                <span className="text-sm text-gray-400 text-center">
+                                  Available in {getNextAvailableDay(habit).hoursUntil}h
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <><div className="text-sm text-secondary-600 dark:text-secondary-400">
+                          
+                            {habit.prompt || 'Enter your response'}
+                          </div>
+                          <textarea
+                            value={isEditing ? (tempTextValues[idx] || '') : (textValues[idx] || '')}
+                            onChange={(e) => isEditing 
+                              ? handleTempTextUpdate(idx, e.target.value)
+                              : handleTextHabitUpdate(idx, e.target.value)
+                            }
+                            placeholder="Enter your response..."
+                            rows="3"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none dark:bg-gray-700 dark:text-black placeholder-gray-500 dark:placeholder-gray-400"
+                          />
+                          <div className="flex gap-2">
+                            {isEditing && (
+                              <button
+                                onClick={() => handleCancelEdit(idx)}
+                                className="flex-1 px-3 py-2 bg-gray-500 text-white dark:text-black rounded-md hover:bg-gray-600"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                            <button
+                              onClick={() => isEditing 
+                                ? handleEditTextSubmit(idx, tempTextValues[idx])
+                                : handleTextHabitSubmit(idx, textValues[idx])
+                              }
+                              disabled={ticking[idx] || (isEditing ? !tempTextValues[idx]?.trim() : !textValues[idx]?.trim())}
+                              className="flex-1 px-3 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+                            >
+                              {ticking[idx] ? 'Saving...' : (isEditing ? 'Update' : 'Submit')}
+                            </button>
+                          </div>
+                            </>
+                            )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+            {/* Defence Habits - Right Side */}
+            <div>
+              <h3 className="text-base font-semibold mb-3 flex items-center gap-2 text-red-600 dark:text-red-400">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Defence Habits
+              </h3>
+              <div className="space-y-3">
+                {myMemberHabit.habits.map((habit, originalIdx) => {
+                  if (habit.combatType !== 'defence') return null;
+                  const idx = originalIdx;
+                  // Ensure progress is always an array (handles undefined from backend)
+                  const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+                  
+                  // Find today's progress entry
+                  const today = new Date().toISOString().slice(0, 10);
+                  const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
+                  const isComplete = progressEntry?.completed;
+                  const numericValue = progressEntry?.numericValue;
+                  const textValue = progressEntry?.textValue;
+                  const isEditing = editingHabits[idx];
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg shadow-md p-3 sm:p-4 border transition-transform hover:scale-[1.01] ${
+                        isComplete 
+                          ? 'bg-green-100 dark:bg-green-900/40 border-green-300 dark:border-green-700' 
+                          : 'bg-white dark:bg-secondary-800 border-gray-200 dark:border-secondary-700'
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0 mb-2 sm:mb-3">
+                        <div className="font-medium text-sm sm:text-base text-secondary-900 dark:text-white">{habit.name}</div>
+                        {habit.description && (
+                          <div className="text-sm text-secondary-500 dark:text-secondary-300 mt-1">{habit.description}</div>
+                        )}
+                      </div>
+
+                      {/* Show completion status and edit button for completed habits */}
+                      {isComplete && !isEditing && (
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-4 h-4">
+                                <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                            <span className="text-sm font-medium text-green-700 dark:text-green-300">Completed</span>
+                          </div>
+                          <button
+                            onClick={() => handleStartEdit(idx, habit)}
+                            className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Show current value for completed habits */}
+                      {isComplete && !isEditing && (
+                        <div className="mb-3 p-2 bg-green-50 dark:bg-green-900/20 rounded border border-green-200 dark:border-green-700">
+                          {habit.habitType === 'numeric' && (
+                            <div className="text-sm text-green-800 dark:text-green-200">
+                              Value: {numericValue !== undefined ? numericValue : (habit.minValue || 0)}
+                            </div>
+                          )}
+                          {habit.habitType === 'text' && (
+                            <div className="text-sm text-green-800 dark:text-green-200">
+                              Response: {textValue || 'No response'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Habit Type Specific UI - Only show if not completed or if editing */}
+                      {(!isComplete || isEditing) && (
+                        <>
+                          {(habit.habitType === 'boolean' || !habit.habitType) && (
+                            <>
+                              {isHabitAvailableToday(habit) ? (
+                                <button
+                                  onClick={() => handleToggleHabit(idx)}
+                                  disabled={ticking[idx]}
+                                  className={`w-8 h-8 rounded-full border-2 flex items-center justify-center transition-colors duration-200 ${isComplete ? 'bg-primary-500 border-primary-500' : 'bg-transparent border-primary-400'} ${ticking[idx] ? 'opacity-60' : ''}`}
+                                >
+                                  {isComplete && (
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-5 h-5">
+                                      <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                                    </svg>
+                                  )}
+                                  {ticking[idx] && (
+                                    <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+                                  )}
+                                </button>
+                              ) : (
+                                <div className="flex flex-col items-center justify-center gap-1 opacity-50">
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-gray-400">
+                                    <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                  </svg>
+                                  {getNextAvailableDay(habit) && (
+                                    <span className="text-xs text-gray-400 text-center">
+                                      Available in {getNextAvailableDay(habit).hoursUntil}h
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {habit.habitType === 'numeric' && (
+                        <div className="space-y-2">
+                          {!isHabitAvailableToday(habit) ? (
+                            <div className="flex flex-col items-center justify-center gap-2 py-4 opacity-50">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-gray-400">
+                                <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                              </svg>
+                              {getNextAvailableDay(habit) && (
+                                <span className="text-sm text-gray-400 text-center">
+                                  Available in {getNextAvailableDay(habit).hoursUntil}h
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <>
+                          <div className="text-sm text-secondary-600 dark:text-secondary-400">
+                            Range: {habit.minValue || 0} - {habit.maxValue || 10}
+                          </div>
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">
+                                Value: {isEditing 
+                                  ? (tempNumericValues[idx] !== undefined ? tempNumericValues[idx] : (habit.minValue || 0))
+                                  : (numericValues[idx] !== undefined ? numericValues[idx] : (habit.minValue || 0))
+                                }
+                              </span>
+                              <span className="text-sm text-secondary-500">
+                                {habit.minValue || 0} - {habit.maxValue || 10}
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min={habit.minValue || 0}
+                              max={habit.maxValue || 10}
+                              step="1"
+                              value={isEditing 
+                                ? (tempNumericValues[idx] !== undefined ? tempNumericValues[idx] : (habit.minValue || 0))
+                                : (numericValues[idx] !== undefined ? numericValues[idx] : (habit.minValue || 0))
+                              }
+                              onChange={(e) => isEditing 
+                                ? handleTempNumericUpdate(idx, parseInt(e.target.value))
+                                : handleNumericHabitUpdate(idx, parseInt(e.target.value))
+                              }
+                              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                            />
+                            <div className="flex gap-2">
+                              {isEditing && (
+                                <button
+                                  onClick={() => handleCancelEdit(idx)}
+                                  className="flex-1 px-3 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                              <button
+                                onClick={() => isEditing 
+                                  ? handleEditNumericSubmit(idx, tempNumericValues[idx])
+                                  : handleNumericHabitSubmit(idx, numericValues[idx])
+                                }
+                                disabled={ticking[idx] || (isEditing ? tempNumericValues[idx] === undefined : numericValues[idx] === undefined)}
+                                className="flex-1 px-3 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+                              >
+                                {ticking[idx] ? 'Saving...' : (isEditing ? 'Update' : 'Save')}
+                              </button>
+                            </div>
+                          </div>
+                            </>
+                            )}
+                        </div>
+                      )}
+
+                      {habit.habitType === 'text' && (
+                        <div className="space-y-2">
+                          {!isHabitAvailableToday(habit) ? (
+                            <div className="flex flex-col items-center justify-center gap-2 py-4 opacity-50">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-gray-400">
+                                <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                              </svg>
+                              {getNextAvailableDay(habit) && (
+                                <span className="text-sm text-gray-400 text-center">
+                                  Available in {getNextAvailableDay(habit).hoursUntil}h
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <>
                           <div className="text-sm text-secondary-600 dark:text-secondary-400">
                             {habit.prompt || 'Enter your response'}
                           </div>
@@ -1498,6 +2284,8 @@ const GroupDetail = () => {
                               {ticking[idx] ? 'Saving...' : (isEditing ? 'Update' : 'Submit')}
                             </button>
                           </div>
+                            </>
+                            )}
                         </div>
                       )}
                     </>
@@ -1505,9 +2293,244 @@ const GroupDetail = () => {
                 </div>
               );
             })}
+              </div>
+            </div>
           </div>
+          ) : (
+            /* Old single-column layout for habits without combat types */
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              {myMemberHabit.habits.map((habit, idx) => {
+                // Ensure progress is always an array (handles undefined from backend)
+                const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
+                
+                // Find today's progress entry
+                const today = new Date().toISOString().slice(0, 10);
+                const progressEntry = habitProgress.find(p => p.date && p.date.slice(0, 10) === today);
+                const isComplete = progressEntry?.completed;
+                const numericValue = progressEntry?.numericValue;
+                const textValue = progressEntry?.textValue;
+                const isEditing = editingHabits[idx];
+
+                return (
+                  <div
+                    key={idx}
+                    className={`rounded-lg shadow-md p-3 sm:p-4 border transition-transform hover:scale-[1.01] ${
+                      isComplete 
+                        ? 'bg-green-100 dark:bg-green-900/40 border-green-300 dark:border-green-700' 
+                        : 'bg-white dark:bg-secondary-800 border-gray-200 dark:border-secondary-700'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0 mb-2 sm:mb-3">
+                      <div className="font-medium text-sm sm:text-base text-secondary-900 dark:text-white">{habit.name}</div>
+                      {habit.description && (
+                        <div className="text-sm text-secondary-500 dark:text-secondary-300 mt-1">{habit.description}</div>
+                      )}
+                    </div>
+
+                    {/* Show completion status and edit button for completed habits */}
+                    {isComplete && !isEditing && (
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-4 h-4">
+                              <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                            </svg>
+                          </div>
+                          <span className="text-sm font-medium text-green-700 dark:text-green-300">Completed</span>
+                        </div>
+                        <button
+                          onClick={() => handleStartEdit(idx, habit)}
+                          className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Show current value for completed habits */}
+                    {isComplete && !isEditing && (
+                      <div className="mb-3 p-2 bg-green-50 dark:bg-green-900/20 rounded border border-green-200 dark:border-green-700">
+                        {habit.habitType === 'numeric' && (
+                          <div className="text-sm text-green-800 dark:text-green-200">
+                            Value: {numericValue !== undefined ? numericValue : (habit.minValue || 0)}
+                          </div>
+                        )}
+                        {habit.habitType === 'text' && (
+                          <div className="text-sm text-green-800 dark:text-green-200">
+                            Response: {textValue || 'No response'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Habit Type Specific UI - Only show if not completed or if editing */}
+                    {(!isComplete || isEditing) && (
+                      <>
+                        {(habit.habitType === 'boolean' || !habit.habitType) && (
+                          <>
+                            {isHabitAvailableToday(habit) ? (
+                              <button
+                                onClick={() => handleToggleHabit(idx)}
+                                disabled={ticking[idx]}
+                                className={`w-8 h-8 rounded-full border-2 flex items-center justify-center transition-colors duration-200 ${isComplete ? 'bg-primary-500 border-primary-500' : 'bg-transparent border-primary-400'} ${ticking[idx] ? 'opacity-60' : ''}`}
+                              >
+                                {isComplete && (
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-5 h-5">
+                                    <path fillRule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                                {ticking[idx] && (
+                                  <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+                                )}
+                              </button>
+                            ) : (
+                              <div className="flex flex-col items-center justify-center gap-1 opacity-50">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-gray-400">
+                                  <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                </svg>
+                                {getNextAvailableDay(habit) && (
+                                  <span className="text-xs text-gray-400 text-center">
+                                    Available in {getNextAvailableDay(habit).hoursUntil}h
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
+
+                        {habit.habitType === 'numeric' && (
+                          <div className="space-y-2">
+                            {!isHabitAvailableToday(habit) ? (
+                              <div className="flex flex-col items-center justify-center gap-2 py-4 opacity-50">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-gray-400">
+                                  <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                </svg>
+                                {getNextAvailableDay(habit) && (
+                                  <span className="text-sm text-gray-400 text-center">
+                                    Available in {getNextAvailableDay(habit).hoursUntil}h
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <div className="text-sm text-secondary-600 dark:text-secondary-400">
+                                  Range: {habit.minValue || 0} - {habit.maxValue || 10}
+                                </div>
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-sm font-medium">
+                                      Value: {isEditing 
+                                        ? (tempNumericValues[idx] !== undefined ? tempNumericValues[idx] : (habit.minValue || 0))
+                                        : (numericValues[idx] !== undefined ? numericValues[idx] : (habit.minValue || 0))
+                                      }
+                                    </span>
+                                    <span className="text-sm text-secondary-500">
+                                      {habit.minValue || 0} - {habit.maxValue || 10}
+                                    </span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={habit.minValue || 0}
+                                    max={habit.maxValue || 10}
+                                    step="1"
+                                    value={isEditing 
+                                      ? (tempNumericValues[idx] !== undefined ? tempNumericValues[idx] : (habit.minValue || 0))
+                                      : (numericValues[idx] !== undefined ? numericValues[idx] : (habit.minValue || 0))
+                                    }
+                                    onChange={(e) => isEditing 
+                                      ? handleTempNumericUpdate(idx, parseInt(e.target.value))
+                                      : handleNumericHabitUpdate(idx, parseInt(e.target.value))
+                                    }
+                                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                                  />
+                                  <div className="flex gap-2">
+                                    {isEditing && (
+                                      <button
+                                        onClick={() => handleCancelEdit(idx)}
+                                        className="flex-1 px-3 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600"
+                                      >
+                                        Cancel
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => isEditing 
+                                        ? handleEditNumericSubmit(idx, tempNumericValues[idx])
+                                        : handleNumericHabitSubmit(idx, numericValues[idx])
+                                      }
+                                      disabled={ticking[idx] || (isEditing ? tempNumericValues[idx] === undefined : numericValues[idx] === undefined)}
+                                      className="flex-1 px-3 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+                                    >
+                                      {ticking[idx] ? 'Saving...' : (isEditing ? 'Update' : 'Save')}
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {habit.habitType === 'text' && (
+                          <div className="space-y-2">
+                            {!isHabitAvailableToday(habit) ? (
+                              <div className="flex flex-col items-center justify-center gap-2 py-4 opacity-50">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-gray-400">
+                                  <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                                </svg>
+                                {getNextAvailableDay(habit) && (
+                                  <span className="text-sm text-gray-400 text-center">
+                                    Available in {getNextAvailableDay(habit).hoursUntil}h
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <div className="text-sm text-secondary-600 dark:text-secondary-400">
+                                  {habit.prompt || 'Enter your response'}
+                                </div>
+                                <textarea
+                                  value={isEditing ? (tempTextValues[idx] || '') : (textValues[idx] || '')}
+                                  onChange={(e) => isEditing 
+                                    ? handleTempTextUpdate(idx, e.target.value)
+                                    : handleTextHabitUpdate(idx, e.target.value)
+                                  }
+                                  placeholder="Enter your response..."
+                                  rows="3"
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none dark:bg-gray-700 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                                />
+                                <div className="flex gap-2">
+                                  {isEditing && (
+                                    <button
+                                      onClick={() => handleCancelEdit(idx)}
+                                      className="flex-1 px-3 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600"
+                                    >
+                                      Cancel
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => isEditing 
+                                      ? handleEditTextSubmit(idx, tempTextValues[idx])
+                                      : handleTextHabitSubmit(idx, textValues[idx])
+                                    }
+                                    disabled={ticking[idx] || (isEditing ? !tempTextValues[idx]?.trim() : !textValues[idx]?.trim())}
+                                    className="flex-1 px-3 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+                                  >
+                                    {ticking[idx] ? 'Saving...' : (isEditing ? 'Update' : 'Submit')}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
         </div>
       )}
 
@@ -1739,10 +2762,24 @@ const GroupDetail = () => {
                     };
                   }) || [];
 
+                  // Filter habits scheduled for today
+                  const today = new Date();
+                  const todayStr = today.toISOString().slice(0, 10);
+                  const dayName = getDayName(todayStr);
+                  
+                  const scheduledHabits = memberHabit.habits?.filter(habit => 
+                    !habit.scheduleDays || habit.scheduleDays.length === 0 || habit.scheduleDays.includes(dayName)
+                  ) || [];
+
                   // Get the highest streak among all habits
                   const maxStreak = Math.max(...habitStreaks.map(h => h.streak), 0);
-                  const totalHabits = habitStreaks.length;
-                  const completedToday = habitStreaks.filter(h => h.streak > 0).length;
+                  const totalHabits = scheduledHabits.length; // Count only scheduled habits
+                  // Count habits completed today that are scheduled
+                  const completedToday = habitStreaks.filter((h, idx) => {
+                    const habit = memberHabit.habits[idx];
+                    const isScheduled = !habit.scheduleDays || habit.scheduleDays.length === 0 || habit.scheduleDays.includes(dayName);
+                    return isScheduled && h.streak > 0;
+                  }).length;
                   const totalCompleted = habitStreaks.reduce((sum, h) => sum + h.streak, 0);
 
                   // Calculate weighted score: 60% streak + 40% total completions
@@ -2053,13 +3090,13 @@ const GroupDetail = () => {
                           </div>
                         )}
 
-      {/* Calendar Tab */}
-      {activeTab === 'calendar' && (
+      {/* Calendar Tab - Students only */}
+      {!isLeader && activeTab === 'calendar' && (
         <div>
           <div className="mb-8">
             <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">📅 Habit Calendar</h2>
             <p className="text-secondary-600 dark:text-secondary-400 mb-4">
-              {isLeader ? 'View habit completion calendar for all members' : 'View your habit completion calendar'}
+              View your habit completion calendar
             </p>
           </div>
 
@@ -2079,7 +3116,7 @@ const GroupDetail = () => {
                 No Active Challenge
               </h3>
               <p className="text-secondary-600 dark:text-secondary-400">
-                {isLeader ? 'Create a challenge to see habit completion calendars.' : 'Join an active challenge to see your habit completion calendar.'}
+                Join an active challenge to see your habit completion calendar.
               </p>
             </div>
           )}
@@ -2217,13 +3254,29 @@ const GroupDetail = () => {
                                     {habit.description && (
                                       <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">{habit.description}</p>
                                     )}
-                                    <div className="flex items-center gap-2 mt-2">
+                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
                                       <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs">
                                         {habit.habitType === 'boolean' ? 'Checkbox' : 
                                          habit.habitType === 'numeric' ? 'Numeric' : 'Text'}
                                       </span>
                                       {habit.habitType === 'numeric' && (
                                         <span className="text-xs text-gray-500 dark:text-gray-400">{habit.minValue} - {habit.maxValue}</span>
+                                      )}
+                                      {habit.combatType === 'attack' && (
+                                        <span className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs">
+                                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3">
+                                            <path d="M21 3l-1 1M3 21l1-1M21 3l-10 10M3 21l10-10M9 3l3 3M15 21l-3-3M21 9l-3 3M3 15l3-3M21 21l-1-1M3 3l1 1" strokeLinecap="round" strokeLinejoin="round"/>
+                                          </svg>
+                                          Attack
+                                        </span>
+                                      )}
+                                      {habit.combatType === 'defence' && (
+                                        <span className="flex items-center gap-1 px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded text-xs">
+                                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3">
+                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round"/>
+                                          </svg>
+                                          Defence
+                                        </span>
                                       )}
                                     </div>
                                   </div>
@@ -2266,16 +3319,16 @@ const GroupDetail = () => {
                   <div className="mb-6">
                     <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Challenge Settings</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
+                <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Start Date</label>
                         <div className="space-y-2">
-                          <input
-                            type="date"
-                            value={newChallenge.startDate}
-                            onChange={(e) => setNewChallenge({ ...newChallenge, startDate: e.target.value })}
+                  <input
+                    type="date"
+                    value={newChallenge.startDate}
+                    onChange={(e) => setNewChallenge({ ...newChallenge, startDate: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-                            required
-                          />
+                    required
+                  />
                           <label className="flex items-center gap-2 text-sm">
                             <input
                               type="checkbox"
@@ -2290,21 +3343,21 @@ const GroupDetail = () => {
                             <span className="text-gray-700 dark:text-gray-300">Start today</span>
                           </label>
                         </div>
-                      </div>
-                      <div>
+                </div>
+                <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">End Date</label>
                         <div className="space-y-2">
-                          <input
-                            type="date"
-                            value={newChallenge.endDate}
-                            onChange={(e) => setNewChallenge({ ...newChallenge, endDate: e.target.value })}
+                  <input
+                    type="date"
+                    value={newChallenge.endDate}
+                    onChange={(e) => setNewChallenge({ ...newChallenge, endDate: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-                            required
-                          />
+                    required
+                  />
                           <div className="flex flex-wrap gap-3">
                             <label className="flex items-center gap-2 text-sm">
-                              <input
-                                type="checkbox"
+                      <input
+                        type="checkbox"
                                 checked={newChallenge.endDate === getDateString(7)}
                                 onChange={(e) => {
                                   if (e.target.checked) {
@@ -2340,100 +3393,100 @@ const GroupDetail = () => {
                                 className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                               />
                               <span className="text-gray-700 dark:text-gray-300">30 days</span>
-                            </label>
-                          </div>
-                        </div>
+                    </label>
+                  </div>
+                </div>
                       </div>
                     </div>
-                  </div>
+                        </div>
 
                   {/* Add Habit Form */}
                   <div className="mb-6">
                     <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Add New Habit</h3>
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
-
-                                {/* Basic Habit Info */}
+                        
+                        {/* Basic Habit Info */}
                       <div className="grid grid-cols-1 gap-4">
-                                  <div>
+                          <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Habit Name</label>
-                                    <input
-                                      type="text"
+                            <input
+                              type="text"
                             value={currentHabit.name}
                             onChange={(e) => setCurrentHabit({ ...currentHabit, name: e.target.value })}
                             placeholder="e.g., Drink 8 glasses of water"
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                                      required
-                                    />
-                                  </div>
-                                  <div>
+                              required
+                            />
+                          </div>
+                          <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description (Optional)</label>
-                                    <input
-                                      type="text"
+                            <input
+                              type="text"
                             value={currentHabit.description}
                             onChange={(e) => setCurrentHabit({ ...currentHabit, description: e.target.value })}
                             placeholder="Brief description of the habit"
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                                    />
-                                  </div>
-                                </div>
+                            />
+                          </div>
+                        </div>
 
-                                {/* Habit Type Selection */}
-                                <div>
+                        {/* Habit Type Selection */}
+                        <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Habit Type</label>
                         <div className="grid grid-cols-1 gap-3">
                           <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                                      <input
-                                        type="radio"
+                              <input
+                                type="radio"
                               name="habit-type"
-                                        value="boolean"
+                                value="boolean"
                               checked={currentHabit.habitType === 'boolean'}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
                               className="mr-3"
-                                      />
-                                      <div>
-                                        <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
+                              />
+                              <div>
+                                <div className="font-medium text-secondary-900 dark:text-white">Checkbox</div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">Simple yes/no completion</div>
-                                      </div>
-                                    </label>
+                              </div>
+                            </label>
                           <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                                      <input
-                                        type="radio"
+                              <input
+                                type="radio"
                               name="habit-type"
-                                        value="numeric"
+                                value="numeric"
                               checked={currentHabit.habitType === 'numeric'}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
                               className="mr-3"
-                                      />
-                                      <div>
-                                        <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
+                              />
+                              <div>
+                                <div className="font-medium text-secondary-900 dark:text-white">Numeric Range</div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">Track numbers with min/max values</div>
-                                      </div>
-                                    </label>
+                              </div>
+                            </label>
                           <label className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                                      <input
-                                        type="radio"
+                              <input
+                                type="radio"
                               name="habit-type"
-                                        value="text"
+                                value="text"
                               checked={currentHabit.habitType === 'text'}
                               onChange={(e) => setCurrentHabit({ ...currentHabit, habitType: e.target.value })}
                               className="mr-3"
-                                      />
-                                      <div>
-                                        <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
+                              />
+                              <div>
+                                <div className="font-medium text-secondary-900 dark:text-white">Text Entry</div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">Written response or journal entry</div>
-                                      </div>
-                                    </label>
-                                  </div>
-                                </div>
+                              </div>
+                            </label>
+                          </div>
+                        </div>
 
                       {/* Member Assignment */}
-                      <div>
+                            <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Assign to Members</label>
                         
                         {/* Apply to All Toggle */}
                         <div className="mb-4">
                           <label className="flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                            <input
+                              <input
                               type="checkbox"
                               checked={currentHabit.applyToAll}
                               onChange={(e) => {
@@ -2451,14 +3504,14 @@ const GroupDetail = () => {
                               <div className="text-sm text-gray-500 dark:text-gray-400">Assign this habit to all group members</div>
                             </div>
                           </label>
-                        </div>
+                          </div>
 
                         {/* Individual Member Selection */}
                         {!currentHabit.applyToAll && (
                           <div className="space-y-2 max-h-40 overflow-y-auto">
                             {group?.members?.map((member) => (
                               <label key={member.id} className="flex items-center gap-3 p-2 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                                <input
+                            <input
                                   type="checkbox"
                                   checked={currentHabit.assignedMembers.includes(member.id)}
                                   onChange={(e) => {
@@ -2475,9 +3528,9 @@ const GroupDetail = () => {
                                 <div className="flex items-center gap-3">
                                   <div className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">
                                     {member.username[0].toUpperCase()}
-                                  </div>
+                          </div>
                                   <span className="text-sm font-medium text-secondary-900 dark:text-white">{member.username}</span>
-                                </div>
+                      </div>
                               </label>
                             ))}
                           </div>
@@ -2488,8 +3541,136 @@ const GroupDetail = () => {
                           <p className="text-sm text-red-500 dark:text-red-400 mt-2">
                             Please select at least one member or choose "Apply to All Members"
                           </p>
+                )}
+              </div>
+
+                      {/* Schedule Days Selection */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Schedule Days</label>
+                        
+                        {/* Quick Presets */}
+                        <div className="flex flex-wrap gap-2 mb-3">
+                    <button
+                      type="button"
+                            onClick={() => setCurrentHabit({ ...currentHabit, scheduleDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] })}
+                            className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+                              currentHabit.scheduleDays.length === 7 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                            }`}
+                          >
+                            Everyday
+                    </button>
+                          <button
+                            type="button"
+                            onClick={() => setCurrentHabit({ ...currentHabit, scheduleDays: ['Monday', 'Wednesday', 'Friday'] })}
+                            className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+                              JSON.stringify(currentHabit.scheduleDays.sort()) === JSON.stringify(['Friday', 'Monday', 'Wednesday'].sort())
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                            }`}
+                          >
+                            Mon, Wed, Fri
+                          </button>
+                            <button
+                              type="button"
+                            onClick={() => setCurrentHabit({ ...currentHabit, scheduleDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] })}
+                            className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+                              JSON.stringify(currentHabit.scheduleDays.sort()) === JSON.stringify(['Friday', 'Monday', 'Thursday', 'Tuesday', 'Wednesday'].sort())
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                            }`}
+                          >
+                            Weekdays
+                            </button>
+                          </div>
+
+                        {/* Day Checkboxes */}
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                          {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => (
+                            <label 
+                              key={day} 
+                              className={`flex flex-col items-center p-2 border rounded-lg cursor-pointer transition-colors ${
+                                currentHabit.scheduleDays.includes(day)
+                                  ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-500 text-blue-700 dark:text-blue-300'
+                                  : 'bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
+                              }`}
+                            >
+                                    <input
+                                type="checkbox"
+                                checked={currentHabit.scheduleDays.includes(day)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setCurrentHabit({ ...currentHabit, scheduleDays: [...currentHabit.scheduleDays, day] });
+                                  } else {
+                                    setCurrentHabit({ ...currentHabit, scheduleDays: currentHabit.scheduleDays.filter(d => d !== day) });
+                                  }
+                                }}
+                                className="sr-only"
+                              />
+                              <span className="text-xs font-medium mt-1">{day.slice(0, 3)}</span>
+                                    </label>
+                          ))}
+                                  </div>
+                        
+                        {currentHabit.scheduleDays.length === 0 && (
+                          <p className="text-sm text-red-500 dark:text-red-400 mt-2">
+                            Please select at least one day for the habit schedule
+                          </p>
                         )}
-                      </div>
+                                </div>
+
+                                {/* Attack/Defence Selection */}
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Combat Type</label>
+                                  <div className="grid grid-cols-3 gap-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => setCurrentHabit({ ...currentHabit, combatType: 'attack' })}
+                                      className={`flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 transition-all ${
+                                        currentHabit.combatType === 'attack'
+                                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                          : 'border-gray-300 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-700'
+                                      }`}
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-5 h-5 ${currentHabit.combatType === 'attack' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                        <path d="M21 3l-1 1M3 21l1-1M21 3l-10 10M3 21l10-10M9 3l3 3M15 21l-3-3M21 9l-3 3M3 15l3-3M21 21l-1-1M3 3l1 1" strokeLinecap="round" strokeLinejoin="round"/>
+                                      </svg>
+                                      <span className={`text-sm font-medium ${currentHabit.combatType === 'attack' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                                        Attack
+                                      </span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setCurrentHabit({ ...currentHabit, combatType: 'defence' })}
+                                      className={`flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 transition-all ${
+                                        currentHabit.combatType === 'defence'
+                                          ? 'border-red-500 bg-red-50 dark:bg-red-900/20'
+                                          : 'border-gray-300 dark:border-gray-600 hover:border-red-300 dark:hover:border-red-700'
+                                      }`}
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-5 h-5 ${currentHabit.combatType === 'defence' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round"/>
+                                      </svg>
+                                      <span className={`text-sm font-medium ${currentHabit.combatType === 'defence' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                                        Defence
+                                      </span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setCurrentHabit({ ...currentHabit, combatType: 'neutral' })}
+                                      className={`flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 transition-all ${
+                                        currentHabit.combatType === 'neutral'
+                                          ? 'border-gray-500 bg-gray-50 dark:bg-gray-700'
+                                          : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                                      }`}
+                                    >
+                                      <span className={`text-sm font-medium ${currentHabit.combatType === 'neutral' ? 'text-gray-600 dark:text-gray-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                                        Neutral
+                                      </span>
+                                    </button>
+                                  </div>
+                                </div>
 
                                 {/* Conditional Fields based on Habit Type */}
                       {currentHabit.habitType === 'numeric' && (
@@ -2549,7 +3730,9 @@ const GroupDetail = () => {
                                 habitType: currentHabit.habitType,
                                 minValue: currentHabit.minValue,
                                 maxValue: currentHabit.maxValue,
-                                prompt: currentHabit.prompt
+                                prompt: currentHabit.prompt,
+                                scheduleDays: currentHabit.scheduleDays,
+                                combatType: currentHabit.combatType
                               });
                             });
                             
@@ -2562,7 +3745,9 @@ const GroupDetail = () => {
                               maxValue: 10,
                               prompt: '',
                               assignedMembers: [],
-                              applyToAll: false
+                              applyToAll: false,
+                              scheduleDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+                              combatType: 'neutral'
                             });
                           }
                         }}
@@ -2660,12 +3845,18 @@ const GroupDetail = () => {
                       <button
                         type="button"
                         onClick={(e) => handleCreateChallenge(e)}
-                        className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                        disabled={!newChallenge.startDate || !newChallenge.endDate || Object.values(lockedHabits).flat().length === 0}
+                        className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
                       >
                         🚀 Create Challenge
                       </button>
-                    </div>
-                    </div>
+                      {(!newChallenge.startDate || !newChallenge.endDate || Object.values(lockedHabits).flat().length === 0) && (
+                        <p className="text-sm text-red-500 dark:text-red-400 mt-2 text-center">
+                          Please complete all fields above
+                        </p>
+                  )}
+                </div>
+              </div>
                   )}
                 </div>
               </div>

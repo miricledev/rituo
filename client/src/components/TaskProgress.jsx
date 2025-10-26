@@ -129,7 +129,7 @@ const TaskProgress = ({ analytics: analyticsProp, loading: loadingProp }) => {
               </div>
               <div className="mt-2">
                 <div className="flex justify-between text-xs text-secondary-600 dark:text-secondary-300 mb-1">
-                  <span>Completion: {task.days_completed ?? ''}/{analytics.days_elapsed ?? analytics.days_completed ?? ''} days</span>
+                  <span>Completion: {task.days_completed ?? 0}/{task.days_scheduled ?? task.days_completed ?? 0} days</span>
                   <span>{Math.round((task.completion_rate ?? 0) * 100)}%</span>
                 </div>
                 <div className="progress-bar bg-gray-200 dark:bg-secondary-600 rounded-full h-2">

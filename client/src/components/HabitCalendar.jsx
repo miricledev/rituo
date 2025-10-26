@@ -4,6 +4,22 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
   
+  // Helper to get day name from date
+  const getDayName = (date) => {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return days[date.getDay()];
+  };
+
+  // Helper to check if a habit is scheduled for a specific day
+  const isHabitScheduledForDay = (habit, date) => {
+    // If no scheduleDays specified, treat as everyday (backward compatibility)
+    if (!habit.scheduleDays || habit.scheduleDays.length === 0) {
+      return true;
+    }
+    const dayName = getDayName(date);
+    return habit.scheduleDays.includes(dayName);
+  };
+  
   // Generate all dates in the challenge period
   const challengeDates = useMemo(() => {
     if (!startDate || !endDate) return [];
@@ -24,6 +40,7 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
     const habitData = {};
     
     habits.forEach((habit, idx) => {
+      const isScheduled = isHabitScheduledForDay(habit, date);
       const progress = habit.progress || [];
       const dayProgress = progress.find(p => p.date.startsWith(dateStr));
       
@@ -32,14 +49,16 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
           completed: dayProgress.completed,
           numericValue: dayProgress.numericValue,
           textValue: dayProgress.textValue,
-          habitType: habit.habitType
+          habitType: habit.habitType,
+          isScheduled: isScheduled
         };
       } else {
         habitData[idx] = {
           completed: false,
           numericValue: null,
           textValue: null,
-          habitType: habit.habitType
+          habitType: habit.habitType,
+          isScheduled: isScheduled
         };
       }
     });
@@ -50,8 +69,12 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
   // Calculate consistency score for a date (percentage of habits completed)
   const getConsistencyScore = (date) => {
     const habitData = getHabitDataForDate(date);
-    const completedCount = Object.values(habitData).filter(h => h.completed).length;
-    return habits.length > 0 ? (completedCount / habits.length) * 100 : 0;
+    // Only count habits that are scheduled for this day
+    const scheduledHabits = habits.filter((habit, idx) => isHabitScheduledForDay(habit, date));
+    const completedCount = Object.entries(habitData).filter(([idx, h]) => 
+      h.completed && isHabitScheduledForDay(habits[parseInt(idx)], date)
+    ).length;
+    return scheduledHabits.length > 0 ? (completedCount / scheduledHabits.length) * 100 : 0;
   };
 
   // Get calendar days for current month
@@ -114,7 +137,7 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
       return dateStr >= startDate && dateStr <= endDate;
     });
 
-    let totalDays = challengeDays.length;
+    let totalDays = 0; // Only count days where at least one habit is scheduled
     let perfectDays = 0;
     let goodDays = 0; // 75% or more
     let fairDays = 0; // 50% or more
@@ -123,15 +146,23 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
 
     challengeDays.forEach(date => {
       const score = getConsistencyScore(date);
-      if (score === 100) perfectDays++;
-      else if (score >= 75) goodDays++;
-      else if (score >= 50) fairDays++;
-      else if (score >= 25) poorDays++;
-      else missedDays++;
+      // Only count days where at least one habit is scheduled
+      const scheduledHabits = habits.filter(habit => isHabitScheduledForDay(habit, date));
+      if (scheduledHabits.length > 0) {
+        totalDays++;
+        if (score === 100) perfectDays++;
+        else if (score >= 75) goodDays++;
+        else if (score >= 50) fairDays++;
+        else if (score >= 25) poorDays++;
+        else missedDays++;
+      }
     });
 
     const averageConsistency = totalDays > 0 
-      ? challengeDays.reduce((sum, date) => sum + getConsistencyScore(date), 0) / totalDays 
+      ? challengeDays.reduce((sum, date) => {
+          const scheduledHabits = habits.filter(habit => isHabitScheduledForDay(habit, date));
+          return scheduledHabits.length > 0 ? sum + getConsistencyScore(date) : sum;
+        }, 0) / totalDays 
       : 0;
 
     return {
@@ -143,7 +174,7 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
       missedDays,
       averageConsistency
     };
-  }, [challengeDates, startDate, endDate]);
+  }, [challengeDates, startDate, endDate, habits]);
 
   const getConsistencyColor = (score) => {
     if (score === null) return 'bg-gray-100 dark:bg-gray-700';
@@ -359,21 +390,29 @@ const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
                     )}
                   </div>
                   <div className="flex-shrink-0 ml-4">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                      habitData.completed 
-                        ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' 
-                        : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
-                    }`}>
-                      {habitData.completed ? (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    {!habitData.isScheduled ? (
+                      <div className="flex flex-col items-center gap-1 opacity-50">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-gray-400">
+                          <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
                         </svg>
-                      ) : (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                        habitData.completed 
+                          ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' 
+                          : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                      }`}>
+                        {habitData.completed ? (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               );

@@ -119,9 +119,21 @@ const MemberStats = () => {
         d.setDate(d.getDate() + 1);
       }
     }
+    // Helper to check if habit is scheduled for a day
+    const isHabitScheduledForDay = (habit, dateStr) => {
+      if (!habit.scheduleDays || habit.scheduleDays.length === 0) return true;
+      // Parse YYYY-MM-DD string as local date to avoid timezone issues
+      const [year, month, day] = dateStr.split('-').map(Number);
+      const date = new Date(year, month - 1, day);
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dayName = days[date.getDay()];
+      return habit.scheduleDays.includes(dayName);
+    };
+
     // For each habit, build a map of date->progress
     const tasks_stats = memberHabit.habits.map((habit, idx) => {
       let days_completed = 0;
+      let days_scheduled = 0; // Count days where habit is scheduled
       let streak = 0;
       let currentStreak = 0;
       let lastMissed = false;
@@ -130,41 +142,68 @@ const MemberStats = () => {
         progressMap[formatDateLocal(parseDateLocal(p.date))] = p.completed;
       });
       allDates.forEach(dateStr => {
-        if (progressMap[dateStr]) {
-          days_completed++;
-          if (!lastMissed) currentStreak++;
-          else currentStreak = 1;
-          lastMissed = false;
-        } else {
-          lastMissed = true;
-          currentStreak = 0;
+        // Only count days where habit is scheduled
+        const isScheduled = isHabitScheduledForDay(habit, dateStr);
+        if (isScheduled) {
+          days_scheduled++;
+          if (progressMap[dateStr]) {
+            days_completed++;
+            if (!lastMissed) currentStreak++;
+            else currentStreak = 1;
+            lastMissed = false;
+          } else {
+            lastMissed = true;
+            currentStreak = 0;
+          }
         }
       });
       streak = currentStreak;
-      const daysElapsed = allDates.length;
-      const completion_rate = daysElapsed > 0 ? days_completed / daysElapsed : 0;
+      const completion_rate = days_scheduled > 0 ? days_completed / days_scheduled : 0;
       return {
         task_id: idx,
         title: habit.name,
         days_completed,
+        days_scheduled,
         completion_rate,
         current_streak: streak,
       };
     });
-    // For overall stats, count unique days where any habit was completed
+    // For overall stats, count unique days where any scheduled habit was completed
     const completedDates = new Set();
     memberHabit.habits.forEach(habit => {
       (habit.progress || []).forEach(p => {
-        completedDates.add(formatDateLocal(parseDateLocal(p.date)));
+        const dateStr = formatDateLocal(parseDateLocal(p.date));
+        // Only count if the habit was scheduled for that day
+        if (isHabitScheduledForDay(habit, dateStr)) {
+          completedDates.add(dateStr);
+        }
       });
     });
-    // Calculate days elapsed (from start date to today, inclusive)
-    const daysElapsed = allDates.length;
+    // Calculate days elapsed based on scheduled days only
+    let scheduledDates = new Set();
+    memberHabit.habits.forEach(habit => {
+      allDates.forEach(dateStr => {
+        if (isHabitScheduledForDay(habit, dateStr)) {
+          scheduledDates.add(dateStr);
+        }
+      });
+    });
+    const daysElapsed = scheduledDates.size;
     const daysCompleted = completedDates.size;
+    
+    // Calculate total scheduled days across all habits
+    let totalScheduledDays = 0;
+    memberHabit.habits.forEach(habit => {
+      allDates.forEach(dateStr => {
+        if (isHabitScheduledForDay(habit, dateStr)) {
+          totalScheduledDays++;
+        }
+      });
+    });
+    
     // Calculate overall completion rate based on total possible completions
-    const totalPossibleCompletions = memberHabit.habits.length * daysElapsed;
     const totalActualCompletions = tasks_stats.reduce((acc, t) => acc + t.days_completed, 0);
-    const overallCompletionRate = totalPossibleCompletions > 0 ? totalActualCompletions / totalPossibleCompletions : 0;
+    const overallCompletionRate = totalScheduledDays > 0 ? totalActualCompletions / totalScheduledDays : 0;
     return {
       completion_rate: overallCompletionRate * 100,
       current_streak: Math.max(...tasks_stats.map(t => t.current_streak)),
@@ -224,9 +263,32 @@ const MemberStats = () => {
       });
       while (d <= endBound) {
         const dateStr = formatDateLocal(d);
+        const isScheduled = !habit.scheduleDays || habit.scheduleDays.length === 0 || habit.scheduleDays.includes(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()]);
+        let nextAvailable = null;
+        if (!isScheduled) {
+          // Calculate next available day
+          const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const todayIndex = d.getDay();
+          for (let i = 1; i <= 7; i++) {
+            const nextIndex = (todayIndex + i) % 7;
+            const nextDay = days[nextIndex];
+            if (habit.scheduleDays.includes(nextDay)) {
+              const nextDate = new Date(d);
+              nextDate.setDate(d.getDate() + i);
+              nextAvailable = {
+                day: nextDay,
+                date: formatDateLocal(nextDate),
+                hoursUntil: i * 24
+              };
+              break;
+            }
+          }
+        }
         completeDailyData.push({
           date: dateStr,
-          is_complete: progressMap[dateStr] !== undefined ? progressMap[dateStr] : false
+          is_complete: progressMap[dateStr] !== undefined ? progressMap[dateStr] : false,
+          isScheduled: isScheduled,
+          nextAvailable: nextAvailable
         });
         d.setDate(d.getDate() + 1);
       }

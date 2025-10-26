@@ -304,17 +304,30 @@ const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, ed
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          disabled={!isEditable || saving}
-                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            day.is_complete
-                              ? 'bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300'
-                              : 'bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300'
-                          } ${isEditable ? 'cursor-pointer hover:opacity-75' : ''}`}
-                        >
-                          {day.is_complete ? 'Completed' : 'Missed'}
-                          {isEditable && ' ✏️'}
-                        </button>
+                        {!day.isScheduled ? (
+                          <div className="flex flex-col items-center gap-1 opacity-60">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-400">
+                              <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
+                            </svg>
+                            {day.nextAvailable && (
+                              <span className="text-xs text-gray-400 text-center">
+                                In {day.nextAvailable.hoursUntil}h
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            disabled={!isEditable || saving}
+                            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                              day.is_complete
+                                ? 'bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300'
+                                : 'bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300'
+                            } ${isEditable ? 'cursor-pointer hover:opacity-75' : ''}`}
+                          >
+                            {day.is_complete ? 'Completed' : 'Missed'}
+                            {isEditable && ' ✏️'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
