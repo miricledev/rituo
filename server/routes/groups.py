@@ -14,6 +14,8 @@ groups_bp = Blueprint('groups', __name__)
 stripe.api_key = os.getenv('STRIPE_TEST_SECRET_KEY')
 logging.info(f"Stripe API key loaded: {'Yes' if stripe.api_key else 'No'}")
 
+ALLOWED_GROUP_TYPES = {'school', 'football'}
+
 def get_current_user():
     user_id = get_jwt_identity()
     return User.query.get(user_id)
@@ -25,12 +27,21 @@ def create_group():
         data = request.get_json()
         name = data.get('name')
         password = data.get('password')
+        group_type = data.get('groupType', 'school')
+
+        if not name or not password:
+            return jsonify({'error': 'Name and password are required'}), 400
+
+        if group_type not in ALLOWED_GROUP_TYPES:
+            return jsonify({'error': 'Invalid group type'}), 400
+
         group_id = str(uuid.uuid4())[:8]
         group = Group(
             name=name,
             group_id=group_id,
             password=password,
-            leader_id=get_jwt_identity()
+            leader_id=get_jwt_identity(),
+            group_type=group_type
         )
         db.session.add(group)
         user = User.query.get(get_jwt_identity())
@@ -236,14 +247,30 @@ def update_group(group_id):
         if str(group.leader_id) != str(user_id):
             return jsonify({'error': 'Only group leader can update group name'}), 403
         
-        data = request.get_json()
+        data = request.get_json() or {}
         new_name = data.get('name')
-        
-        if not new_name or not new_name.strip():
-            return jsonify({'error': 'Group name cannot be empty'}), 400
-        
-        # Update group name
-        group.name = new_name.strip()
+        new_group_type = data.get('groupType')
+        updated = False
+
+        if new_name is not None:
+            if not new_name.strip():
+                return jsonify({'error': 'Group name cannot be empty'}), 400
+            if group.name != new_name.strip():
+                group.name = new_name.strip()
+                updated = True
+
+        if new_group_type is not None:
+            if new_group_type not in ALLOWED_GROUP_TYPES:
+                return jsonify({'error': 'Invalid group type'}), 400
+            if group.active_challenge and group.group_type != new_group_type:
+                return jsonify({'error': 'Cannot change group type while a challenge is active'}), 400
+            if group.group_type != new_group_type:
+                group.group_type = new_group_type
+                updated = True
+
+        if not updated and new_name is None and new_group_type is None:
+            return jsonify({'error': 'No updates provided'}), 400
+
         db.session.commit()
         
         return jsonify({'group': group.to_dict()}), 200
@@ -1232,6 +1259,7 @@ def get_skill_chart(group_id, member_id, term):
             # Create default chart if it doesn't exist
             default_skill_levels = {}
             default_color_scheme = {
+                'unstarted': '#ffffff',
                 'urgent': '#ef4444',      # red
                 'development': '#f97316', # orange
                 'growth': '#eab308',      # yellow
@@ -1342,6 +1370,7 @@ def reset_skill_chart(group_id, member_id, term):
             # Reset to default values
             skill_chart.skill_levels = {}
             skill_chart.color_scheme = {
+                'unstarted': '#ffffff',
                 'urgent': '#ef4444',      # red
                 'development': '#f97316', # orange
                 'growth': '#eab308',      # yellow

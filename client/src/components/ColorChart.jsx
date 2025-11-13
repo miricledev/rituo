@@ -1,18 +1,15 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../services/api';
 
-const ColorChart = ({ memberHabit, isLeader }) => {
-  const { groupId } = useParams();
+const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: propGroupType }) => {
+  const params = useParams();
+  const routeGroupId = params.groupId;
+  const groupId = propGroupId ?? routeGroupId;
   // Handle both cases: memberHabit.member could be a string ID, number ID, or an object with id
   const memberId = typeof memberHabit?.member === 'string' || typeof memberHabit?.member === 'number'
     ? memberHabit.member 
     : memberHabit?.member?.id;
-  
-  // Debug logging
-  console.log('ColorChart props:', { memberHabit, isLeader, groupId, memberId });
-  console.log('memberHabit.member type:', typeof memberHabit?.member);
-  console.log('memberHabit.member value:', memberHabit?.member);
   
   // Default color scheme
   const [colorScheme, setColorScheme] = useState({
@@ -23,71 +20,164 @@ const ColorChart = ({ memberHabit, isLeader }) => {
     aboveAverage: '#84cc16', // light green
     excellent: '#22c55e' // dark green
   });
-
+  const [resolvedGroupType, setResolvedGroupType] = useState(propGroupType || 'school');
   const [isEditingColors, setIsEditingColors] = useState(false);
   const [isEditingSkills, setIsEditingSkills] = useState(false);
   const [skillLevels, setSkillLevels] = useState({}); // Store custom skill levels
   const [activeTerm, setActiveTerm] = useState('autumn1'); // 'autumn1', 'autumn2', 'spring1', 'spring2', 'summer1', 'summer2'
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const hasFetchedGroupTypeRef = useRef(!!propGroupType);
+  const previousGroupTypeRef = useRef(resolvedGroupType);
+
+  useEffect(() => {
+    if (propGroupType) {
+      setResolvedGroupType(propGroupType);
+      hasFetchedGroupTypeRef.current = true;
+    }
+  }, [propGroupType]);
 
   // Term configuration with block counts
-  const termConfig = {
-    autumn1: { name: 'Autumn 1', blocks: 8, dates: '1 Sep 2025 → 24 Oct 2025' },
-    autumn2: { name: 'Autumn 2', blocks: 7, dates: '3 Nov 2025 → 19 Dec 2025' },
-    spring1: { name: 'Spring 1', blocks: 6, dates: '6 Jan 2026 → 13 Feb 2026' },
-    spring2: { name: 'Spring 2', blocks: 5, dates: '24 Feb 2026 → 27 Mar 2026' },
-    summer1: { name: 'Summer 1', blocks: 6, dates: '13 Apr 2026 → 22 May 2026' },
-    summer2: { name: 'Summer 2', blocks: 7, dates: '2 Jun 2026 → 20 Jul 2026' }
-  };
+  const termConfig = useMemo(() => {
+    if (resolvedGroupType === 'football') {
+      return {
+        january: { name: 'January', blocks: 4, dates: 'Approx. 4 weeks' },
+        february: { name: 'February', blocks: 4, dates: 'Approx. 4 weeks' },
+        march: { name: 'March', blocks: 5, dates: 'Approx. 5 weeks' },
+        april: { name: 'April', blocks: 4, dates: 'Approx. 4 weeks' },
+        may: { name: 'May', blocks: 5, dates: 'Approx. 5 weeks' },
+        june: { name: 'June', blocks: 4, dates: 'Approx. 4 weeks' },
+        july: { name: 'July', blocks: 4, dates: 'Approx. 4 weeks' },
+        august: { name: 'August', blocks: 4, dates: 'Approx. 4 weeks' },
+        september: { name: 'September', blocks: 5, dates: 'Approx. 5 weeks' },
+        october: { name: 'October', blocks: 4, dates: 'Approx. 4 weeks' },
+        november: { name: 'November', blocks: 4, dates: 'Approx. 4 weeks' },
+        december: { name: 'December', blocks: 5, dates: 'Approx. 5 weeks' }
+      };
+    }
+    return {
+      autumn1: { name: 'Autumn 1', blocks: 8, dates: '1 Sep 2025 → 24 Oct 2025' },
+      autumn2: { name: 'Autumn 2', blocks: 7, dates: '3 Nov 2025 → 19 Dec 2025' },
+      spring1: { name: 'Spring 1', blocks: 6, dates: '6 Jan 2026 → 13 Feb 2026' },
+      spring2: { name: 'Spring 2', blocks: 5, dates: '24 Feb 2026 → 27 Mar 2026' },
+      summer1: { name: 'Summer 1', blocks: 6, dates: '13 Apr 2026 → 22 May 2026' },
+      summer2: { name: 'Summer 2', blocks: 7, dates: '2 Jun 2026 → 20 Jul 2026' }
+    };
+  }, [resolvedGroupType]);
 
   // Order of levels from worst to best
   const levelOrder = ['urgent', 'development', 'growth', 'aboveAverage', 'excellent', 'unstarted'];
 
   // Skill categories and skills based on the image structure
-  const skillCategories = [
-    {
-      name: 'TECHNICAL (BRAIN)',
-      skills: [
-        'Problem solving',
-        'Concentration',
-        'Energy',
-        'Physical health',
-        'Performance',
-        'Discipline',
-        'Imagination/Creativity',
-        'Maturity',
-        'Positive Reaction'
-      ]
-    },
-    {
-      name: 'EMOTIONAL (HEART)',
-      skills: [
-        'Self Confidence',
-        'Emotional Control',
-        'Mental Toughness',
-        'Attitude',
-        'Resilience',
-        'Trust',
-        'Coachability',
-        'Desire',
-        'Awareness'
-      ]
-    },
-    {
-      name: 'SOCIAL (GUT)',
-      skills: [
-        'Communication skills',
-        'Leadership',
-        'Respect',
-        'Team Work',
-        'Friendship Building',
-        'Listening Skills',
-        'Patience',
-        'Comfort Zone'
-      ]
+  const skillCategories = useMemo(() => {
+    if (resolvedGroupType === 'football') {
+      return [
+        {
+          name: 'TECHNICAL (BRAIN)',
+          skills: [
+            'Movement',
+            'Receiving & Control',
+            'Passing',
+            'Dribbling',
+            'Shooting & Finishing',
+            'Turning & Ball Protection',
+            'Attacking',
+            'Defending'
+          ]
+        },
+        {
+          name: 'PSYCHOLOGICAL (HEART)',
+          skills: [
+            'Self Confidence',
+            'Emotional Control',
+            'Mental Toughness',
+            'Attitude',
+            'Focus & Concentration',
+            'Trust',
+            'Coachability',
+            'Desire'
+          ]
+        },
+        {
+          name: 'PHYSICAL (GUT)',
+          skills: [
+            'Balance',
+            'Co-ordination',
+            'Agility',
+            'Speed',
+            'Strength',
+            'Power / Explosiveness',
+            'Flexibility',
+            'Reaction Time'
+          ]
+        }
+      ];
     }
-  ];
+
+    return [
+      {
+        name: 'TECHNICAL (BRAIN)',
+        skills: [
+          'Problem solving',
+          'Concentration',
+          'Energy',
+          'Physical health',
+          'Performance',
+          'Discipline',
+          'Imagination/Creativity',
+          'Maturity',
+          'Positive Reaction'
+        ]
+      },
+      {
+        name: 'EMOTIONAL (HEART)',
+        skills: [
+          'Self Confidence',
+          'Emotional Control',
+          'Mental Toughness',
+          'Attitude',
+          'Resilience',
+          'Trust',
+          'Coachability',
+          'Desire',
+          'Awareness'
+        ]
+      },
+      {
+        name: 'SOCIAL (GUT)',
+        skills: [
+          'Communication skills',
+          'Leadership',
+          'Respect',
+          'Team Work',
+          'Friendship Building',
+          'Listening Skills',
+          'Patience',
+          'Comfort Zone'
+        ]
+      }
+    ];
+  }, [resolvedGroupType]);
+
+  const defaultTermKey = resolvedGroupType === 'football' ? 'january' : 'autumn1';
+  const activeTermConfig = termConfig[activeTerm] || termConfig[defaultTermKey] || { name: '', blocks: 0, dates: '' };
+
+  useEffect(() => {
+    const availableTerms = Object.keys(termConfig);
+    const defaultTerm = resolvedGroupType === 'football' ? 'january' : 'autumn1';
+
+    if (previousGroupTypeRef.current !== resolvedGroupType) {
+      previousGroupTypeRef.current = resolvedGroupType;
+      if (activeTerm !== defaultTerm) {
+        setActiveTerm(defaultTerm);
+      }
+      return;
+    }
+
+    if (!availableTerms.includes(activeTerm)) {
+      setActiveTerm(defaultTerm);
+    }
+  }, [resolvedGroupType, termConfig, activeTerm]);
 
   // API functions for loading and saving skill chart data
   const loadSkillChartData = async (term = activeTerm) => {
@@ -101,7 +191,12 @@ const ColorChart = ({ memberHabit, isLeader }) => {
         const user = response.data.user;
         if (user && user.groups && user.groups.length > 0) {
           // Use the first group the user belongs to
-          targetGroupId = user.groups[0].groupId;
+          const firstGroup = user.groups[0];
+          targetGroupId = firstGroup.groupId;
+          if (!propGroupType && firstGroup.groupType && !hasFetchedGroupTypeRef.current) {
+            setResolvedGroupType(firstGroup.groupType || 'school');
+            hasFetchedGroupTypeRef.current = true;
+          }
         } else {
           console.log('User has no groups');
           return;
@@ -109,6 +204,19 @@ const ColorChart = ({ memberHabit, isLeader }) => {
       } catch (error) {
         console.error('Error fetching user groups:', error);
         return;
+      }
+    }
+
+    if (!propGroupType && targetGroupId && !hasFetchedGroupTypeRef.current) {
+      try {
+        const groupResponse = await api.get(`/groups/${targetGroupId}`);
+        const fetchedType = groupResponse.data?.group?.groupType;
+        if (fetchedType) {
+          setResolvedGroupType(fetchedType);
+          hasFetchedGroupTypeRef.current = true;
+        }
+      } catch (error) {
+        console.error('Error fetching group type:', error);
       }
     }
     
@@ -121,7 +229,10 @@ const ColorChart = ({ memberHabit, isLeader }) => {
         setSkillLevels(data.skillLevels);
       }
       if (data.colorScheme) {
-        setColorScheme(data.colorScheme);
+        setColorScheme(prev => ({
+          ...prev,
+          ...data.colorScheme
+        }));
       }
     } catch (error) {
       console.error('Error loading skill chart data:', error);
@@ -145,7 +256,12 @@ const ColorChart = ({ memberHabit, isLeader }) => {
         const user = response.data.user;
         if (user && user.groups && user.groups.length > 0) {
           // Use the first group the user belongs to
-          targetGroupId = user.groups[0].groupId;
+          const firstGroup = user.groups[0];
+          targetGroupId = firstGroup.groupId;
+          if (!propGroupType && firstGroup.groupType && !hasFetchedGroupTypeRef.current) {
+            setResolvedGroupType(firstGroup.groupType || 'school');
+            hasFetchedGroupTypeRef.current = true;
+          }
         } else {
           console.log('User has no groups');
           return;
@@ -153,6 +269,19 @@ const ColorChart = ({ memberHabit, isLeader }) => {
       } catch (error) {
         console.error('Error fetching user groups:', error);
         return;
+      }
+    }
+
+    if (!propGroupType && targetGroupId && !hasFetchedGroupTypeRef.current) {
+      try {
+        const groupResponse = await api.get(`/groups/${targetGroupId}`);
+        const fetchedType = groupResponse.data?.group?.groupType;
+        if (fetchedType) {
+          setResolvedGroupType(fetchedType);
+          hasFetchedGroupTypeRef.current = true;
+        }
+      } catch (error) {
+        console.error('Error fetching group type:', error);
       }
     }
     
@@ -186,8 +315,10 @@ const ColorChart = ({ memberHabit, isLeader }) => {
 
   // Load data when component mounts or when term changes
   useEffect(() => {
+    if (!memberId) return;
+    if (!termConfig[activeTerm]) return;
     loadSkillChartData();
-  }, [groupId, memberId, activeTerm]);
+  }, [groupId, memberId, activeTerm, termConfig]);
 
   // Auto-save when skill levels or color scheme changes (with debounce)
   useEffect(() => {
@@ -286,7 +417,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
   const exportToPDF = () => {
     // Create a simple HTML structure for the PDF
     const memberName = memberHabit?.member?.username || 'Student';
-    const term = termConfig[activeTerm].name;
+    const term = activeTermConfig.name || activeTerm;
     
     let htmlContent = `
       <html>
@@ -309,7 +440,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
         <body>
           <h1>Skill Development Chart</h1>
           <h2>IP Creative Learning Standards</h2>
-          <div class="subtitle">Student: ${memberName} | Term: ${term} (${termConfig[activeTerm].dates})</div>
+          <div class="subtitle">Student: ${memberName} | Term: ${term} (${activeTermConfig.dates})</div>
           
           <div class="legend">
     `;
@@ -336,7 +467,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
     `;
 
     // Add week headers
-    for (let i = 1; i <= termConfig[activeTerm].blocks; i++) {
+    for (let i = 1; i <= (activeTermConfig.blocks || 0); i++) {
       htmlContent += `<th>Block ${i}</th>`;
     }
 
@@ -351,7 +482,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
       // Category header
       htmlContent += `
         <tr class="category-header">
-          <td colspan="${termConfig[activeTerm].blocks + 1}">${category.name}</td>
+          <td colspan="${(activeTermConfig.blocks || 0) + 1}">${category.name}</td>
         </tr>
       `;
 
@@ -360,7 +491,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
         htmlContent += '<tr>';
         htmlContent += `<td>${skill}</td>`;
         
-        for (let blockIndex = 1; blockIndex <= termConfig[activeTerm].blocks; blockIndex++) {
+        for (let blockIndex = 1; blockIndex <= (activeTermConfig.blocks || 0); blockIndex++) {
           const level = getSkillLevel(skill, blockIndex);
           const color = getColorForLevel(level);
           htmlContent += `<td style="background-color: ${color}; text-align: center;">${getLevelName(level).charAt(0)}</td>`;
@@ -426,7 +557,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
           ))}
         </div>
         <div className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
-          {termConfig[activeTerm].dates} • {termConfig[activeTerm].blocks} weeks
+          {activeTermConfig.dates} • {activeTermConfig.blocks} weeks
         </div>
       </div>
 
@@ -554,7 +685,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
       {isEditingSkills && (
         <div className="mb-4 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
           <p className="text-sm text-purple-700 dark:text-purple-300 text-center font-medium">
-            💡 Skills editing mode ({termConfig[activeTerm].name}): Click on any cell in the chart below to cycle through development levels
+            💡 Skills editing mode ({activeTermConfig.name}): Click on any cell in the chart below to cycle through development levels
           </p>
         </div>
       )}
@@ -566,7 +697,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
               <th className="border border-gray-300 dark:border-gray-600 p-3 text-left font-semibold text-gray-700 dark:text-gray-300">
                 Skills
               </th>
-              {Array.from({ length: termConfig[activeTerm].blocks }, (_, i) => (
+              {Array.from({ length: activeTermConfig.blocks || 0 }, (_, i) => (
                 <th key={i} className="border border-gray-300 dark:border-gray-600 p-3 text-center font-semibold text-gray-700 dark:text-gray-300">
                   BLOCK {i + 1}
                 </th>
@@ -581,7 +712,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
                 {/* Category Header */}
                 <tr className="bg-blue-50 dark:bg-blue-900/20">
                   <td 
-                    colSpan={termConfig[activeTerm].blocks + 1} 
+                    colSpan={(activeTermConfig.blocks || 0) + 1} 
                     className="border border-gray-300 dark:border-gray-600 p-3 font-bold text-blue-800 dark:text-blue-300 text-center"
                   >
                     {category.name}
@@ -594,7 +725,7 @@ const ColorChart = ({ memberHabit, isLeader }) => {
                     <td className="border border-gray-300 dark:border-gray-600 p-3 font-medium text-gray-700 dark:text-gray-300">
                       {skill}
                     </td>
-                    {Array.from({ length: termConfig[activeTerm].blocks }, (_, blockIndex) => {
+                    {Array.from({ length: activeTermConfig.blocks || 0 }, (_, blockIndex) => {
                       const level = getSkillLevel(skill, blockIndex + 1);
                       const color = getColorForLevel(level);
                       
@@ -630,10 +761,10 @@ const ColorChart = ({ memberHabit, isLeader }) => {
       {/* Instructions */}
       <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
         <h4 className="font-semibold text-blue-800 dark:text-blue-300 mb-2">
-          How to Use This Chart ({termConfig[activeTerm].name}):
+          How to Use This Chart ({activeTermConfig.name}):
         </h4>
         <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
-          <li>• Each skill is evaluated across {termConfig[activeTerm].blocks} blocks</li>
+          <li>• Each skill is evaluated across {activeTermConfig.blocks} blocks</li>
           <li>• White blocks indicate unstarted/not evaluated</li>
           <li>• Colors indicate development level from urgent (red) to excellent (green)</li>
           <li>• Group leaders can customize colors by clicking "Edit Colors"</li>

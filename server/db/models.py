@@ -50,7 +50,7 @@ class User(db.Model):
             'created_at': self.created_at.isoformat(),
             'current_cycle_start_date': self.current_cycle_start_date.isoformat() if self.current_cycle_start_date else None,
             'current_cycle_end_date': self.current_cycle_end_date.isoformat() if self.current_cycle_end_date else None,
-            'groups': [{'groupId': group.group_id, 'name': group.name} for group in self.groups]
+            'groups': [{'groupId': group.group_id, 'name': group.name, 'groupType': getattr(group, 'group_type', 'school')} for group in self.groups]
         }
 
 
@@ -130,6 +130,7 @@ class Group(db.Model):
     password = db.Column(db.String(100), nullable=False)
     leader_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     active_challenge_id = db.Column(db.Integer, db.ForeignKey('group_challenges.id'))
+    group_type = db.Column(db.String(20), nullable=False, default='school')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -145,6 +146,7 @@ class Group(db.Model):
             'leader': self.leader.to_dict() if self.leader else None,
             'members': [member.to_dict() for member in self.members],
             'activeChallenge': self.active_challenge.to_dict() if self.active_challenge else None,
+            'groupType': self.group_type or 'school',
             'createdAt': self.created_at.isoformat()
         }
 

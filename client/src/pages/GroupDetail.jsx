@@ -65,6 +65,8 @@ const GroupDetail = () => {
   const [collapsedMembers, setCollapsedMembers] = useState({}); // Will be initialized to collapse all members
   const [isEditingGroupName, setIsEditingGroupName] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const [isEditingGroupType, setIsEditingGroupType] = useState(false);
+  const [newGroupType, setNewGroupType] = useState('school');
   const [timeUntilMidnight, setTimeUntilMidnight] = useState('');
   
   // Habit Presets State
@@ -182,6 +184,12 @@ const GroupDetail = () => {
   }, [groupId]);
 
   useEffect(() => {
+    if (group?.groupType) {
+      setNewGroupType(group.groupType);
+    }
+  }, [group?.groupType]);
+
+  useEffect(() => {
     if (activeTab === 'archives' && isLeader) {
       fetchArchives();
     }
@@ -262,7 +270,15 @@ const GroupDetail = () => {
       setLoading(true);
       setError(null);
       const response = await axios.get(`/groups/${groupId}`);
-      setGroup(response.data.group);
+      const fetchedGroup = response.data.group;
+      if (fetchedGroup) {
+        setGroup({
+          ...fetchedGroup,
+          groupType: fetchedGroup.groupType || 'school'
+        });
+      } else {
+        setGroup(null);
+      }
     } catch (error) {
       console.error('Error fetching group details:', error);
       setError('Failed to load group details. Please try again.');
@@ -602,6 +618,33 @@ const GroupDetail = () => {
   const handleCancelEditGroupName = () => {
     setIsEditingGroupName(false);
     setNewGroupName('');
+  };
+
+  const handleEditGroupType = () => {
+    setNewGroupType(group?.groupType || 'school');
+    setIsEditingGroupType(true);
+  };
+
+  const handleSaveGroupType = async () => {
+    if (!group) return;
+    if (group.activeChallenge) {
+      alert('Cannot change group type while a challenge is active.');
+      return;
+    }
+
+    try {
+      await axios.put(`/groups/${groupId}`, { groupType: newGroupType });
+      setGroup(prev => (prev ? { ...prev, groupType: newGroupType } : prev));
+      setIsEditingGroupType(false);
+    } catch (error) {
+      console.error('Error updating group type:', error);
+      alert('Failed to update group type');
+    }
+  };
+
+  const handleCancelEditGroupType = () => {
+    setIsEditingGroupType(false);
+    setNewGroupType(group?.groupType || 'school');
   };
 
   // Toggle individual member collapse in modal
@@ -1129,6 +1172,65 @@ const GroupDetail = () => {
             </div>
           )}
           <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400 break-all">Group ID: {group.groupId}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <span className="font-semibold">Group Type:</span>
+            {isEditingGroupType && isLeader && !group.activeChallenge ? (
+              <>
+                <select
+                  value={newGroupType}
+                  onChange={(e) => setNewGroupType(e.target.value)}
+                  className="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 dark:bg-secondary-800"
+                >
+                  <option value="school">School Group</option>
+                  <option value="football">Football Group</option>
+                </select>
+                <button
+                  onClick={handleSaveGroupType}
+                  className="p-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                  title="Save"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleCancelEditGroupType}
+                  className="p-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
+                  title="Cancel"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </>
+            ) : (
+              <>
+                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full ${
+                  group.groupType === 'football'
+                    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                }`}>
+                  {group.groupType === 'football' ? 'Football Group' : 'School Group'}
+                </span>
+                {isLeader && !group.activeChallenge && (
+                  <button
+                    onClick={handleEditGroupType}
+                    className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+                    title="Edit group type"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                )}
+                {isLeader && group.activeChallenge && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400 italic">
+                    (Locked while challenge is active)
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         </div>
         {isLeader && (
           group.activeChallenge ? (
@@ -3248,6 +3350,7 @@ const GroupDetail = () => {
                     memberHabit={{ member: selectedColorChartMember.id }}
                     isLeader={isLeader}
                     groupId={groupId}
+                    groupType={group?.groupType}
                   />
                               </div>
                               </div>
@@ -3265,6 +3368,7 @@ const GroupDetail = () => {
                   memberHabit={{ member: user.id }}
                   isLeader={false}
                   groupId={groupId}
+                  groupType={group?.groupType}
                               />
                             </div>
                             </div>

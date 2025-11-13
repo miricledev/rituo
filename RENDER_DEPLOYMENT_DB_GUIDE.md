@@ -99,7 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_habit_presets_user_id ON habit_presets(user_id);
 ```bash
 export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH
 export FLASK_APP=server:app
-flask db stamp a1b2c3d4e5f6  # Mark habit_presets migration as done
+flask db stamp c1d2e3f4g5h6  # Mark latest migration (habit presets + group type) as done
 ```
 
 ---

@@ -37,7 +37,8 @@ const Groups = () => {
   const [newGroup, setNewGroup] = useState({
     name: '',
     password: '',
-    memberCount: 1
+    memberCount: 1,
+    groupType: 'school'
   });
   const [joinGroup, setJoinGroup] = useState({
     groupId: '',
@@ -67,10 +68,11 @@ const Groups = () => {
       await axios.post('/groups/create', {
         name: newGroup.name,
         password: newGroup.password,
-        memberCount: newGroup.memberCount
+        memberCount: newGroup.memberCount,
+        groupType: newGroup.groupType
       });
       setShowCreateModal(false);
-      setNewGroup({ name: '', password: '', memberCount: 1 });
+      setNewGroup({ name: '', password: '', memberCount: 1, groupType: 'school' });
       fetchGroups();
     } catch (error) {
       alert('Failed to create group: ' + (error.response?.data?.error || error.message));
@@ -136,17 +138,19 @@ const Groups = () => {
   );
 
   // Group Card
-  const GroupCard = ({ group, idx, isLeader }) => (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 20 }}
-      transition={{ duration: 0.3, delay: Math.min(idx * 0.05, 0.5) }}
-      whileHover={{ scale: 1.02, boxShadow: '0 8px 32px 0 rgba(0,0,0,0.18)' }}
-      className={`relative group-card bg-white/80 dark:bg-secondary-800/80 rounded-2xl shadow-xl p-6 flex flex-col gap-3 border-2 border-transparent hover:border-primary-400 transition-all cursor-pointer overflow-hidden`}
-      onClick={() => navigate(`/groups/${group.groupId}`)}
-    >
+  const GroupCard = ({ group, idx, isLeader }) => {
+    const groupType = group.groupType || 'school';
+    return (
+      <motion.div
+        layout
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 20 }}
+        transition={{ duration: 0.3, delay: Math.min(idx * 0.05, 0.5) }}
+        whileHover={{ scale: 1.02, boxShadow: '0 8px 32px 0 rgba(0,0,0,0.18)' }}
+        className={`relative group-card bg-white/80 dark:bg-secondary-800/80 rounded-2xl shadow-xl p-6 flex flex-col gap-3 border-2 border-transparent hover:border-primary-400 transition-all cursor-pointer overflow-hidden`}
+        onClick={() => navigate(`/groups/${group.groupId}`)}
+      >
       {/* Avatar */}
       <div className={`w-16 h-16 rounded-full flex items-center justify-center text-3xl font-bold mb-2 mx-auto shadow-lg bg-gradient-to-br ${getColor(idx)}`}>
         {group.name?.[0]?.toUpperCase() || '?'}
@@ -176,13 +180,23 @@ const Groups = () => {
           {copiedId === group.groupId ? <><FaCheckCircle className="inline text-green-500 mr-1" /> Copied!</> : <><FaCopy className="inline mr-1" />Copy</>}
         </button>
       </div>
+      <div className="mt-2 text-xs font-semibold text-center">
+        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full ${
+          groupType === 'football'
+            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+            : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+        }`}>
+          {groupType === 'football' ? 'Football Group' : 'School Group'}
+        </span>
+      </div>
       {/* Animated border on hover */}
       <motion.div
         className="absolute inset-0 pointer-events-none rounded-2xl border-4 border-primary-400 opacity-0 group-hover:opacity-60 transition-all duration-300"
         layoutId={`border-${group.groupId}`}
       />
-    </motion.div>
-  );
+      </motion.div>
+    );
+  };
 
   // PaymentForm unchanged
   const PaymentForm = () => {
@@ -325,6 +339,19 @@ const Groups = () => {
                   className="w-full px-4 py-2 rounded border border-gray-300 focus:ring-2 focus:ring-blue-400"
                   required
                 />
+                <div>
+                  <label className="block text-sm font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                    Group Type
+                  </label>
+                  <select
+                    value={newGroup.groupType}
+                    onChange={e => setNewGroup({ ...newGroup, groupType: e.target.value })}
+                    className="w-full px-4 py-2 rounded border border-gray-300 focus:ring-2 focus:ring-blue-400 dark:bg-secondary-800 dark:border-secondary-700"
+                  >
+                    <option value="school">School Group</option>
+                    <option value="football">Football Group</option>
+                  </select>
+                </div>
                 <button
                   type="submit"
                   className="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition-all"
