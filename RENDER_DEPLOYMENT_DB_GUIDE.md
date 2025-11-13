@@ -29,51 +29,59 @@ git push origin main  # or your branch name
 
 ### Step 2: Database Migration on Render
 
-**Option A: Using Render Shell (Recommended)**
+**Option A: Using Flask Migration (Recommended)**
 
-1. Go to your Render dashboard
-2. Navigate to your **Web Service** (backend service)
-3. Click on **"Shell"** tab (or open the shell from your service)
+The migration has been fixed to handle missing tables in production. Simply push your code and run:
+
+1. **Push your code to Git** (if not already pushed):
+   ```bash
+   git add .
+   git commit -m "Add habit presets feature with fixed migration"
+   git push
+   ```
+
+2. **On Render**, go to your **Web Service** (backend service)
+3. Click on **"Shell"** tab
 4. Run the following commands:
 
 ```bash
-# Navigate to parent directory (where server/ is located)
-cd /opt/render/project/src
+# Navigate to server directory
+cd /opt/render/project/src/server
 
-# Set Flask app environment variable (required)
-export FLASK_APP=server.server:app
+# Set environment variables
+export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH
+export FLASK_APP=server:app
 
 # Run the migration
 flask db upgrade
-
-# Or if you're already in the server directory, add PYTHONPATH:
-# export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH
-# export FLASK_APP=server:app
-# flask db upgrade
 ```
+
+The migration will:
+- Skip dropping tables that don't exist (fixes the production error)
+- Only create `habit_presets` table if it doesn't exist
+- Only alter password column if needed
 
 **Option B: Using Render Build Command**
 
-You can add the migration to your build command. In your Render service settings:
+You can add the migration to your build command so it runs automatically on each deploy:
 
-1. Go to **Settings** → **Build Command**
-2. Add migration to your build command:
+1. Go to your Web Service → **Settings** → **Build Command**
+2. Update your build command:
 ```bash
-cd server && pip install -r requirements.txt && FLASK_APP=server:app flask db upgrade && gunicorn server:app --timeout 120 --workers 2 --bind 0.0.0.0:$PORT
+cd server && pip install -r requirements.txt && export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH && FLASK_APP=server:app flask db upgrade && gunicorn server:app --timeout 120 --workers 2 --bind 0.0.0.0:$PORT
 ```
 
-**Option C: Manual SQL (If migrations fail)**
+**Option C: Manual SQL (Backup - Only if migrations fail)**
 
-If for some reason Flask-Migrate doesn't work, you can run the SQL directly:
+If for some reason Flask-Migrate doesn't work, you can create the table manually:
 
 1. Go to your **PostgreSQL Database** service in Render
 2. Click on **"Connect"** or **"Info"** to get connection details
-3. Use `psql` or Render's built-in PostgreSQL admin:
-   - Go to **PostgreSQL** → **Info** → Click **"Connect"** or use external client
+3. Connect using `psql` or an external PostgreSQL client
 4. Run this SQL:
 
 ```sql
-CREATE TABLE habit_presets (
+CREATE TABLE IF NOT EXISTS habit_presets (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
     name VARCHAR(100) NOT NULL,
@@ -84,7 +92,14 @@ CREATE TABLE habit_presets (
 );
 
 -- Create an index on user_id for faster queries
-CREATE INDEX idx_habit_presets_user_id ON habit_presets(user_id);
+CREATE INDEX IF NOT EXISTS idx_habit_presets_user_id ON habit_presets(user_id);
+```
+
+5. After creating manually, stamp the migration as complete:
+```bash
+export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH
+export FLASK_APP=server:app
+flask db stamp a1b2c3d4e5f6  # Mark habit_presets migration as done
 ```
 
 ---
