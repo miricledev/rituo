@@ -66,6 +66,15 @@ const GroupDetail = () => {
   const [isEditingGroupName, setIsEditingGroupName] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [timeUntilMidnight, setTimeUntilMidnight] = useState('');
+  
+  // Habit Presets State
+  const [habitPresets, setHabitPresets] = useState([]); // Stored in localStorage
+  const [showPresetModal, setShowPresetModal] = useState(false);
+  const [editingPresetId, setEditingPresetId] = useState(null);
+  const [presetFormData, setPresetFormData] = useState({
+    name: '',
+    habits: []
+  });
 
   // Calculate myMemberHabit early to avoid temporal dead zone
   const myMemberHabit = group?.activeChallenge?.memberHabits?.find(
@@ -343,6 +352,172 @@ const GroupDetail = () => {
     } finally {
       setConversationsLoading(false);
     }
+  };
+
+  // Load presets from backend on component mount
+  useEffect(() => {
+    fetchPresets();
+  }, []);
+
+  // Fetch presets from backend
+  const fetchPresets = async () => {
+    try {
+      const response = await axios.get('/groups/habit-presets');
+      setHabitPresets(response.data.presets || []);
+    } catch (error) {
+      console.error('Error loading presets:', error);
+    }
+  };
+
+  // Preset Management Functions
+  const handleCreatePreset = () => {
+    setPresetFormData({ name: '', habits: [] });
+    setEditingPresetId(null);
+    setShowPresetModal(true);
+  };
+
+  const handleEditPreset = (presetId) => {
+    const preset = habitPresets.find(p => p.id === presetId);
+    if (preset) {
+      setPresetFormData({
+        name: preset.name,
+        habits: preset.habits
+      });
+      setEditingPresetId(presetId);
+      setShowPresetModal(true);
+    }
+  };
+
+  const handleDeletePreset = async (presetId) => {
+    if (window.confirm('Are you sure you want to delete this preset?')) {
+      try {
+        await axios.delete(`/groups/habit-presets/${presetId}`);
+        // Refresh presets from backend
+        await fetchPresets();
+      } catch (error) {
+        console.error('Error deleting preset:', error);
+        alert('Failed to delete preset. Please try again.');
+      }
+    }
+  };
+
+  const handleSavePreset = async () => {
+    if (!presetFormData.name.trim()) {
+      alert('Please enter a preset name');
+      return;
+    }
+    if (presetFormData.habits.length === 0) {
+      alert('Please add at least one habit to the preset');
+      return;
+    }
+    // Validate that all habits have at least one schedule day
+    const habitsWithoutSchedule = presetFormData.habits.filter(
+      habit => !habit.scheduleDays || habit.scheduleDays.length === 0
+    );
+    if (habitsWithoutSchedule.length > 0) {
+      alert('Please select at least one schedule day for all habits');
+      return;
+    }
+
+    try {
+      if (editingPresetId) {
+        // Update existing preset
+        await axios.put(`/groups/habit-presets/${editingPresetId}`, {
+          name: presetFormData.name,
+          habits: presetFormData.habits
+        });
+      } else {
+        // Create new preset
+        await axios.post('/groups/habit-presets', {
+          name: presetFormData.name,
+          habits: presetFormData.habits
+        });
+      }
+      
+      // Refresh presets from backend
+      await fetchPresets();
+      
+      setShowPresetModal(false);
+      setPresetFormData({ name: '', habits: [] });
+      setEditingPresetId(null);
+    } catch (error) {
+      console.error('Error saving preset:', error);
+      alert('Failed to save preset. Please try again.');
+    }
+  };
+
+  const handleLoadPreset = (presetId) => {
+    // Prevent loading if there's an active challenge
+    if (group?.activeChallenge) {
+      return;
+    }
+
+    // Convert presetId to number for comparison (dropdown passes string)
+    const presetIdNum = typeof presetId === 'string' ? parseInt(presetId, 10) : presetId;
+    const preset = habitPresets.find(p => p.id === presetIdNum || p.id === presetId);
+    if (!preset) return;
+
+    // Load preset habits for all members
+    const allMembers = group?.members || [];
+    const newMemberHabits = {};
+    
+    allMembers.forEach(member => {
+      newMemberHabits[member.id] = preset.habits.map(habit => ({
+        ...habit,
+        // Ensure numeric habits have default min/max values if missing
+        minValue: habit.habitType === 'numeric' ? (habit.minValue ?? 0) : habit.minValue,
+        maxValue: habit.habitType === 'numeric' ? (habit.maxValue ?? 10) : habit.maxValue,
+        // Ensure scheduleDays and combatType have defaults
+        scheduleDays: habit.scheduleDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+        combatType: habit.combatType || 'neutral'
+      }));
+    });
+
+    setMemberHabits(newMemberHabits);
+    
+    // If modal is not open, open it and set to editing mode
+    // If modal is already open, just load the habits (it's already in editing mode)
+    if (!showCreateChallengeModal) {
+      setIsEditingHabits(true);
+      setShowCreateChallengeModal(true);
+    }
+    // If modal is already open, the state update above will automatically show the loaded habits
+  };
+
+  const handleAddPresetHabit = () => {
+    setPresetFormData({
+      ...presetFormData,
+      habits: [
+        ...presetFormData.habits,
+        {
+          name: '',
+          description: '',
+          habitType: 'boolean',
+          minValue: 0,
+          maxValue: 10,
+          prompt: '',
+          scheduleDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+          combatType: 'neutral'
+        }
+      ]
+    });
+  };
+
+  const handleUpdatePresetHabit = (index, field, value) => {
+    const updatedHabits = [...presetFormData.habits];
+    updatedHabits[index][field] = value;
+    setPresetFormData({
+      ...presetFormData,
+      habits: updatedHabits
+    });
+  };
+
+  const handleRemovePresetHabit = (index) => {
+    const updatedHabits = presetFormData.habits.filter((_, i) => i !== index);
+    setPresetFormData({
+      ...presetFormData,
+      habits: updatedHabits
+    });
   };
 
   const deleteActiveChallenge = async () => {
@@ -900,11 +1075,6 @@ const GroupDetail = () => {
     return 'text-green-500 dark:text-green-400';
   };
 
-  // Debug logs
-  console.log('user:', user);
-  console.log('group.leader:', group.leader);
-  console.log('isLeader:', isLeader);
-
   return (
     <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4">
@@ -1069,6 +1239,18 @@ const GroupDetail = () => {
                 }`}
               >
                 Archives
+              </button>
+            )}
+            {isLeader && (
+              <button
+                onClick={() => setActiveTab('presets')}
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
+                  activeTab === 'presets'
+                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
+                }`}
+              >
+                Presets
               </button>
             )}
             {isLeader && (
@@ -3278,6 +3460,29 @@ const GroupDetail = () => {
                                           Defence
                                         </span>
                                       )}
+                                      {/* Schedule Days Indicator */}
+                                      {habit.scheduleDays && habit.scheduleDays.length > 0 && (
+                                        <div className="flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-600 rounded text-xs">
+                                          <span className="text-gray-600 dark:text-gray-400 mr-1">Days:</span>
+                                          {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => {
+                                            const dayInitial = day[0];
+                                            const isScheduled = habit.scheduleDays.includes(day);
+                                            return (
+                                              <span
+                                                key={day}
+                                                className={`inline-flex items-center justify-center w-5 h-5 rounded text-xs font-medium transition-colors cursor-help ${
+                                                  isScheduled
+                                                    ? 'bg-blue-500 text-white'
+                                                    : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
+                                                }`}
+                                                title={day}
+                                              >
+                                                {dayInitial}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                   {isEditingHabits && (
@@ -3317,7 +3522,27 @@ const GroupDetail = () => {
                   <form onSubmit={handleCreateChallenge} className="space-y-6">
                     {/* Challenge Settings */}
                   <div className="mb-6">
-                    <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Challenge Settings</h3>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">Challenge Settings</h3>
+                      {habitPresets.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <select
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                handleLoadPreset(e.target.value);
+                                e.target.value = ''; // Reset dropdown
+                              }
+                            }}
+                            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
+                          >
+                            <option value="">Load Preset...</option>
+                            {habitPresets.map(preset => (
+                              <option key={preset.id} value={preset.id}>{preset.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Start Date</label>
@@ -3679,8 +3904,8 @@ const GroupDetail = () => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Minimum Value</label>
                                       <input
                                         type="number"
-                              value={currentHabit.minValue}
-                              onChange={(e) => setCurrentHabit({ ...currentHabit, minValue: parseInt(e.target.value) })}
+                              value={currentHabit.minValue ?? ''}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, minValue: e.target.value === '' ? undefined : parseInt(e.target.value) || 0 })}
                               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
                                         required
                                       />
@@ -3689,8 +3914,8 @@ const GroupDetail = () => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Maximum Value</label>
                                       <input
                                         type="number"
-                              value={currentHabit.maxValue}
-                              onChange={(e) => setCurrentHabit({ ...currentHabit, maxValue: parseInt(e.target.value) })}
+                              value={currentHabit.maxValue ?? ''}
+                              onChange={(e) => setCurrentHabit({ ...currentHabit, maxValue: e.target.value === '' ? undefined : parseInt(e.target.value) || 0 })}
                               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
                                         required
                                       />
@@ -4130,6 +4355,112 @@ const GroupDetail = () => {
       )}
 
       {/* Attendance Tab */}
+      {activeTab === 'presets' && isLeader && (
+        <div>
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">🎯 Habit Presets</h2>
+                <p className="text-secondary-600 dark:text-secondary-400">Create and manage habit templates to quickly set up challenges</p>
+              </div>
+              <button
+                onClick={handleCreatePreset}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium transition-colors shadow-lg"
+              >
+                + Create Preset
+              </button>
+            </div>
+          </div>
+
+          {habitPresets.length === 0 ? (
+            <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-12 text-center border border-gray-200 dark:border-secondary-700">
+              <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+              <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">No Presets Yet</h3>
+              <p className="text-secondary-500 dark:text-secondary-400 mb-6">Create your first habit preset to save time when setting up challenges</p>
+              <button
+                onClick={handleCreatePreset}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+              >
+                Create Your First Preset
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {habitPresets.map(preset => (
+                <div key={preset.id} className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700 hover:shadow-2xl transition-shadow">
+                  <div className="flex items-start justify-between mb-4">
+                    <h3 className="text-xl font-semibold text-secondary-900 dark:text-white">{preset.name}</h3>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleEditPreset(preset.id)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+                        title="Edit preset"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDeletePreset(preset.id)}
+                        className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                        title="Delete preset"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="mb-4">
+                    <div className="flex items-center gap-2 text-sm text-secondary-600 dark:text-secondary-400">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                      <span>{preset.habits.length} {preset.habits.length === 1 ? 'habit' : 'habits'}</span>
+                    </div>
+                  </div>
+
+                  <div className="mb-4 max-h-32 overflow-y-auto">
+                    <div className="space-y-2">
+                      {preset.habits.slice(0, 3).map((habit, idx) => (
+                        <div key={idx} className="text-sm text-secondary-700 dark:text-secondary-300 flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${
+                            habit.combatType === 'attack' ? 'bg-blue-500' :
+                            habit.combatType === 'defence' ? 'bg-red-500' :
+                            'bg-gray-400'
+                          }`}></div>
+                          <span className="truncate">{habit.name || 'Untitled habit'}</span>
+                        </div>
+                      ))}
+                      {preset.habits.length > 3 && (
+                        <div className="text-xs text-secondary-500 dark:text-secondary-400">
+                          + {preset.habits.length - 3} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleLoadPreset(preset.id)}
+                    disabled={!!group?.activeChallenge}
+                    className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
+                      group?.activeChallenge
+                        ? 'bg-gray-400 dark:bg-gray-600 text-gray-700 dark:text-gray-300 cursor-not-allowed'
+                        : 'bg-primary-600 hover:bg-primary-700 text-white'
+                    }`}
+                  >
+                    {group?.activeChallenge ? 'Challenge Active' : 'Load Preset'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === 'attendance' && (
         <div>
           <div className="mb-8">
@@ -4313,6 +4644,279 @@ const GroupDetail = () => {
         </div>
       )}
 
+      {/* Preset Creation/Edit Modal */}
+      {showPresetModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl sm:text-2xl font-semibold text-secondary-900 dark:text-white">
+                  {editingPresetId ? 'Edit Preset' : 'Create Preset'}
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowPresetModal(false);
+                    setPresetFormData({ name: '', habits: [] });
+                    setEditingPresetId(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              {/* Preset Name */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Preset Name</label>
+                <input
+                  type="text"
+                  value={presetFormData.name}
+                  onChange={(e) => setPresetFormData({ ...presetFormData, name: e.target.value })}
+                  placeholder="e.g., Morning Routine, Daily Fitness"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+
+              {/* Habits List */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
+                    Habits ({presetFormData.habits.length})
+                  </h3>
+                  <button
+                    onClick={handleAddPresetHabit}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    + Add Habit
+                  </button>
+                </div>
+
+                {presetFormData.habits.length === 0 ? (
+                  <div className="text-center py-8 border border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+                    <p className="text-gray-500 dark:text-gray-400">No habits yet. Click "Add Habit" to get started.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {presetFormData.habits.map((habit, index) => (
+                      <div key={index} className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="flex-1 space-y-3">
+                            {/* Habit Name */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Habit Name</label>
+                              <input
+                                type="text"
+                                value={habit.name}
+                                onChange={(e) => handleUpdatePresetHabit(index, 'name', e.target.value)}
+                                placeholder="e.g., Drink Water"
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-600 dark:text-white"
+                              />
+                            </div>
+
+                            {/* Habit Type */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
+                              <div className="grid grid-cols-3 gap-2">
+                                {['boolean', 'numeric', 'text'].map(type => (
+                                  <button
+                                    key={type}
+                                    type="button"
+                                    onClick={() => handleUpdatePresetHabit(index, 'habitType', type)}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                                      habit.habitType === type
+                                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                                        : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
+                                    }`}
+                                  >
+                                    {type === 'boolean' ? 'Checkbox' : type === 'numeric' ? 'Numeric' : 'Text'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Numeric fields */}
+                            {habit.habitType === 'numeric' && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Min</label>
+                                  <input
+                                    type="number"
+                                    value={habit.minValue ?? ''}
+                                    onChange={(e) => handleUpdatePresetHabit(index, 'minValue', e.target.value === '' ? undefined : parseInt(e.target.value) || 0)}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-600 dark:text-white"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Max</label>
+                                  <input
+                                    type="number"
+                                    value={habit.maxValue ?? ''}
+                                    onChange={(e) => handleUpdatePresetHabit(index, 'maxValue', e.target.value === '' ? undefined : parseInt(e.target.value) || 0)}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-600 dark:text-white"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Text prompt */}
+                            {habit.habitType === 'text' && (
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Prompt</label>
+                                <input
+                                  type="text"
+                                  value={habit.prompt || ''}
+                                  onChange={(e) => handleUpdatePresetHabit(index, 'prompt', e.target.value)}
+                                  placeholder="e.g., What did you learn today?"
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-600 dark:text-white"
+                                />
+                              </div>
+                            )}
+
+                            {/* Combat Type */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Combat Type</label>
+                              <div className="grid grid-cols-3 gap-2">
+                                {['neutral', 'attack', 'defence'].map(type => (
+                                  <button
+                                    key={type}
+                                    type="button"
+                                    onClick={() => handleUpdatePresetHabit(index, 'combatType', type)}
+                                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                                      habit.combatType === type
+                                        ? type === 'attack' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                                          : type === 'defence' ? 'border-red-500 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                                          : 'border-gray-500 bg-gray-100 dark:bg-gray-600'
+                                        : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
+                                    }`}
+                                  >
+                                    {type.charAt(0).toUpperCase() + type.slice(1)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Schedule Days Selection */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Schedule Days</label>
+                              
+                              {/* Quick Presets */}
+                              <div className="flex flex-wrap gap-2 mb-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdatePresetHabit(index, 'scheduleDays', ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])}
+                                  className={`px-2 py-1 text-xs rounded-lg transition-colors ${
+                                    habit.scheduleDays?.length === 7 
+                                      ? 'bg-blue-600 text-white' 
+                                      : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                  }`}
+                                >
+                                  Everyday
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdatePresetHabit(index, 'scheduleDays', ['Monday', 'Wednesday', 'Friday'])}
+                                  className={`px-2 py-1 text-xs rounded-lg transition-colors ${
+                                    JSON.stringify((habit.scheduleDays || []).sort()) === JSON.stringify(['Friday', 'Monday', 'Wednesday'].sort())
+                                      ? 'bg-blue-600 text-white' 
+                                      : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                  }`}
+                                >
+                                  Mon, Wed, Fri
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdatePresetHabit(index, 'scheduleDays', ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'])}
+                                  className={`px-2 py-1 text-xs rounded-lg transition-colors ${
+                                    JSON.stringify((habit.scheduleDays || []).sort()) === JSON.stringify(['Friday', 'Monday', 'Thursday', 'Tuesday', 'Wednesday'].sort())
+                                      ? 'bg-blue-600 text-white' 
+                                      : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                  }`}
+                                >
+                                  Weekdays
+                                </button>
+                              </div>
+
+                              {/* Day Checkboxes */}
+                              <div className="grid grid-cols-7 gap-1">
+                                {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => (
+                                  <label 
+                                    key={day} 
+                                    className={`flex flex-col items-center p-1.5 border rounded-lg cursor-pointer transition-colors ${
+                                      (habit.scheduleDays || []).includes(day)
+                                        ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-500 text-blue-700 dark:text-blue-300'
+                                        : 'bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={(habit.scheduleDays || []).includes(day)}
+                                      onChange={(e) => {
+                                        const currentDays = habit.scheduleDays || [];
+                                        if (e.target.checked) {
+                                          handleUpdatePresetHabit(index, 'scheduleDays', [...currentDays, day]);
+                                        } else {
+                                          handleUpdatePresetHabit(index, 'scheduleDays', currentDays.filter(d => d !== day));
+                                        }
+                                      }}
+                                      className="sr-only"
+                                    />
+                                    <span className="text-xs font-medium">{day.slice(0, 3)}</span>
+                                  </label>
+                                ))}
+                              </div>
+                              
+                              {/* Validation message */}
+                              {(!habit.scheduleDays || habit.scheduleDays.length === 0) && (
+                                <p className="text-xs text-red-500 dark:text-red-400 mt-1">
+                                  Please select at least one day for the habit schedule
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRemovePresetHabit(index)}
+                            className="ml-4 text-red-500 hover:text-red-700 dark:text-red-400"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 sm:p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowPresetModal(false);
+                  setPresetFormData({ name: '', habits: [] });
+                  setEditingPresetId(null);
+                }}
+                className="px-6 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePreset}
+                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
+              >
+                {editingPresetId ? 'Update Preset' : 'Save Preset'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -84,9 +84,24 @@ socketio = SocketIO(app, cors_allowed_origins=[
 db.init_app(app)
 migrate = Migrate(app, db)
 
+# Handle OPTIONS requests for CORS
+@app.before_request
+def handle_preflight():
+    if request.method == 'OPTIONS':
+        response = jsonify({})
+        origin = request.headers.get('Origin', '*')
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
 # Add request logging middleware
 @app.before_request
 def log_request_info():
+    # Skip logging for OPTIONS requests
+    if request.method == 'OPTIONS':
+        return
     app.logger.info('Headers: %s', dict(request.headers))
     app.logger.info('Body: %s', request.get_data())
 

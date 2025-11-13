@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from db.models import db, User, Group, GroupChallenge, Message, SkillDevelopmentChart
+from db.models import db, User, Group, GroupChallenge, Message, SkillDevelopmentChart, HabitPreset
 import uuid
 import stripe
 import logging
@@ -107,6 +107,95 @@ def get_my_groups():
         }), 200
     except Exception as e:
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+# Habit Preset endpoints (must be before /<group_id> routes)
+@groups_bp.route('/habit-presets', methods=['GET'])
+@jwt_required()
+def get_habit_presets():
+    """Get all habit presets for the current user"""
+    try:
+        user_id = get_jwt_identity()
+        presets = HabitPreset.query.filter_by(user_id=user_id).all()
+        return jsonify({'presets': [preset.to_dict() for preset in presets]}), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/habit-presets', methods=['POST'])
+@jwt_required()
+def create_habit_preset():
+    """Create a new habit preset"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        name = data.get('name')
+        habits = data.get('habits', [])
+        
+        if not name or not habits:
+            return jsonify({'error': 'Name and habits are required'}), 400
+        
+        preset = HabitPreset(
+            user_id=user_id,
+            name=name,
+            habits=habits
+        )
+        db.session.add(preset)
+        db.session.commit()
+        
+        return jsonify({'preset': preset.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/habit-presets/<int:preset_id>', methods=['PUT'])
+@jwt_required()
+def update_habit_preset(preset_id):
+    """Update an existing habit preset"""
+    try:
+        user_id = get_jwt_identity()
+        preset = HabitPreset.query.get(preset_id)
+        
+        if not preset:
+            return jsonify({'error': 'Preset not found'}), 404
+        
+        if str(preset.user_id) != str(user_id):
+            return jsonify({'error': 'Unauthorized'}), 403
+        
+        data = request.get_json()
+        preset.name = data.get('name', preset.name)
+        preset.habits = data.get('habits', preset.habits)
+        preset.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        return jsonify({'preset': preset.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/habit-presets/<int:preset_id>', methods=['DELETE'])
+@jwt_required()
+def delete_habit_preset(preset_id):
+    """Delete a habit preset"""
+    try:
+        user_id = get_jwt_identity()
+        preset = HabitPreset.query.get(preset_id)
+        
+        if not preset:
+            return jsonify({'error': 'Preset not found'}), 404
+        
+        if str(preset.user_id) != str(user_id):
+            return jsonify({'error': 'Unauthorized'}), 403
+        
+        db.session.delete(preset)
+        db.session.commit()
+        
+        return jsonify({'message': 'Preset deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
 
 @groups_bp.route('/<group_id>', methods=['GET'])
 @jwt_required()
