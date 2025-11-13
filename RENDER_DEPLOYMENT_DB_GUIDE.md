@@ -37,14 +37,19 @@ git push origin main  # or your branch name
 4. Run the following commands:
 
 ```bash
-# Navigate to server directory
-cd server
+# Navigate to parent directory (where server/ is located)
+cd /opt/render/project/src
 
-# Set up environment (if needed)
-source venv/bin/activate  # or python -m venv venv if needed
+# Set Flask app environment variable (required)
+export FLASK_APP=server.server:app
 
 # Run the migration
 flask db upgrade
+
+# Or if you're already in the server directory, add PYTHONPATH:
+# export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH
+# export FLASK_APP=server:app
+# flask db upgrade
 ```
 
 **Option B: Using Render Build Command**
@@ -54,7 +59,7 @@ You can add the migration to your build command. In your Render service settings
 1. Go to **Settings** → **Build Command**
 2. Add migration to your build command:
 ```bash
-cd server && pip install -r requirements.txt && flask db upgrade && gunicorn server:app --timeout 120 --workers 2 --bind 0.0.0.0:$PORT
+cd server && pip install -r requirements.txt && FLASK_APP=server:app flask db upgrade && gunicorn server:app --timeout 120 --workers 2 --bind 0.0.0.0:$PORT
 ```
 
 **Option C: Manual SQL (If migrations fail)**
