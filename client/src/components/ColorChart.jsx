@@ -29,6 +29,9 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
   const [saving, setSaving] = useState(false);
   const hasFetchedGroupTypeRef = useRef(!!propGroupType);
   const previousGroupTypeRef = useRef(resolvedGroupType);
+  const previousTermRef = useRef(null); // Track previous term to save before switching
+  const isSwitchingTermRef = useRef(false); // Flag to prevent auto-save during term switch
+  const pendingOperationRef = useRef(null); // Track pending save/load operations to prevent rapid switches
 
   useEffect(() => {
     if (propGroupType) {
@@ -285,11 +288,36 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
       }
     }
     
-    console.log('Saving skill chart data:', { groupId: targetGroupId, memberId, term, skillLevels, colorScheme });
+    // Filter skillLevels to only include data for the specified term
+    // This prevents overwriting other terms' data when switching terms
+    const termSpecificSkillLevels = {};
+    Object.keys(skillLevels).forEach(key => {
+      if (key.startsWith(`${term}-`)) {
+        termSpecificSkillLevels[key] = skillLevels[key];
+      }
+    });
+    
+    // Don't save empty data if we're switching terms rapidly
+    // If there's no data for this term in skillLevels, and we're currently loading,
+    // it means we haven't loaded the data yet - don't overwrite with empty
+    const hasDataForTerm = Object.keys(termSpecificSkillLevels).length > 0;
+    if (!hasDataForTerm && loading && isSwitchingTermRef.current) {
+      console.log('Save skipped: no data for term and switch in progress - data may not be loaded yet');
+      return;
+    }
+    
+    console.log('Saving skill chart data:', { 
+      groupId: targetGroupId, 
+      memberId, 
+      term, 
+      totalSkillLevels: Object.keys(skillLevels).length,
+      termSpecificSkillLevels: Object.keys(termSpecificSkillLevels).length,
+      colorScheme 
+    });
     setSaving(true);
     try {
       const response = await api.put(`/groups/${targetGroupId}/members/${memberId}/skill-charts/${term}`, {
-        skillLevels: skillLevels,
+        skillLevels: termSpecificSkillLevels, // Only save data for this specific term
         colorScheme: colorScheme
       });
       console.log('Save successful:', response.data);
@@ -317,24 +345,98 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
   useEffect(() => {
     if (!memberId) return;
     if (!termConfig[activeTerm]) return;
-    loadSkillChartData();
+    
+    // Set loading to true immediately to hide the chart grid
+    // This prevents the old chart from showing for even a split second
+    setLoading(true);
+    
+    // Don't clear skillLevels here - the loading state will hide the chart
+    // Clearing would trigger auto-save and overwrite data
+    
+    // If we're switching terms, save the previous term's data first
+    if (previousTermRef.current && previousTermRef.current !== activeTerm && isLeader) {
+      isSwitchingTermRef.current = true;
+      const previousTerm = previousTermRef.current;
+      
+      // Track the pending operation to prevent rapid switches
+      const operationPromise = (async () => {
+        try {
+          // Check if we actually have data for the previous term before saving
+          // This prevents saving empty data when switching rapidly
+          const hasPreviousTermData = Object.keys(skillLevels).some(key => 
+            key.startsWith(`${previousTerm}-`)
+          );
+          
+          if (hasPreviousTermData) {
+            // Save previous term's data before loading new term
+            // saveSkillChartData now filters by term, so we can call it safely
+            // This is critical: we MUST save the previous term before loading the new one
+            // to prevent data loss
+            console.log('Saving previous term data before switch:', previousTerm);
+            await saveSkillChartData(previousTerm);
+          } else {
+            console.log('Skipping save for previous term - no data in state (may not have been loaded yet)');
+          }
+          
+          // After saving (or skipping), load the new term
+          await loadSkillChartData();
+        } catch (err) {
+          console.error('Error during term switch operation:', err);
+          // Still load new term even if save fails (user can retry)
+          await loadSkillChartData();
+        } finally {
+          isSwitchingTermRef.current = false;
+          pendingOperationRef.current = null;
+        }
+      })();
+      
+      pendingOperationRef.current = operationPromise;
+    } else {
+      // Normal load (mount or first term)
+      const operationPromise = (async () => {
+        try {
+          await loadSkillChartData();
+        } finally {
+          pendingOperationRef.current = null;
+        }
+      })();
+      pendingOperationRef.current = operationPromise;
+    }
+    
+    // Update previous term reference AFTER we've handled the save
+    // This ensures we always save before switching
+    previousTermRef.current = activeTerm;
   }, [groupId, memberId, activeTerm, termConfig]);
 
   // Auto-save when skill levels or color scheme changes (with debounce)
+  // NOTE: We exclude activeTerm from dependencies to prevent saving wrong term's data
   useEffect(() => {
     if (!isLeader) {
       console.log('Auto-save skipped: not a leader');
       return;
     }
     
+    // Don't auto-save if we're in the middle of switching terms
+    if (isSwitchingTermRef.current) {
+      console.log('Auto-save skipped: term switch in progress');
+      return;
+    }
+    
     console.log('Auto-save effect triggered:', { skillLevels, colorScheme, activeTerm });
     const timeoutId = setTimeout(() => {
+      // Double-check we're not switching terms (race condition protection)
+      if (isSwitchingTermRef.current) {
+        console.log('Auto-save cancelled: term switch detected during timeout');
+        return;
+      }
+      
       console.log('Auto-save timeout triggered, calling saveSkillChartData');
+      // saveSkillChartData filters by activeTerm, so this is safe
       saveSkillChartData();
     }, 1000); // Auto-save after 1 second of no changes
 
     return () => clearTimeout(timeoutId);
-  }, [skillLevels, colorScheme, activeTerm]);
+  }, [skillLevels, colorScheme]); // Removed activeTerm from dependencies - this prevents saving wrong term's data
 
   // Get skill level for a specific skill and block
   const getSkillLevel = (skillName, blockNumber) => {
@@ -541,16 +643,52 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
           {Object.entries(termConfig).map(([key, config]) => (
             <button
               key={key}
-              onClick={() => {
+              onClick={async () => {
+                // Prevent rapid term switching - wait for pending operations to complete
+                if (pendingOperationRef.current) {
+                  console.log('Term switch blocked: pending operation in progress');
+                  return;
+                }
+                
+                // If in edit mode, save and exit edit mode before switching
+                if (activeTerm !== key && (isEditingColors || isEditingSkills)) {
+                  setLoading(true);
+                  isSwitchingTermRef.current = true;
+                  
+                  // Save current term's data first (this ensures any unsaved edits are saved)
+                  try {
+                    await saveSkillChartData(activeTerm);
+                    console.log('Saved current term data before switching (edit mode was on)');
+                  } catch (err) {
+                    console.error('Error saving before term switch:', err);
+                  }
+                  
+                  // Turn off edit modes
+                  setIsEditingColors(false);
+                  setIsEditingSkills(false);
+                  
+                  // Small delay to ensure save completes before switching
+                  await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                // Set loading immediately to hide chart before state updates
+                if (activeTerm !== key) {
+                  setLoading(true);
+                  // Set flag to prevent auto-save from running during term switch
+                  isSwitchingTermRef.current = true;
+                }
+                // setActiveTerm will trigger the useEffect that handles saving/loading
                 setActiveTerm(key);
-                loadSkillChartData(key);
               }}
+              disabled={pendingOperationRef.current !== null}
               className={`px-3 py-2 rounded-md font-medium transition-colors text-xs sm:text-sm ${
                 activeTerm === key
                   ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
+                  : pendingOperationRef.current
+                  ? 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
               }`}
-              title={config.dates}
+                      title={config.dates}
             >
               {config.name}
             </button>
@@ -606,21 +744,13 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
       </div>
 
 
-       {/* Loading/Saving Indicators */}
-       {(loading || saving) && (
+       {/* Saving Indicator (only show when saving, not loading) */}
+       {saving && !loading && (
          <div className="mb-4 text-center">
-           {loading && (
-             <div className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400">
-               <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-               <span className="text-sm font-medium">Loading skill chart data...</span>
-             </div>
-           )}
-           {saving && (
-             <div className="inline-flex items-center gap-2 text-green-600 dark:text-green-400">
-               <div className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
-               <span className="text-sm font-medium">Saving changes...</span>
-             </div>
-           )}
+           <div className="inline-flex items-center gap-2 text-green-600 dark:text-green-400">
+             <div className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
+             <span className="text-sm font-medium">Saving changes...</span>
+           </div>
          </div>
        )}
 
@@ -682,15 +812,30 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
       )}
 
       {/* Skills Chart */}
-      {isEditingSkills && (
+      {isEditingSkills && !loading && (
         <div className="mb-4 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
           <p className="text-sm text-purple-700 dark:text-purple-300 text-center font-medium">
             💡 Skills editing mode ({activeTermConfig.name}): Click on any cell in the chart below to cycle through development levels
           </p>
         </div>
       )}
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse border border-gray-300 dark:border-gray-600">
+      {loading ? (
+        /* Loading State - Show spinner instead of chart */
+        <div className="flex items-center justify-center py-16 bg-gray-50 dark:bg-gray-800 rounded-lg">
+          <div className="text-center">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Loading skill chart data...
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Please wait while we load the data for {activeTermConfig.name}
+            </p>
+          </div>
+        </div>
+      ) : (
+        /* Chart Table - Only show when data is loaded */
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse border border-gray-300 dark:border-gray-600">
           {/* Header Row */}
           <thead>
             <tr className="bg-gray-100 dark:bg-gray-700">
@@ -756,7 +901,8 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
             ))}
           </tbody>
         </table>
-      </div>
+        </div>
+      )}
 
       {/* Instructions */}
       <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
