@@ -29,7 +29,18 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Configure logging
+# Configure logging - always log to console for debugging
+# Force stdout for PowerShell compatibility
+import sys
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(message)s'
+))
+console_handler.setLevel(logging.INFO)
+app.logger.addHandler(console_handler)
+app.logger.setLevel(logging.INFO)
+
+# Also log to file in production
 if not app.debug:
     os.makedirs('logs', exist_ok=True)
     file_handler = RotatingFileHandler('logs/rituo.log', maxBytes=10240, backupCount=10)
@@ -38,8 +49,14 @@ if not app.debug:
     ))
     file_handler.setLevel(logging.INFO)
     app.logger.addHandler(file_handler)
-    app.logger.setLevel(logging.INFO)
-    app.logger.info('Rituo startup')
+
+# Print to stdout only in development (helps with PowerShell debugging)
+# In production, rely on proper logging
+if os.getenv('FLASK_ENV') == 'development' or os.getenv('DEBUG') == 'True':
+    print("=" * 60)
+    print("Rituo Server Starting...")
+    print("=" * 60)
+app.logger.info('Rituo startup')
 
 # Configure app
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
@@ -56,26 +73,35 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 # Initialize extensions
 jwt = JWTManager(app)
+
+# Configure CORS - must be before any route handlers
+# Explicitly list all allowed origins for development and production
+allowed_origins = [
+    "http://localhost:5173",  # Development
+    "http://localhost:5174",  # Development (alternate port)
+    "http://localhost:4173",  # Production preview
+]
+
+# Add production URL if it exists
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    allowed_origins.append(frontend_url)
+
+# Apply CORS to all routes - use simple origins list
+# This ensures Flask-CORS handles ALL routes including OPTIONS preflight
 CORS(app, 
-     resources={r"/*": {
-         "origins": [
-             "http://localhost:5173",  # Development
-             "http://localhost:4173",  # Production preview
-             os.getenv("FRONTEND_URL", "https://rituo-client.onrender.com")
-         ],
-         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         "allow_headers": ["Content-Type", "Authorization"],
-         "expose_headers": ["Content-Type", "Authorization"],
-         "max_age": 3600,
-         "send_wildcard": False,
-         "vary_header": True,
-         "automatic_options": True
-     }},
-     supports_credentials=True)
+     origins=allowed_origins,
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+     allow_headers=["Content-Type", "Authorization"],
+     expose_headers=["Content-Type", "Authorization"],
+     max_age=3600,
+     supports_credentials=True,
+     automatic_options=True)
 
 # Initialize SocketIO with CORS support
 socketio = SocketIO(app, cors_allowed_origins=[
     "http://localhost:5173",  # Development
+    "http://localhost:5174",  # Development (alternate port)
     "http://localhost:4173",  # Production preview
     os.getenv("FRONTEND_URL", "https://rituo-client.onrender.com")
 ])
@@ -84,26 +110,60 @@ socketio = SocketIO(app, cors_allowed_origins=[
 db.init_app(app)
 migrate = Migrate(app, db)
 
-# Handle OPTIONS requests for CORS
-@app.before_request
-def handle_preflight():
-    if request.method == 'OPTIONS':
-        response = jsonify({})
-        origin = request.headers.get('Origin', '*')
-        response.headers.add('Access-Control-Allow-Origin', origin)
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        return response
+# Add request logging middleware - log ALL requests including OPTIONS
+# Only print to stdout in development to avoid cluttering production logs
+DEBUG_MODE = os.getenv('FLASK_ENV') == 'development' or os.getenv('DEBUG') == 'True'
 
-# Add request logging middleware
 @app.before_request
 def log_request_info():
-    # Skip logging for OPTIONS requests
+    origin = request.headers.get('Origin', 'No Origin')
+    log_msg = f'[{request.method}] {request.path} - Origin: {origin}'
+    if DEBUG_MODE:
+        print(log_msg)  # Print to stdout only in development
+    app.logger.info(log_msg)
+    
     if request.method == 'OPTIONS':
-        return
-    app.logger.info('Headers: %s', dict(request.headers))
-    app.logger.info('Body: %s', request.get_data())
+        preflight_msg = f'CORS Preflight: {request.headers.get("Access-Control-Request-Method")} from {origin}'
+        if DEBUG_MODE:
+            print(preflight_msg)
+        app.logger.info(preflight_msg)
+        headers_msg = f'Request Headers: Access-Control-Request-Method: {request.headers.get("Access-Control-Request-Method")}, Access-Control-Request-Headers: {request.headers.get("Access-Control-Request-Headers")}'
+        if DEBUG_MODE:
+            print(headers_msg)
+        app.logger.info(headers_msg)
+        # Don't manually add headers - let Flask-CORS handle it
+        if DEBUG_MODE:
+            print(f'✓ Letting Flask-CORS handle preflight for origin: {origin}')
+        # Don't return - let Flask-CORS handle the OPTIONS request
+    
+    if request.method != 'OPTIONS':
+        app.logger.info(f'Request Headers: {dict(request.headers)}')
+        if request.is_json:
+            body_msg = f'Request Body: {request.get_json()}'
+            if DEBUG_MODE:
+                print(body_msg)
+            app.logger.info(body_msg)
+        else:
+            body_msg = f'Request Body (raw): {request.get_data()}'
+            if DEBUG_MODE:
+                print(body_msg)
+            app.logger.info(body_msg)
+
+# Add CORS headers manually ONLY if Flask-CORS didn't add them (as a fallback)
+@app.after_request
+def add_cors_headers(response):
+    # Only add if Flask-CORS didn't already add the header
+    if 'Access-Control-Allow-Origin' not in response.headers:
+        origin = request.headers.get('Origin')
+        if origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Max-Age'] = '3600'
+            if DEBUG_MODE:
+                print(f'✓ Added fallback CORS headers for origin: {origin}')
+    return response
 
 # JWT error handlers
 @jwt.expired_token_loader
@@ -395,12 +455,86 @@ scheduler.add_job(
 
 @app.route('/')
 def index():
-    return {"message": "Welcome to Rituo API"}
+    if DEBUG_MODE:
+        print("Root endpoint accessed")
+    app.logger.info('Root endpoint accessed')
+    return jsonify({"message": "Welcome to Rituo API"})
+
+# 404 error handler to debug routing issues
+@app.errorhandler(404)
+def not_found(error):
+    if DEBUG_MODE:
+        print(f"404 Error: Requested path was: {request.path}")
+        print(f"404 Error: Request method: {request.method}")
+    app.logger.warning(f'404 Not Found: {request.method} {request.path}')
+    return jsonify({
+        "error": "Not found",
+        "path": request.path if DEBUG_MODE else None,  # Hide path in production for security
+        "method": request.method if DEBUG_MODE else None,
+        "message": f"The endpoint {request.path} does not exist" if DEBUG_MODE else "Not found"
+    }), 404
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    if DEBUG_MODE:
+        print("Health check endpoint accessed")
+    app.logger.info('Health check accessed')
+    return jsonify({
+        "service": "rituo-backend",
+        "status": "healthy",
+        "allowed_origins": allowed_origins if DEBUG_MODE else ["production-url-hidden"],
+        "message": "Rituo server is running"
+    }), 200
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """Health check endpoint under /api"""
+    if DEBUG_MODE:
+        print("API health check endpoint accessed")
+    app.logger.info('API health check accessed')
+    return jsonify({
+        "status": "ok",
+        "allowed_origins": allowed_origins if DEBUG_MODE else ["production-url-hidden"],
+        "message": "Server is running"
+    }), 200
 
 if __name__ == '__main__':
     # Start the scheduler
     scheduler.start()
+    if DEBUG_MODE:
+        print("✓ Scheduler started")
+    app.logger.info('Scheduler started')
     
     # Run the Flask app with SocketIO
     port = int(os.getenv("PORT", 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    if DEBUG_MODE:
+        print("=" * 60)
+        print(f"Starting Rituo Server")
+        print(f"Port: {port}")
+        print(f"Host: 0.0.0.0 (accessible from localhost:{port})")
+        print(f"Allowed CORS origins: {allowed_origins}")
+        print(f"Test endpoint: http://localhost:{port}/health")
+        print("=" * 60)
+        print(f"\n🚀 Server is running! Waiting for requests...\n")
+    
+    app.logger.info('=' * 60)
+    app.logger.info(f'Starting Rituo Server')
+    app.logger.info(f'Port: {port}')
+    app.logger.info(f'Host: 0.0.0.0')
+    # Only log CORS origins in development (security: don't expose in production logs)
+    if DEBUG_MODE:
+        app.logger.info(f'Allowed CORS origins: {allowed_origins}')
+    else:
+        app.logger.info(f'CORS configured with {len(allowed_origins)} allowed origins')
+    app.logger.info('=' * 60)
+    
+    try:
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    except Exception as e:
+        if DEBUG_MODE:
+            print(f"ERROR starting server: {e}")
+            import traceback
+            traceback.print_exc()
+        app.logger.error(f"ERROR starting server: {e}")
+        raise

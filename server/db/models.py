@@ -20,6 +20,40 @@ user_active_challenges = db.Table('user_active_challenges',
     db.Column('challenge_id', db.Integer, db.ForeignKey('group_challenges.id'), primary_key=True)
 )
 
+# Association table for coaches (co-leaders) in groups
+group_coaches = db.Table('group_coaches',
+    db.Column('coach_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
+    db.Column('group_id', db.Integer, db.ForeignKey('groups.id'), primary_key=True)
+)
+
+# Table for coach-student assignments
+class CoachAssignment(db.Model):
+    __tablename__ = 'coach_assignments'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    coach_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    coach = db.relationship('User', foreign_keys=[coach_id])
+    group = db.relationship('Group', foreign_keys=[group_id], back_populates='coach_assignments')
+    student = db.relationship('User', foreign_keys=[student_id])
+    
+    __table_args__ = (db.UniqueConstraint('coach_id', 'group_id', 'student_id', name='uq_coach_assignment'),)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'coachId': self.coach_id,
+            'groupId': self.group_id,
+            'studentId': self.student_id,
+            'coach': self.coach.to_dict() if self.coach else None,
+            'student': self.student.to_dict() if self.student else None,
+            'createdAt': self.created_at.isoformat() if self.created_at else None
+        }
+
 class User(db.Model):
     __tablename__ = 'users'
     
@@ -137,6 +171,8 @@ class Group(db.Model):
     leader = db.relationship('User', foreign_keys=[leader_id])
     active_challenge = db.relationship('GroupChallenge', foreign_keys=[active_challenge_id])
     messages = db.relationship('Message', back_populates='group', cascade='all, delete-orphan')
+    coaches = db.relationship('User', secondary=group_coaches, backref=db.backref('coaching_groups', lazy='dynamic'))
+    coach_assignments = db.relationship('CoachAssignment', back_populates='group', cascade='all, delete-orphan')
     
     def to_dict(self):
         return {
@@ -145,6 +181,7 @@ class Group(db.Model):
             'groupId': self.group_id,
             'leader': self.leader.to_dict() if self.leader else None,
             'members': [member.to_dict() for member in self.members],
+            'coaches': [coach.to_dict() for coach in self.coaches],
             'activeChallenge': self.active_challenge.to_dict() if self.active_challenge else None,
             'groupType': self.group_type or 'school',
             'createdAt': self.created_at.isoformat()
@@ -202,12 +239,16 @@ class SkillDevelopmentChart(db.Model):
     term = db.Column(db.String(20), nullable=False)  # 'easter' or 'summer'
     skill_levels = db.Column(db.JSON, nullable=False)  # Store skill level data as JSON
     color_scheme = db.Column(db.JSON, nullable=True)  # Store custom color scheme as JSON
+    edit_history = db.Column(db.JSON, nullable=True)  # Store edit history: {cellKey: {editorId, editorName, editedAt}}
+    last_edited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    last_edited_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     group = db.relationship('Group', foreign_keys=[group_id])
     member = db.relationship('User', foreign_keys=[member_id])
+    last_edited_by = db.relationship('User', foreign_keys=[last_edited_by_id])
     
     __table_args__ = (db.UniqueConstraint('group_id', 'member_id', 'term', name='uq_skill_chart_group_member_term'),)
     
@@ -219,6 +260,9 @@ class SkillDevelopmentChart(db.Model):
             'term': self.term,
             'skillLevels': self.skill_levels,
             'colorScheme': self.color_scheme,
+            'editHistory': self.edit_history or {},
+            'lastEditedBy': self.last_edited_by.to_dict() if self.last_edited_by else None,
+            'lastEditedAt': self.last_edited_at.isoformat() if self.last_edited_at else None,
             'createdAt': self.created_at.isoformat() if self.created_at else None,
             'updatedAt': self.updated_at.isoformat() if self.updated_at else None
         }

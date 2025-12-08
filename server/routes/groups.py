@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from db.models import db, User, Group, GroupChallenge, Message, SkillDevelopmentChart, HabitPreset
+from db.models import db, User, Group, GroupChallenge, Message, SkillDevelopmentChart, HabitPreset, CoachAssignment
 import uuid
 import stripe
 import logging
@@ -208,6 +208,213 @@ def delete_habit_preset(preset_id):
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 
+# Coach Management Endpoints
+@groups_bp.route('/<group_id>/coaches', methods=['GET'])
+@jwt_required()
+def get_coaches(group_id):
+    """Get all coaches for a group"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+        # Only group leader can view coaches
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can view coaches'}), 403
+        
+        coaches = [coach.to_dict() for coach in group.coaches]
+        return jsonify({'coaches': coaches}), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/coaches', methods=['POST'])
+@jwt_required()
+def promote_to_coach(group_id):
+    """Promote a member to coach (co-leader)"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        data = request.get_json()
+        member_id = data.get('memberId')
+        
+        if not member_id:
+            return jsonify({'error': 'memberId is required'}), 400
+        
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+        # Only group leader can promote coaches
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can promote coaches'}), 403
+        
+        # Check if member is in the group
+        member = User.query.get(member_id)
+        if not member or member not in group.members:
+            return jsonify({'error': 'Member not found in group'}), 404
+        
+        # Check if already a coach
+        if member in group.coaches:
+            return jsonify({'error': 'Member is already a coach'}), 400
+        
+        # Add as coach
+        group.coaches.append(member)
+        db.session.commit()
+        
+        return jsonify({'message': 'Member promoted to coach successfully', 'coach': member.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/coaches/<int:coach_id>', methods=['DELETE'])
+@jwt_required()
+def demote_coach(group_id, coach_id):
+    """Demote a coach back to regular member"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+        # Only group leader can demote coaches
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can demote coaches'}), 403
+        
+        coach = User.query.get(coach_id)
+        if not coach or coach not in group.coaches:
+            return jsonify({'error': 'Coach not found'}), 404
+        
+        # Remove coach status
+        group.coaches.remove(coach)
+        
+        # Remove all coach assignments for this coach
+        CoachAssignment.query.filter_by(
+            coach_id=coach_id,
+            group_id=group.id
+        ).delete()
+        
+        db.session.commit()
+        
+        return jsonify({'message': 'Coach demoted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/coaches/<int:coach_id>/assignments', methods=['GET'])
+@jwt_required()
+def get_coach_assignments(group_id, coach_id):
+    """Get all students assigned to a coach"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+        # Only group leader or the coach themselves can view assignments
+        if group.leader_id != current_user_id and coach_id != current_user_id:
+            return jsonify({'error': 'Unauthorized'}), 403
+        
+        assignments = CoachAssignment.query.filter_by(
+            coach_id=coach_id,
+            group_id=group.id
+        ).all()
+        
+        students = [assignment.student.to_dict() for assignment in assignments]
+        return jsonify({'students': students}), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/coaches/<int:coach_id>/assignments', methods=['POST'])
+@jwt_required()
+def assign_students_to_coach(group_id, coach_id):
+    """Assign students to a coach"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        data = request.get_json()
+        student_ids = data.get('studentIds', [])
+        
+        if not student_ids:
+            return jsonify({'error': 'studentIds array is required'}), 400
+        
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+        # Only group leader can assign students
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can assign students to coaches'}), 403
+        
+        # Verify coach is a coach in this group
+        coach = User.query.get(coach_id)
+        if not coach or coach not in group.coaches:
+            return jsonify({'error': 'Coach not found in group'}), 404
+        
+        # Remove existing assignments for this coach
+        CoachAssignment.query.filter_by(
+            coach_id=coach_id,
+            group_id=group.id
+        ).delete()
+        
+        # Create new assignments
+        for student_id in student_ids:
+            # Verify student is in the group
+            student = User.query.get(student_id)
+            if student and student in group.members:
+                assignment = CoachAssignment(
+                    coach_id=coach_id,
+                    group_id=group.id,
+                    student_id=student_id
+                )
+                db.session.add(assignment)
+        
+        db.session.commit()
+        
+        return jsonify({'message': 'Students assigned to coach successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/coaches/<int:coach_id>/assignments/<int:student_id>', methods=['DELETE'])
+@jwt_required()
+def unassign_student_from_coach(group_id, coach_id, student_id):
+    """Unassign a student from a coach"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        
+        # Only group leader can unassign students
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can unassign students from coaches'}), 403
+        
+        assignment = CoachAssignment.query.filter_by(
+            coach_id=coach_id,
+            group_id=group.id,
+            student_id=student_id
+        ).first()
+        
+        if not assignment:
+            return jsonify({'error': 'Assignment not found'}), 404
+        
+        db.session.delete(assignment)
+        db.session.commit()
+        
+        return jsonify({'message': 'Student unassigned from coach successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
 @groups_bp.route('/<group_id>', methods=['GET'])
 @jwt_required()
 def get_group(group_id):
@@ -274,6 +481,99 @@ def update_group(group_id):
         db.session.commit()
         
         return jsonify({'group': group.to_dict()}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+@groups_bp.route('/<group_id>/members/<int:member_id>', methods=['DELETE'])
+@jwt_required()
+def remove_member(group_id, member_id):
+    """Remove a member from the group - only group leader can do this"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        # Only group leader can remove members
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can remove members'}), 403
+        
+        # Cannot remove the leader
+        if member_id == group.leader_id:
+            return jsonify({'error': 'Cannot remove the group leader'}), 400
+        
+        # Check if member is in the group
+        member = User.query.get(member_id)
+        if not member or member not in group.members:
+            return jsonify({'error': 'Member not found in group'}), 404
+        
+        # Remove member from group
+        group.members.remove(member)
+        
+        # If member is a coach, remove coach status and assignments
+        if member in group.coaches:
+            group.coaches.remove(member)
+            CoachAssignment.query.filter_by(
+                coach_id=member_id,
+                group_id=group.id
+            ).delete()
+        
+        db.session.commit()
+        
+        return jsonify({'message': 'Member removed from group successfully'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+@groups_bp.route('/<group_id>', methods=['DELETE'])
+@jwt_required()
+def delete_group(group_id):
+    """Delete a group and all its data - only group leader can do this"""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+            
+        # Only group leader can delete the group
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only group leader can delete the group'}), 403
+        
+        # Get all challenges for this group first
+        challenges = GroupChallenge.query.filter_by(group_id=group.id).all()
+        challenge_ids = [challenge.id for challenge in challenges]
+        
+        # Delete all related data in the correct order
+        # 1. Delete user_active_challenges associations first (must be before deleting challenges)
+        if challenge_ids:
+            from sqlalchemy import text
+            db.session.execute(
+                text('DELETE FROM user_active_challenges WHERE challenge_id IN :challenge_ids'),
+                {'challenge_ids': tuple(challenge_ids)}
+            )
+        
+        # 2. Delete coach assignments
+        CoachAssignment.query.filter_by(group_id=group.id).delete()
+        
+        # 3. Delete skill charts
+        SkillDevelopmentChart.query.filter_by(group_id=group.id).delete()
+        
+        # 4. Delete messages
+        Message.query.filter_by(group_id=group.id).delete()
+        
+        # 5. Delete challenges (member habits will be cascade deleted)
+        GroupChallenge.query.filter_by(group_id=group.id).delete()
+        
+        # 6. Delete the group itself
+        db.session.delete(group)
+        db.session.commit()
+        
+        return jsonify({'message': 'Group deleted successfully'}), 200
         
     except Exception as e:
         db.session.rollback()
@@ -1235,14 +1535,27 @@ def get_skill_chart(group_id, member_id, term):
     try:
         current_user_id = int(get_jwt_identity())
         
-        # Verify user is group owner or the member themselves
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'Group not found'}), 404
         
-            
-        if group.leader_id != current_user_id and current_user_id != member_id:
-            return jsonify({'error': 'Unauthorized'}), 403
+        # Check authorization: group leader, coach assigned to this student, or the student themselves
+        is_leader = group.leader_id == current_user_id
+        is_coach = any(coach.id == current_user_id for coach in group.coaches)
+        is_student = member_id == current_user_id
+        
+        # If coach, check if assigned to this student
+        if is_coach and not is_leader:
+            assignment = CoachAssignment.query.filter_by(
+                coach_id=current_user_id,
+                group_id=group.id,
+                student_id=member_id
+            ).first()
+            if not assignment:
+                return jsonify({'error': 'You are not assigned to monitor this student'}), 403
+        
+        if not is_leader and not is_coach and not is_student:
+            return jsonify({'error': 'Unauthorized to view this skill chart'}), 403
             
         # Check if member is in the group
         if not any(member.id == member_id for member in group.members):
@@ -1256,26 +1569,21 @@ def get_skill_chart(group_id, member_id, term):
         ).first()
         
         if not skill_chart:
-            # Create default chart if it doesn't exist
-            default_skill_levels = {}
-            default_color_scheme = {
-                'unstarted': '#ffffff',
-                'urgent': '#ef4444',      # red
-                'development': '#f97316', # orange
-                'growth': '#eab308',      # yellow
-                'aboveAverage': '#22c55e', # green
-                'excellent': '#15803d'    # dark green
-            }
-            
-            skill_chart = SkillDevelopmentChart(
-                group_id=group.id,  # Use the integer id for the database query
-                member_id=member_id,
-                term=term,
-                skill_levels=default_skill_levels,
-                color_scheme=default_color_scheme
-            )
-            db.session.add(skill_chart)
-            db.session.commit()
+            # Return default empty chart (don't create it in DB yet)
+            return jsonify({
+                'skillLevels': {},
+                'colorScheme': {
+                    'unstarted': '#ffffff',
+                    'urgent': '#ef4444',      # red
+                    'development': '#f97316', # orange
+                    'growth': '#eab308',      # yellow
+                    'aboveAverage': '#22c55e', # green
+                    'excellent': '#15803d'    # dark green
+                },
+                'editHistory': {},
+                'lastEditedBy': None,
+                'lastEditedAt': None
+            }), 200
         
         return jsonify(skill_chart.to_dict()), 200
         
@@ -1291,13 +1599,26 @@ def update_skill_chart(group_id, member_id, term):
     try:
         current_user_id = int(get_jwt_identity())
         
-        # Verify user is group owner (only group owners can edit skill charts)
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'Group not found'}), 404
-            
-        if group.leader_id != current_user_id:
-            return jsonify({'error': 'Only group owners can edit skill charts'}), 403
+        
+        # Check authorization: group leader or coach assigned to this student
+        is_leader = group.leader_id == current_user_id
+        is_coach = any(coach.id == current_user_id for coach in group.coaches)
+        
+        # If coach, check if assigned to this student
+        if is_coach and not is_leader:
+            assignment = CoachAssignment.query.filter_by(
+                coach_id=current_user_id,
+                group_id=group.id,
+                student_id=member_id
+            ).first()
+            if not assignment:
+                return jsonify({'error': 'You are not assigned to monitor this student'}), 403
+        
+        if not is_leader and not is_coach:
+            return jsonify({'error': 'Only group leaders and assigned coaches can edit skill charts'}), 403
             
         # Check if member is in the group
         if not any(member.id == member_id for member in group.members):
@@ -1306,6 +1627,11 @@ def update_skill_chart(group_id, member_id, term):
         data = request.get_json()
         skill_levels = data.get('skillLevels', {})
         color_scheme = data.get('colorScheme', {})
+        edited_cells = data.get('editedCells', [])  # Array of cell keys that were edited
+        
+        # Get current user info for edit history
+        current_user = User.query.get(current_user_id)
+        current_time = datetime.utcnow()
         
         # Get or create skill chart
         skill_chart = SkillDevelopmentChart.query.filter_by(
@@ -1314,19 +1640,37 @@ def update_skill_chart(group_id, member_id, term):
             term=term
         ).first()
         
+        # Initialize edit_history if it doesn't exist
+        edit_history = skill_chart.edit_history if skill_chart and skill_chart.edit_history else {}
+        
+        # Update edit history for edited cells
+        for cell_key in edited_cells:
+            edit_history[cell_key] = {
+                'editorId': current_user_id,
+                'editorName': current_user.username if current_user else 'Unknown',
+                'editedAt': current_time.isoformat()
+            }
+        
         if not skill_chart:
             skill_chart = SkillDevelopmentChart(
                 group_id=group.id,  # Use the integer id for the database query
                 member_id=member_id,
                 term=term,
                 skill_levels=skill_levels,
-                color_scheme=color_scheme
+                color_scheme=color_scheme,
+                edit_history=edit_history,
+                last_edited_by_id=current_user_id,
+                last_edited_at=current_time
             )
             db.session.add(skill_chart)
         else:
             skill_chart.skill_levels = skill_levels
             skill_chart.color_scheme = color_scheme
-            skill_chart.updated_at = datetime.utcnow()
+            skill_chart.edit_history = edit_history
+            skill_chart.last_edited_by_id = current_user_id
+            skill_chart.last_edited_at = current_time
+            skill_chart.updated_at = current_time
+            flag_modified(skill_chart, 'edit_history')  # Mark JSON field as modified
         
         db.session.commit()
         
