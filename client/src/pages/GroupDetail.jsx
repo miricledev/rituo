@@ -69,6 +69,19 @@ const GroupDetail = () => {
   const [newGroupType, setNewGroupType] = useState('school');
   const [timeUntilMidnight, setTimeUntilMidnight] = useState('');
   
+  // Coach Management State
+  const [coaches, setCoaches] = useState([]);
+  const [coachAssignments, setCoachAssignments] = useState({}); // { coachId: [studentIds] }
+  const [selectedCoachForAssignment, setSelectedCoachForAssignment] = useState(null);
+  const [showCoachAssignmentModal, setShowCoachAssignmentModal] = useState(false);
+  
+  // Admin Panel State
+  const [adminSidebarActive, setAdminSidebarActive] = useState('coaches'); // 'coaches', 'members', 'group'
+  const [showDeleteGroupStep, setShowDeleteGroupStep] = useState(0); // 0 = not showing, 1-3 = step number
+  const [deleteGroupConfirmText, setDeleteGroupConfirmText] = useState('');
+  const [memberToKick, setMemberToKick] = useState(null);
+  const [showKickMemberConfirm, setShowKickMemberConfirm] = useState(false);
+  
   // Habit Presets State
   const [habitPresets, setHabitPresets] = useState([]); // Stored in localStorage
   const [showPresetModal, setShowPresetModal] = useState(false);
@@ -178,6 +191,27 @@ const GroupDetail = () => {
 
   // Calculate isLeader early to avoid temporal dead zone
   const isLeader = group?.leader && user ? String(group.leader.id) === String(user.id) : false;
+  
+  // Check if current user is a coach (check both from group data and coaches state)
+  const isCoach = (group?.coaches && user ? group.coaches.some(coach => String(coach.id) === String(user.id)) : false) ||
+                   (coaches && user ? coaches.some(coach => String(coach.id) === String(user.id)) : false);
+  
+  // Get students assigned to current coach (if coach)
+  const getAssignedStudents = () => {
+    if (!isCoach || !user || !coachAssignments) return [];
+    return coachAssignments[user.id] || [];
+  };
+  
+  // Filter members based on role
+  const getAvailableMembers = () => {
+    if (!group?.members) return [];
+    if (isLeader) return group.members; // Leader sees all
+    if (isCoach) {
+      const assignedStudentIds = getAssignedStudents();
+      return group.members.filter(member => assignedStudentIds.includes(member.id));
+    }
+    return []; // Regular members can't see color charts
+  };
 
   useEffect(() => {
     fetchGroupDetails();
@@ -194,6 +228,31 @@ const GroupDetail = () => {
       fetchArchives();
     }
   }, [activeTab, isLeader, groupId]);
+
+  useEffect(() => {
+    if ((activeTab === 'coaches' || activeTab === 'admin') && isLeader) {
+      fetchCoaches();
+    }
+  }, [activeTab, isLeader, groupId]);
+
+  // Fetch coach's own assignments if they're a coach (not leader)
+  useEffect(() => {
+    if (isCoach && !isLeader && user && groupId) {
+      const fetchMyCoachAssignments = async () => {
+        try {
+          const response = await axios.get(`/groups/${groupId}/coaches/${user.id}/assignments`);
+          const studentIds = response.data.students.map(s => s.id);
+          setCoachAssignments(prev => ({
+            ...prev,
+            [user.id]: studentIds
+          }));
+        } catch (error) {
+          console.error('Error fetching coach assignments:', error);
+        }
+      };
+      fetchMyCoachAssignments();
+    }
+  }, [isCoach, isLeader, user, groupId]);
 
   useEffect(() => {
     if (activeTab === 'attendance' && isLeader) {
@@ -276,6 +335,10 @@ const GroupDetail = () => {
           ...fetchedGroup,
           groupType: fetchedGroup.groupType || 'school'
         });
+        // Update coaches state if available
+        if (fetchedGroup.coaches) {
+          setCoaches(fetchedGroup.coaches);
+        }
       } else {
         setGroup(null);
       }
@@ -534,6 +597,93 @@ const GroupDetail = () => {
       ...presetFormData,
       habits: updatedHabits
     });
+  };
+
+  // Coach Management Functions
+  const fetchCoaches = async () => {
+    if (!isLeader) return;
+    try {
+      const response = await axios.get(`/groups/${groupId}/coaches`);
+      setCoaches(response.data.coaches || []);
+      
+      // Fetch assignments for each coach
+      const assignments = {};
+      for (const coach of response.data.coaches || []) {
+        try {
+          const assignResponse = await axios.get(`/groups/${groupId}/coaches/${coach.id}/assignments`);
+          assignments[coach.id] = assignResponse.data.students.map(s => s.id);
+        } catch (error) {
+          console.error(`Error fetching assignments for coach ${coach.id}:`, error);
+          assignments[coach.id] = [];
+        }
+      }
+      setCoachAssignments(assignments);
+    } catch (error) {
+      console.error('Error fetching coaches:', error);
+    }
+  };
+
+  const handlePromoteToCoach = async (memberId) => {
+    try {
+      await axios.post(`/groups/${groupId}/coaches`, { memberId });
+      await fetchCoaches();
+      await fetchGroupDetails(); // Refresh group to get updated coaches list
+    } catch (error) {
+      console.error('Error promoting to coach:', error);
+      alert(error.response?.data?.error || 'Failed to promote member to coach');
+    }
+  };
+
+  const handleDemoteCoach = async (coachId) => {
+    if (!confirm('Are you sure you want to remove this coach? Their student assignments will also be removed.')) {
+      return;
+    }
+    try {
+      await axios.delete(`/groups/${groupId}/coaches/${coachId}`);
+      await fetchCoaches();
+      await fetchGroupDetails();
+    } catch (error) {
+      console.error('Error demoting coach:', error);
+      alert(error.response?.data?.error || 'Failed to remove coach');
+    }
+  };
+
+  const handleAssignStudents = async (coachId, studentIds) => {
+    try {
+      await axios.post(`/groups/${groupId}/coaches/${coachId}/assignments`, { studentIds });
+      await fetchCoaches();
+      setShowCoachAssignmentModal(false);
+      setSelectedCoachForAssignment(null);
+    } catch (error) {
+      console.error('Error assigning students:', error);
+      alert(error.response?.data?.error || 'Failed to assign students');
+    }
+  };
+
+  // Member Management Functions
+  const handleKickMember = async (memberId) => {
+    try {
+      await axios.delete(`/groups/${groupId}/members/${memberId}`);
+      await fetchGroupDetails();
+      setShowKickMemberConfirm(false);
+      setMemberToKick(null);
+    } catch (error) {
+      console.error('Error kicking member:', error);
+      alert(error.response?.data?.error || 'Failed to remove member');
+    }
+  };
+
+  // Group Management Functions
+  const handleDeleteGroup = async () => {
+    try {
+      await axios.delete(`/groups/${groupId}`);
+      navigate('/groups'); // Navigate to groups page after deletion
+    } catch (error) {
+      console.error('Error deleting group:', error);
+      alert(error.response?.data?.error || 'Failed to delete group');
+      setShowDeleteGroupStep(0);
+      setDeleteGroupConfirmText('');
+    }
   };
 
   const deleteActiveChallenge = async () => {
@@ -1365,6 +1515,18 @@ const GroupDetail = () => {
                 }`}
               >
                 Attendance
+              </button>
+            )}
+            {isLeader && (
+              <button
+                onClick={() => setActiveTab('admin')}
+                className={`py-2 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
+                  activeTab === 'admin'
+                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-secondary-400 dark:hover:text-secondary-300'
+                }`}
+              >
+                Admin
               </button>
             )}
           </nav>
@@ -3275,19 +3437,21 @@ const GroupDetail = () => {
       {/* Color Chart Tab */}
       {activeTab === 'colorChart' && (
                 <div>
-          {isLeader ? (
-            // Leader view - show member list or individual chart
+          {(isLeader || isCoach) ? (
+            // Leader or Coach view - show member list or individual chart
             !selectedColorChartMember ? (
               // Show member list
                 <div>
                 <div className="mb-8">
                   <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">🎨 Skill Development Charts</h2>
-                  <p className="text-secondary-600 dark:text-secondary-400 mb-4">Select a member to manage their skill development chart.</p>
+                  <p className="text-secondary-600 dark:text-secondary-400 mb-4">
+                    {isCoach ? 'Select a student to manage their skill development chart.' : 'Select a member to manage their skill development chart.'}
+                  </p>
               </div>
 
-                {group.members && group.members.length > 0 ? (
+                {getAvailableMembers().length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {group.members.map(member => (
+                    {getAvailableMembers().map(member => (
                       <div 
                         key={member.id} 
                         className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6 cursor-pointer transition-transform transform hover:scale-105 hover:shadow-xl border border-gray-200 dark:border-secondary-700"
@@ -3349,6 +3513,7 @@ const GroupDetail = () => {
                   <ColorChart 
                     memberHabit={{ member: selectedColorChartMember.id }}
                     isLeader={isLeader}
+                    isCoach={isCoach}
                     groupId={groupId}
                     groupType={group?.groupType}
                   />
@@ -4562,6 +4727,722 @@ const GroupDetail = () => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'coaches' && isLeader && (
+        <div>
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">👥 Coach Management</h2>
+                <p className="text-secondary-600 dark:text-secondary-400">Promote members to coaches and assign them specific students to monitor</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Coaches List */}
+          <div className="mb-8">
+            <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-4">Current Coaches</h3>
+            {coaches.length === 0 ? (
+              <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-8 text-center border border-gray-200 dark:border-secondary-700">
+                <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">No Coaches Yet</h3>
+                <p className="text-secondary-500 dark:text-secondary-400">Promote members to coaches to help manage students</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {coaches.map(coach => {
+                  const assignedStudents = coachAssignments[coach.id] || [];
+                  const studentCount = assignedStudents.length;
+                  return (
+                    <div key={coach.id} className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200">
+                            {coach.username?.[0]?.toUpperCase() || '?'}
+                          </div>
+                          <div>
+                            <h4 className="text-lg font-semibold text-secondary-900 dark:text-white">{coach.username}</h4>
+                            <p className="text-sm text-secondary-500 dark:text-secondary-400">{coach.email}</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDemoteCoach(coach.id)}
+                          className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                          title="Remove coach"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
+                      
+                      <div className="mb-4">
+                        <div className="flex items-center gap-2 text-sm text-secondary-600 dark:text-secondary-400 mb-2">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                          </svg>
+                          <span>{studentCount} {studentCount === 1 ? 'student' : 'students'} assigned</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setSelectedCoachForAssignment(coach);
+                          setShowCoachAssignmentModal(true);
+                        }}
+                        className="w-full py-2 px-4 rounded-lg font-medium transition-colors bg-primary-600 hover:bg-primary-700 text-white"
+                      >
+                        Manage Students
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Promote Members to Coaches */}
+          <div className="mb-8">
+            <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-4">Promote Members to Coaches</h3>
+            <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700">
+              {group?.members && group.members.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                  {group.members
+                    .filter(member => {
+                      // Exclude leader and existing coaches
+                      const isLeader = group.leader && String(group.leader.id) === String(member.id);
+                      const isCoach = coaches.some(c => c.id === member.id);
+                      return !isLeader && !isCoach;
+                    })
+                    .map(member => (
+                      <div
+                        key={member.id}
+                        className="flex items-center justify-between p-4 border border-gray-200 dark:border-secondary-700 rounded-lg hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200">
+                            {member.username?.[0]?.toUpperCase() || '?'}
+                          </div>
+                          <div>
+                            <div className="font-medium text-secondary-900 dark:text-white">{member.username}</div>
+                            <div className="text-xs text-secondary-500 dark:text-secondary-400">{member.email}</div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handlePromoteToCoach(member.id)}
+                          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg font-medium transition-colors"
+                        >
+                          Promote
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <p className="text-secondary-500 dark:text-secondary-400">No members available to promote</p>
+              )}
+            </div>
+          </div>
+
+          {/* Coach Assignment Modal */}
+          {showCoachAssignmentModal && selectedCoachForAssignment && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                <div className="p-6 border-b border-gray-200 dark:border-secondary-700">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-2xl font-bold text-secondary-900 dark:text-white">
+                      Assign Students to {selectedCoachForAssignment.username}
+                    </h3>
+                    <button
+                      onClick={() => {
+                        setShowCoachAssignmentModal(false);
+                        setSelectedCoachForAssignment(null);
+                      }}
+                      className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="p-6">
+                  <p className="text-secondary-600 dark:text-secondary-400 mb-4">
+                    Select which students this coach can monitor and edit. Coaches can only see and edit color charts for their assigned students.
+                  </p>
+                  
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {group?.members
+                      ?.filter(member => {
+                        // Exclude the coach themselves and the leader
+                        const isLeader = group.leader && String(group.leader.id) === String(member.id);
+                        const isCoach = member.id === selectedCoachForAssignment.id;
+                        return !isLeader && !isCoach;
+                      })
+                      .map(member => {
+                        const isAssigned = (coachAssignments[selectedCoachForAssignment.id] || []).includes(member.id);
+                        return (
+                          <label
+                            key={member.id}
+                            className="flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isAssigned}
+                              onChange={(e) => {
+                                const currentAssignments = coachAssignments[selectedCoachForAssignment.id] || [];
+                                if (e.target.checked) {
+                                  setCoachAssignments({
+                                    ...coachAssignments,
+                                    [selectedCoachForAssignment.id]: [...currentAssignments, member.id]
+                                  });
+                                } else {
+                                  setCoachAssignments({
+                                    ...coachAssignments,
+                                    [selectedCoachForAssignment.id]: currentAssignments.filter(id => id !== member.id)
+                                  });
+                                }
+                              }}
+                              className="w-5 h-5 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200">
+                                {member.username?.[0]?.toUpperCase() || '?'}
+                              </div>
+                              <div>
+                                <div className="font-medium text-secondary-900 dark:text-white">{member.username}</div>
+                                <div className="text-xs text-secondary-500 dark:text-secondary-400">{member.email}</div>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                  </div>
+                </div>
+
+                <div className="p-6 border-t border-gray-200 dark:border-secondary-700 flex justify-end gap-3">
+                  <button
+                    onClick={() => {
+                      setShowCoachAssignmentModal(false);
+                      setSelectedCoachForAssignment(null);
+                    }}
+                    className="px-6 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-secondary-700 dark:text-secondary-300 hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const studentIds = coachAssignments[selectedCoachForAssignment.id] || [];
+                      handleAssignStudents(selectedCoachForAssignment.id, studentIds);
+                    }}
+                    className="px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Save Assignments
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Admin Tab */}
+      {activeTab === 'admin' && isLeader && (
+        <div className="flex gap-6">
+          {/* Sidebar */}
+          <div className="w-64 flex-shrink-0">
+            <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-4">
+              <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Admin Menu</h3>
+              <nav className="space-y-2">
+                <button
+                  onClick={() => setAdminSidebarActive('coaches')}
+                  className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+                    adminSidebarActive === 'coaches'
+                      ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
+                      : 'text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700'
+                  }`}
+                >
+                  👥 Coach Management
+                </button>
+                <button
+                  onClick={() => setAdminSidebarActive('members')}
+                  className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+                    adminSidebarActive === 'members'
+                      ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
+                      : 'text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700'
+                  }`}
+                >
+                  👤 Member Management
+                </button>
+                <button
+                  onClick={() => setAdminSidebarActive('group')}
+                  className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+                    adminSidebarActive === 'group'
+                      ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
+                      : 'text-secondary-700 dark:text-secondary-300 hover:bg-gray-100 dark:hover:bg-secondary-700'
+                  }`}
+                >
+                  ⚙️ Group Management
+                </button>
+              </nav>
+            </div>
+          </div>
+
+          {/* Content Area */}
+          <div className="flex-1">
+            {/* Coach Management */}
+            {adminSidebarActive === 'coaches' && (
+              <div>
+                <div className="mb-8">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">👥 Coach Management</h2>
+                      <p className="text-secondary-600 dark:text-secondary-400">Promote members to coaches and assign them specific students to monitor</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Coaches List */}
+                <div className="mb-8">
+                  <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-4">Current Coaches</h3>
+                  {coaches.length === 0 ? (
+                    <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-8 text-center border border-gray-200 dark:border-secondary-700">
+                      <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                      <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">No Coaches Yet</h3>
+                      <p className="text-secondary-500 dark:text-secondary-400">Promote members to coaches to help manage students</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {coaches.map(coach => {
+                        const assignedStudents = coachAssignments[coach.id] || [];
+                        const studentCount = assignedStudents.length;
+                        return (
+                          <div key={coach.id} className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700">
+                            <div className="flex items-start justify-between mb-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200">
+                                  {coach.username?.[0]?.toUpperCase() || '?'}
+                                </div>
+                                <div>
+                                  <h4 className="text-lg font-semibold text-secondary-900 dark:text-white">{coach.username}</h4>
+                                  <p className="text-sm text-secondary-500 dark:text-secondary-400">{coach.email}</p>
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => handleDemoteCoach(coach.id)}
+                                className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                                title="Remove coach"
+                              >
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
+                            
+                            <div className="mb-4">
+                              <div className="flex items-center gap-2 text-sm text-secondary-600 dark:text-secondary-400 mb-2">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                                </svg>
+                                <span>{studentCount} {studentCount === 1 ? 'student' : 'students'} assigned</span>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setSelectedCoachForAssignment(coach);
+                                setShowCoachAssignmentModal(true);
+                              }}
+                              className="w-full py-2 px-4 rounded-lg font-medium transition-colors bg-primary-600 hover:bg-primary-700 text-white"
+                            >
+                              Manage Students
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Promote Members to Coaches */}
+                <div className="mb-8">
+                  <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-4">Promote Members to Coaches</h3>
+                  <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700">
+                    {group?.members && group.members.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                        {group.members
+                          .filter(member => {
+                            const isLeader = group.leader && String(group.leader.id) === String(member.id);
+                            const isCoach = coaches.some(c => c.id === member.id);
+                            return !isLeader && !isCoach;
+                          })
+                          .map(member => (
+                            <div
+                              key={member.id}
+                              className="flex items-center justify-between p-4 border border-gray-200 dark:border-secondary-700 rounded-lg hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200">
+                                  {member.username?.[0]?.toUpperCase() || '?'}
+                                </div>
+                                <div>
+                                  <div className="font-medium text-secondary-900 dark:text-white">{member.username}</div>
+                                  <div className="text-xs text-secondary-500 dark:text-secondary-400">{member.email}</div>
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => handlePromoteToCoach(member.id)}
+                                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg font-medium transition-colors"
+                              >
+                                Promote
+                              </button>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <p className="text-secondary-500 dark:text-secondary-400">No members available to promote</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Coach Assignment Modal */}
+                {showCoachAssignmentModal && selectedCoachForAssignment && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                      <div className="p-6 border-b border-gray-200 dark:border-secondary-700">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-2xl font-bold text-secondary-900 dark:text-white">
+                            Assign Students to {selectedCoachForAssignment.username}
+                          </h3>
+                          <button
+                            onClick={() => {
+                              setShowCoachAssignmentModal(false);
+                              setSelectedCoachForAssignment(null);
+                            }}
+                            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                          >
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div className="p-6">
+                        <p className="text-secondary-600 dark:text-secondary-400 mb-4">
+                          Select which students this coach can monitor and edit. Coaches can only see and edit color charts for their assigned students.
+                        </p>
+                        
+                        <div className="space-y-2 max-h-96 overflow-y-auto">
+                          {group?.members
+                            ?.filter(member => {
+                              const isLeader = group.leader && String(group.leader.id) === String(member.id);
+                              const isCoach = member.id === selectedCoachForAssignment.id;
+                              return !isLeader && !isCoach;
+                            })
+                            .map(member => {
+                              const isAssigned = (coachAssignments[selectedCoachForAssignment.id] || []).includes(member.id);
+                              return (
+                                <label
+                                  key={member.id}
+                                  className="flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isAssigned}
+                                    onChange={(e) => {
+                                      const currentAssignments = coachAssignments[selectedCoachForAssignment.id] || [];
+                                      if (e.target.checked) {
+                                        setCoachAssignments({
+                                          ...coachAssignments,
+                                          [selectedCoachForAssignment.id]: [...currentAssignments, member.id]
+                                        });
+                                      } else {
+                                        setCoachAssignments({
+                                          ...coachAssignments,
+                                          [selectedCoachForAssignment.id]: currentAssignments.filter(id => id !== member.id)
+                                        });
+                                      }
+                                    }}
+                                    className="w-5 h-5 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                  />
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200">
+                                      {member.username?.[0]?.toUpperCase() || '?'}
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-secondary-900 dark:text-white">{member.username}</div>
+                                      <div className="text-xs text-secondary-500 dark:text-secondary-400">{member.email}</div>
+                                    </div>
+                                  </div>
+                                </label>
+                              );
+                            })}
+                        </div>
+                      </div>
+
+                      <div className="p-6 border-t border-gray-200 dark:border-secondary-700 flex justify-end gap-3">
+                        <button
+                          onClick={() => {
+                            setShowCoachAssignmentModal(false);
+                            setSelectedCoachForAssignment(null);
+                          }}
+                          className="px-6 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-secondary-700 dark:text-secondary-300 hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => {
+                            const studentIds = coachAssignments[selectedCoachForAssignment.id] || [];
+                            handleAssignStudents(selectedCoachForAssignment.id, studentIds);
+                          }}
+                          className="px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-medium transition-colors"
+                        >
+                          Save Assignments
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Member Management */}
+            {adminSidebarActive === 'members' && (
+              <div>
+                <div className="mb-8">
+                  <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">👤 Member Management</h2>
+                  <p className="text-secondary-600 dark:text-secondary-400">Remove members from the group</p>
+                </div>
+
+                <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700">
+                  {group?.members && group.members.length > 0 ? (
+                    <div className="divide-y divide-gray-200 dark:divide-secondary-700">
+                      {group.members.map(member => {
+                        const isLeader = group.leader && String(group.leader.id) === String(member.id);
+                        return (
+                          <div key={member.id} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200">
+                                {member.username?.[0]?.toUpperCase() || '?'}
+                              </div>
+                              <div>
+                                <div className="font-medium text-secondary-900 dark:text-white">
+                                  {member.username}
+                                  {isLeader && <span className="ml-2 text-xs px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 rounded">Leader</span>}
+                                </div>
+                                <div className="text-sm text-secondary-500 dark:text-secondary-400">{member.email}</div>
+                              </div>
+                            </div>
+                            {!isLeader && (
+                              <button
+                                onClick={() => {
+                                  setMemberToKick(member);
+                                  setShowKickMemberConfirm(true);
+                                }}
+                                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg font-medium transition-colors"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center text-secondary-500 dark:text-secondary-400">
+                      No members in this group
+                    </div>
+                  )}
+                </div>
+
+                {/* Kick Member Confirmation */}
+                {showKickMemberConfirm && memberToKick && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+                      <h3 className="text-xl font-bold text-secondary-900 dark:text-white mb-4">Remove Member</h3>
+                      <p className="text-secondary-600 dark:text-secondary-400 mb-6">
+                        Are you sure you want to remove <strong>{memberToKick.username}</strong> from this group? This action cannot be undone.
+                      </p>
+                      <div className="flex justify-end gap-3">
+                        <button
+                          onClick={() => {
+                            setShowKickMemberConfirm(false);
+                            setMemberToKick(null);
+                          }}
+                          className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-secondary-700 dark:text-secondary-300 hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleKickMember(memberToKick.id)}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+                        >
+                          Remove Member
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Group Management */}
+            {adminSidebarActive === 'group' && (
+              <div>
+                <div className="mb-8">
+                  <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">⚙️ Group Management</h2>
+                  <p className="text-secondary-600 dark:text-secondary-400">Manage group settings and delete the group</p>
+                </div>
+
+                <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-6">
+                  <div className="mb-6">
+                    <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-4">Danger Zone</h3>
+                    <div className="border-2 border-red-300 dark:border-red-700 rounded-lg p-4 bg-red-50 dark:bg-red-900/20">
+                      <h4 className="font-semibold text-red-900 dark:text-red-300 mb-2">Delete Group</h4>
+                      <p className="text-sm text-red-700 dark:text-red-400 mb-4">
+                        Permanently delete this group and all its data. This action cannot be undone.
+                      </p>
+                      <button
+                        onClick={() => setShowDeleteGroupStep(1)}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+                      >
+                        Delete Group
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3-Step Delete Confirmation Modal */}
+                {showDeleteGroupStep > 0 && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+                      {showDeleteGroupStep === 1 && (
+                        <>
+                          <h3 className="text-xl font-bold text-red-600 dark:text-red-400 mb-4">⚠️ Step 1: Confirm Deletion</h3>
+                          <p className="text-secondary-600 dark:text-secondary-400 mb-6">
+                            You are about to delete the group <strong>{group?.name}</strong>. This will permanently remove:
+                          </p>
+                          <ul className="list-disc list-inside text-secondary-600 dark:text-secondary-400 mb-6 space-y-2">
+                            <li>All group members and their data</li>
+                            <li>All challenges and habit tracking</li>
+                            <li>All messages and conversations</li>
+                            <li>All skill development charts</li>
+                            <li>All coach assignments</li>
+                          </ul>
+                          <p className="text-red-600 dark:text-red-400 font-semibold mb-6">This action cannot be undone!</p>
+                          <div className="flex justify-end gap-3">
+                            <button
+                              onClick={() => {
+                                setShowDeleteGroupStep(0);
+                                setDeleteGroupConfirmText('');
+                              }}
+                              className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-secondary-700 dark:text-secondary-300 hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => setShowDeleteGroupStep(2)}
+                              className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors"
+                            >
+                              I Understand, Continue
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                      {showDeleteGroupStep === 2 && (
+                        <>
+                          <h3 className="text-xl font-bold text-red-600 dark:text-red-400 mb-4">⚠️ Step 2: Type to Confirm</h3>
+                          <p className="text-secondary-600 dark:text-secondary-400 mb-4">
+                            Type <strong>DELETE</strong> to confirm you want to permanently delete this group:
+                          </p>
+                          <input
+                            type="text"
+                            value={deleteGroupConfirmText}
+                            onChange={(e) => setDeleteGroupConfirmText(e.target.value)}
+                            placeholder="Type DELETE"
+                            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white mb-6 focus:ring-2 focus:ring-red-500"
+                          />
+                          <div className="flex justify-end gap-3">
+                            <button
+                              onClick={() => {
+                                setShowDeleteGroupStep(1);
+                                setDeleteGroupConfirmText('');
+                              }}
+                              className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-secondary-700 dark:text-secondary-300 hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                            >
+                              Back
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (deleteGroupConfirmText === 'DELETE') {
+                                  setShowDeleteGroupStep(3);
+                                } else {
+                                  alert('Please type DELETE exactly to continue');
+                                }
+                              }}
+                              disabled={deleteGroupConfirmText !== 'DELETE'}
+                              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                                deleteGroupConfirmText === 'DELETE'
+                                  ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                                  : 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                              }`}
+                            >
+                              Continue
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                      {showDeleteGroupStep === 3 && (
+                        <>
+                          <h3 className="text-xl font-bold text-red-600 dark:text-red-400 mb-4">⚠️ Step 3: Final Confirmation</h3>
+                          <p className="text-secondary-600 dark:text-secondary-400 mb-6">
+                            This is your last chance to cancel. Are you absolutely sure you want to delete <strong>{group?.name}</strong>?
+                          </p>
+                          <p className="text-red-600 dark:text-red-400 font-semibold mb-6">
+                            All data will be permanently lost and cannot be recovered.
+                          </p>
+                          <div className="flex justify-end gap-3">
+                            <button
+                              onClick={() => {
+                                setShowDeleteGroupStep(2);
+                              }}
+                              className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-secondary-700 dark:text-secondary-300 hover:bg-gray-50 dark:hover:bg-secondary-700 transition-colors"
+                            >
+                              Back
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowDeleteGroupStep(0);
+                                setDeleteGroupConfirmText('');
+                              }}
+                              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={handleDeleteGroup}
+                              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+                            >
+                              Yes, Delete Forever
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

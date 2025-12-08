@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../services/api';
 
-const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: propGroupType }) => {
+const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroupId, groupType: propGroupType }) => {
   const params = useParams();
   const routeGroupId = params.groupId;
   const groupId = propGroupId ?? routeGroupId;
@@ -27,6 +27,12 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
   const [activeTerm, setActiveTerm] = useState('autumn1'); // 'autumn1', 'autumn2', 'spring1', 'spring2', 'summer1', 'summer2'
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editHistory, setEditHistory] = useState({}); // { cellKey: { editorId, editorName, editedAt } }
+  const [lastEditedBy, setLastEditedBy] = useState(null); // { id, username }
+  const [lastEditedAt, setLastEditedAt] = useState(null);
+  const [editedCells, setEditedCells] = useState([]); // Track cells edited in current session
+  const [hoveredCell, setHoveredCell] = useState(null); // Track which cell is being hovered for tooltip
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 }); // Tooltip position
   const hasFetchedGroupTypeRef = useRef(!!propGroupType);
   const previousGroupTypeRef = useRef(resolvedGroupType);
   const previousTermRef = useRef(null); // Track previous term to save before switching
@@ -237,6 +243,17 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
           ...data.colorScheme
         }));
       }
+      if (data.editHistory) {
+        setEditHistory(data.editHistory);
+      }
+      if (data.lastEditedBy) {
+        setLastEditedBy(data.lastEditedBy);
+      }
+      if (data.lastEditedAt) {
+        setLastEditedAt(data.lastEditedAt);
+      }
+      // Reset edited cells when loading new data
+      setEditedCells([]);
     } catch (error) {
       console.error('Error loading skill chart data:', error);
       // Keep default values if loading fails
@@ -246,8 +263,8 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
   };
 
   const saveSkillChartData = async (term = activeTerm) => {
-    if (!memberId || !isLeader) {
-      console.log('Save skipped:', { groupId, memberId, isLeader });
+    if (!memberId || (!isLeader && !isCoach)) {
+      console.log('Save skipped:', { groupId, memberId, isLeader, isCoach });
       return;
     }
     
@@ -316,11 +333,31 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
     });
     setSaving(true);
     try {
+      // Filter editedCells to only include cells for this term
+      const termEditedCells = editedCells.filter(cellKey => cellKey.startsWith(`${term}-`));
+      
       const response = await api.put(`/groups/${targetGroupId}/members/${memberId}/skill-charts/${term}`, {
         skillLevels: termSpecificSkillLevels, // Only save data for this specific term
-        colorScheme: colorScheme
+        colorScheme: colorScheme,
+        editedCells: termEditedCells // Send array of edited cell keys
       });
       console.log('Save successful:', response.data);
+      
+      // Update edit history and last edited info from response
+      if (response.data.skillChart) {
+        if (response.data.skillChart.editHistory) {
+          setEditHistory(response.data.skillChart.editHistory);
+        }
+        if (response.data.skillChart.lastEditedBy) {
+          setLastEditedBy(response.data.skillChart.lastEditedBy);
+        }
+        if (response.data.skillChart.lastEditedAt) {
+          setLastEditedAt(response.data.skillChart.lastEditedAt);
+        }
+      }
+      
+      // Clear edited cells after successful save
+      setEditedCells(prev => prev.filter(cellKey => !cellKey.startsWith(`${term}-`)));
     } catch (error) {
       console.error('Error saving skill chart data:', error);
       console.error('Error details:', error.response?.data);
@@ -330,7 +367,7 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
   };
 
   const resetSkillChartData = async (term = activeTerm) => {
-    if (!groupId || !memberId || !isLeader) return;
+    if (!groupId || !memberId || (!isLeader && !isCoach)) return;
     
     try {
       await api.post(`/groups/${groupId}/members/${memberId}/skill-charts/${term}/reset`);
@@ -354,7 +391,7 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
     // Clearing would trigger auto-save and overwrite data
     
     // If we're switching terms, save the previous term's data first
-    if (previousTermRef.current && previousTermRef.current !== activeTerm && isLeader) {
+    if (previousTermRef.current && previousTermRef.current !== activeTerm && (isLeader || isCoach)) {
       isSwitchingTermRef.current = true;
       const previousTerm = previousTermRef.current;
       
@@ -411,8 +448,8 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
   // Auto-save when skill levels or color scheme changes (with debounce)
   // NOTE: We exclude activeTerm from dependencies to prevent saving wrong term's data
   useEffect(() => {
-    if (!isLeader) {
-      console.log('Auto-save skipped: not a leader');
+    if (!isLeader && !isCoach) {
+      console.log('Auto-save skipped: not a leader or coach');
       return;
     }
     
@@ -457,6 +494,10 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
       ...prev,
       [key]: newLevel
     }));
+    // Track this cell as edited
+    if (!editedCells.includes(key)) {
+      setEditedCells(prev => [...prev, key]);
+    }
   };
 
   const getNextLevel = (currentLevel) => {
@@ -755,7 +796,7 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
        )}
 
       {/* Controls */}
-      {isLeader && (
+      {(isLeader || isCoach) && (
         <div className="mb-6 flex justify-center gap-2 flex-wrap">
           <button
             onClick={() => {
@@ -873,23 +914,47 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
                     {Array.from({ length: activeTermConfig.blocks || 0 }, (_, blockIndex) => {
                       const level = getSkillLevel(skill, blockIndex + 1);
                       const color = getColorForLevel(level);
+                      const cellKey = `${activeTerm}-${skill}-${blockIndex + 1}`;
+                      const cellEditHistory = editHistory[cellKey];
+                      const isHovered = hoveredCell === cellKey;
                       
                       return (
                         <td 
                           key={blockIndex} 
-                          className={`border border-gray-300 dark:border-gray-600 p-2 text-center ${
-                            isEditingSkills && isLeader ? 'cursor-pointer hover:opacity-80' : ''
+                          className={`border border-gray-300 dark:border-gray-600 p-2 text-center relative ${
+                            isEditingSkills && (isLeader || isCoach) ? 'cursor-pointer hover:opacity-80' : ''
                           }`}
                           style={{ backgroundColor: color }}
-                          title={`${skill} - Block ${blockIndex + 1}: ${getLevelName(level)}`}
+                          onMouseEnter={(e) => {
+                            if (cellEditHistory) {
+                              setHoveredCell(cellKey);
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setTooltipPosition({
+                                x: rect.left + rect.width / 2,
+                                y: rect.top - 10
+                              });
+                            }
+                          }}
+                          onMouseLeave={() => {
+                            setHoveredCell(null);
+                          }}
+                          onMouseMove={(e) => {
+                            if (cellEditHistory && hoveredCell === cellKey) {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setTooltipPosition({
+                                x: rect.left + rect.width / 2,
+                                y: rect.top - 10
+                              });
+                            }
+                          }}
                           onClick={() => {
-                            if (isEditingSkills && isLeader) {
+                            if (isEditingSkills && (isLeader || isCoach)) {
                               const nextLevel = getNextLevel(level);
                               updateSkillLevel(skill, blockIndex + 1, nextLevel);
                             }
                           }}
                         >
-                          {isLeader && (
+                          {(isLeader || isCoach) && (
                             <div className="w-8 h-8 mx-auto rounded border border-gray-400 dark:border-gray-500"></div>
                           )}
                         </td>
@@ -901,6 +966,31 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
             ))}
           </tbody>
         </table>
+        </div>
+      )}
+
+      {/* Custom Hover Tooltip */}
+      {hoveredCell && editHistory[hoveredCell] && (
+        <div
+          className="fixed z-50 pointer-events-none transform -translate-x-1/2 -translate-y-full"
+          style={{
+            left: `${tooltipPosition.x}px`,
+            top: `${tooltipPosition.y}px`,
+            transition: 'opacity 0.2s ease-in-out'
+          }}
+        >
+          <div className="bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg shadow-lg px-3 py-2 max-w-xs">
+            <div className="font-semibold mb-1">
+              Last edited by {editHistory[hoveredCell].editorName}
+            </div>
+            <div className="text-gray-300">
+              {formatRelativeTime(new Date(editHistory[hoveredCell].editedAt))}
+            </div>
+            {/* Tooltip arrow */}
+            <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-1">
+              <div className="w-2 h-2 bg-gray-900 dark:bg-gray-700 transform rotate-45"></div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -920,8 +1010,31 @@ const ColorChart = ({ memberHabit, isLeader, groupId: propGroupId, groupType: pr
           <li>• Switch between terms using the tabs above</li>
         </ul>
       </div>
+
+      {/* Last Edited By Footer */}
+      {lastEditedBy && lastEditedAt && (
+        <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700 text-center text-sm text-gray-600 dark:text-gray-400">
+          Last edited by <span className="font-semibold text-gray-700 dark:text-gray-300">{lastEditedBy.username}</span>{' '}
+          {formatRelativeTime(new Date(lastEditedAt))}
+        </div>
+      )}
     </div>
   );
+};
+
+// Helper function to format relative time
+const formatRelativeTime = (date) => {
+  if (!date) return '';
+  const now = new Date();
+  const diffInSeconds = Math.floor((now - date) / 1000);
+  
+  if (diffInSeconds < 60) return 'just now';
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} minutes ago`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hours ago`;
+  if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)} days ago`;
+  if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 604800)} weeks ago`;
+  if (diffInSeconds < 31536000) return `${Math.floor(diffInSeconds / 2592000)} months ago`;
+  return `${Math.floor(diffInSeconds / 31536000)} years ago`;
 };
 
 export default ColorChart;
