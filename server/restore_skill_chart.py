@@ -1,5 +1,6 @@
 import sys
 import os
+import importlib.util
 
 # Get the directory where this script is located
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -10,14 +11,15 @@ sys.path.insert(0, parent_dir)
 # Also add server directory to path (for db imports)
 sys.path.insert(0, script_dir)
 
-# Import app from server.server
-from server.server import app
-# Import db and models - try server.db first, fallback to db
-try:
-    from server.db.models import db, SkillDevelopmentChart, Group
-except ImportError:
-    from db.models import db, SkillDevelopmentChart, Group
+# Import app directly from server.py file
+server_py_path = os.path.join(script_dir, 'server.py')
+spec = importlib.util.spec_from_file_location("server_module", server_py_path)
+server_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(server_module)
+app = server_module.app
 
+# Import db and models
+from db.models import db, SkillDevelopmentChart, Group
 from datetime import datetime
 
 with app.app_context():
