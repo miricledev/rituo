@@ -31,6 +31,7 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
   const [lastEditedBy, setLastEditedBy] = useState(null); // { id, username }
   const [lastEditedAt, setLastEditedAt] = useState(null);
   const [editedCells, setEditedCells] = useState([]); // Track cells edited in current session
+  const [colorsEdited, setColorsEdited] = useState(false); // Track if colors were edited by user
   const [hoveredCell, setHoveredCell] = useState(null); // Track which cell is being hovered for tooltip
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 }); // Tooltip position
   const hasFetchedGroupTypeRef = useRef(!!propGroupType);
@@ -38,6 +39,7 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
   const previousTermRef = useRef(null); // Track previous term to save before switching
   const isSwitchingTermRef = useRef(false); // Flag to prevent auto-save during term switch
   const pendingOperationRef = useRef(null); // Track pending save/load operations to prevent rapid switches
+  const isLoadingDataRef = useRef(false); // Flag to prevent auto-save during data loading
 
   useEffect(() => {
     if (propGroupType) {
@@ -230,6 +232,7 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
     }
     
     setLoading(true);
+    isLoadingDataRef.current = true; // Mark that we're loading data
     try {
       const response = await api.get(`/groups/${targetGroupId}/members/${memberId}/skill-charts/${term}`);
       const data = response.data;
@@ -242,6 +245,8 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
           ...prev,
           ...data.colorScheme
         }));
+        // Reset colorsEdited flag when loading data - colors weren't edited by user
+        setColorsEdited(false);
       }
       if (data.editHistory) {
         setEditHistory(data.editHistory);
@@ -254,11 +259,18 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
       }
       // Reset edited cells when loading new data
       setEditedCells([]);
+      // Reset colorsEdited flag when loading new data
+      setColorsEdited(false);
     } catch (error) {
       console.error('Error loading skill chart data:', error);
       // Keep default values if loading fails
     } finally {
       setLoading(false);
+      // Clear the loading flag after a short delay to ensure state updates complete
+      // This prevents auto-save from triggering immediately after load
+      setTimeout(() => {
+        isLoadingDataRef.current = false;
+      }, 100);
     }
   };
 
@@ -323,19 +335,28 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
       return;
     }
     
+    // Filter editedCells to only include cells for this term
+    const termEditedCells = editedCells.filter(cellKey => cellKey.startsWith(`${term}-`));
+    
+    // Don't save if there are no actual user edits (no edited cells and no color changes)
+    // This prevents saving on load when data is just being loaded from the server
+    if (termEditedCells.length === 0 && !colorsEdited) {
+      console.log('Save skipped: no user edits detected (no edited cells and colors not changed)');
+      return;
+    }
+    
     console.log('Saving skill chart data:', { 
       groupId: targetGroupId, 
       memberId, 
       term, 
       totalSkillLevels: Object.keys(skillLevels).length,
       termSpecificSkillLevels: Object.keys(termSpecificSkillLevels).length,
-      colorScheme 
+      colorScheme,
+      editedCellsCount: termEditedCells.length,
+      colorsEdited
     });
     setSaving(true);
     try {
-      // Filter editedCells to only include cells for this term
-      const termEditedCells = editedCells.filter(cellKey => cellKey.startsWith(`${term}-`));
-      
       const response = await api.put(`/groups/${targetGroupId}/members/${memberId}/skill-charts/${term}`, {
         skillLevels: termSpecificSkillLevels, // Only save data for this specific term
         colorScheme: colorScheme,
@@ -358,6 +379,8 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
       
       // Clear edited cells after successful save
       setEditedCells(prev => prev.filter(cellKey => !cellKey.startsWith(`${term}-`)));
+      // Reset colorsEdited flag after successful save
+      setColorsEdited(false);
     } catch (error) {
       console.error('Error saving skill chart data:', error);
       console.error('Error details:', error.response?.data);
@@ -386,6 +409,9 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
     // Set loading to true immediately to hide the chart grid
     // This prevents the old chart from showing for even a split second
     setLoading(true);
+    // Set loading flag synchronously BEFORE any async operations
+    // This prevents auto-save from triggering during the initial load
+    isLoadingDataRef.current = true;
     
     // Don't clear skillLevels here - the loading state will hide the chart
     // Clearing would trigger auto-save and overwrite data
@@ -459,11 +485,24 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
       return;
     }
     
+    // Don't auto-save if we're currently loading data - this prevents saving empty/bad data
+    // when the network is bad and data doesn't load properly
+    if (isLoadingDataRef.current || loading) {
+      console.log('Auto-save skipped: data is currently loading');
+      return;
+    }
+    
     console.log('Auto-save effect triggered:', { skillLevels, colorScheme, activeTerm });
     const timeoutId = setTimeout(() => {
       // Double-check we're not switching terms (race condition protection)
       if (isSwitchingTermRef.current) {
         console.log('Auto-save cancelled: term switch detected during timeout');
+        return;
+      }
+      
+      // Double-check we're not loading data (race condition protection)
+      if (isLoadingDataRef.current || loading) {
+        console.log('Auto-save cancelled: data loading detected during timeout');
         return;
       }
       
@@ -473,7 +512,7 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
     }, 1000); // Auto-save after 1 second of no changes
 
     return () => clearTimeout(timeoutId);
-  }, [skillLevels, colorScheme]); // Removed activeTerm from dependencies - this prevents saving wrong term's data
+  }, [skillLevels, colorScheme, loading]); // Added loading to dependencies to prevent save during load
 
   // Get skill level for a specific skill and block
   const getSkillLevel = (skillName, blockNumber) => {
@@ -540,6 +579,8 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
       ...prev,
       [level]: color
     }));
+    // Mark that colors were edited by the user
+    setColorsEdited(true);
   };
 
   const resetToDefaults = () => {
