@@ -1,10 +1,23 @@
 import sys
 import os
-# Add parent directory to path so we can import server
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from server import app, db
-from server.db.models import SkillDevelopmentChart, Group
+# Get the directory where this script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the parent directory (src)
+parent_dir = os.path.dirname(script_dir)
+# Add parent directory to path
+sys.path.insert(0, parent_dir)
+# Also add server directory to path (for db imports)
+sys.path.insert(0, script_dir)
+
+# Import app from server.server
+from server.server import app
+# Import db and models - try server.db first, fallback to db
+try:
+    from server.db.models import db, SkillDevelopmentChart, Group
+except ImportError:
+    from db.models import db, SkillDevelopmentChart, Group
+
 from datetime import datetime
 
 with app.app_context():
