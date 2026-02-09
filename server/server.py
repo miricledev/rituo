@@ -2,11 +2,11 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, get_jwt, verify_jwt_in_request
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 import os
+import time
+import threading
 from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 import logging
 from logging.handlers import RotatingFileHandler
 from flask_migrate import Migrate
@@ -443,15 +443,26 @@ def handle_send_dm(data):
         app.logger.error('Error sending DM: %s', str(e))
         emit('error', {'message': 'Failed to send DM'})
 
-# Set up scheduler for daily task reset at midnight
-scheduler = BackgroundScheduler(timezone='UTC')
-scheduler.add_job(
-    reset_daily_tasks,
-    trigger=CronTrigger(hour=0, minute=0, timezone='UTC'),
-    id='reset_daily_tasks',
-    name='Reset all task completions at midnight',
-    replace_existing=True
-)
+# Daily task reset at midnight UTC (stdlib only – no APScheduler/pkg_resources)
+def _seconds_until_midnight_utc():
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (tomorrow - now).total_seconds()
+
+def _midnight_reset_loop():
+    while True:
+        try:
+            secs = _seconds_until_midnight_utc()
+            time.sleep(secs)
+            reset_daily_tasks()
+        except Exception as e:
+            try:
+                app.logger.exception('Midnight reset job failed: %s', e)
+            except Exception:
+                logging.exception('Midnight reset job failed: %s', e)
+
+_midnight_thread = threading.Thread(target=_midnight_reset_loop, daemon=True)
+_midnight_thread.start()
 
 @app.route('/')
 def index():
@@ -500,12 +511,10 @@ def api_health():
     }), 200
 
 if __name__ == '__main__':
-    # Start the scheduler
-    scheduler.start()
     if DEBUG_MODE:
-        print("✓ Scheduler started")
-    app.logger.info('Scheduler started')
-    
+        print("✓ Midnight reset thread started")
+    app.logger.info('Midnight reset thread started')
+
     # Run the Flask app with SocketIO
     port = int(os.getenv("PORT", 5000))
     if DEBUG_MODE:
