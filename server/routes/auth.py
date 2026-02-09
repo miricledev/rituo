@@ -160,3 +160,102 @@ def change_password():
     except Exception as e:
         db.session.rollback()
         return jsonify({'message': f'Password update failed: {str(e)}'}), 500
+
+
+# PIN used for keypad verification (same as create group / register flow)
+VERIFY_PIN = '302185'
+
+
+def _verify_request(data):
+    """Accept either account password or keypad PIN 302185."""
+    if not data:
+        return False, 'Password or PIN required'
+    if data.get('pin') == VERIFY_PIN:
+        return True, None
+    return False, None  # Caller must check password if pin not used
+
+
+@auth_bp.route('/update-username', methods=['PUT'])
+@jwt_required()
+def update_username():
+    """Update username; requires keypad PIN (302185) or current password."""
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    
+    data = request.get_json()
+    if not data or not data.get('username'):
+        return jsonify({'message': 'Username is required'}), 400
+    
+    pin_ok, _ = _verify_request(data)
+    if pin_ok:
+        pass
+    elif data.get('password'):
+        if not check_password_hash(user.password, data.get('password')):
+            return jsonify({'message': 'Password is incorrect'}), 401
+    else:
+        return jsonify({'message': 'Password or PIN is required'}), 400
+    
+    new_username = data.get('username').strip()
+    if not new_username:
+        return jsonify({'message': 'Username cannot be empty'}), 400
+    
+    existing = User.query.filter_by(username=new_username).first()
+    if existing and existing.id != user_id:
+        return jsonify({'message': 'Username already exists'}), 409
+    
+    user.username = new_username
+    try:
+        db.session.commit()
+        return jsonify({
+            'message': 'Username updated successfully',
+            'user': user.to_dict()
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': f'Update failed: {str(e)}'}), 500
+
+
+@auth_bp.route('/update-email', methods=['PUT'])
+@jwt_required()
+def update_email():
+    """Update email; requires keypad PIN (302185) or current password."""
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    
+    data = request.get_json()
+    if not data or not data.get('email'):
+        return jsonify({'message': 'Email is required'}), 400
+    
+    pin_ok, _ = _verify_request(data)
+    if pin_ok:
+        pass
+    elif data.get('password'):
+        if not check_password_hash(user.password, data.get('password')):
+            return jsonify({'message': 'Password is incorrect'}), 401
+    else:
+        return jsonify({'message': 'Password or PIN is required'}), 400
+    
+    new_email = data.get('email').strip().lower()
+    if not is_valid_email(new_email):
+        return jsonify({'message': 'Invalid email format'}), 400
+    
+    existing = User.query.filter_by(email=new_email).first()
+    if existing and existing.id != user_id:
+        return jsonify({'message': 'Email already in use'}), 409
+    
+    user.email = new_email
+    try:
+        db.session.commit()
+        return jsonify({
+            'message': 'Email updated successfully',
+            'user': user.to_dict()
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': f'Update failed: {str(e)}'}), 500

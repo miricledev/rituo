@@ -154,6 +154,48 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Update username (requires password or pin from keypad)
+  const updateUsername = async (username, passwordOrPin) => {
+    try {
+      setError(null);
+      const body = { username };
+      if (passwordOrPin.length === 6 && /^\d+$/.test(passwordOrPin)) {
+        body.pin = passwordOrPin;
+      } else {
+        body.password = passwordOrPin;
+      }
+      const response = await axios.put('/auth/update-username', body);
+      if (response.data.user) {
+        setCurrentUser(response.data.user);
+      }
+      return response.data;
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to update username');
+      throw err;
+    }
+  };
+
+  // Update email (requires password or pin from keypad)
+  const updateEmail = async (email, passwordOrPin) => {
+    try {
+      setError(null);
+      const body = { email };
+      if (passwordOrPin.length === 6 && /^\d+$/.test(passwordOrPin)) {
+        body.pin = passwordOrPin;
+      } else {
+        body.password = passwordOrPin;
+      }
+      const response = await axios.put('/auth/update-email', body);
+      if (response.data.user) {
+        setCurrentUser(response.data.user);
+      }
+      return response.data;
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to update email');
+      throw err;
+    }
+  };
+
   // Change password
   const changePassword = async (currentPassword, newPassword) => {
     try {
@@ -184,6 +226,8 @@ export function AuthProvider({ children }) {
     login,
     logout,
     updateProfile,
+    updateUsername,
+    updateEmail,
     changePassword,
     clearError
   };

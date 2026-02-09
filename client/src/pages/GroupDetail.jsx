@@ -61,6 +61,11 @@ const GroupDetail = () => {
   const [attendance, setAttendance] = useState([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [showDeleteChallengeConfirm, setShowDeleteChallengeConfirm] = useState(false);
+  const [showAddMembersToChallengeModal, setShowAddMembersToChallengeModal] = useState(false);
+  const [addMembersToChallengeSelected, setAddMembersToChallengeSelected] = useState([]);
+  const [addMembersToChallengeSubmitting, setAddMembersToChallengeSubmitting] = useState(false);
+  const [editChallengeHabitsMode, setEditChallengeHabitsMode] = useState(false); // true = editing habits for existing active challenge
+  const [lockedChallengeMemberIds, setLockedChallengeMemberIds] = useState(new Set()); // member ids that are read-only in edit-habits modal (existing challenge members with habits)
   const [expandedAttendance, setExpandedAttendance] = useState({});
   const [collapsedMembers, setCollapsedMembers] = useState({}); // Will be initialized to collapse all members
   const [isEditingGroupName, setIsEditingGroupName] = useState(false);
@@ -95,6 +100,17 @@ const GroupDetail = () => {
   const myMemberHabit = group?.activeChallenge?.memberHabits?.find(
     mh => String(mh.member) === String(user?.id) || String(mh.member?.id) === String(user?.id)
   );
+
+  // Members in the group who are not yet in the active challenge (can be added)
+  const membersNotInChallenge = (() => {
+    if (!group?.members?.length || !group?.activeChallenge?.memberHabits?.length) return [];
+    const inChallengeIds = new Set(
+      group.activeChallenge.memberHabits.map(mh =>
+        String(mh.member?.id ?? mh.member)
+      )
+    );
+    return group.members.filter(m => !inChallengeIds.has(String(m.id)));
+  })();
 
   // Check if there are any habits added
   const hasHabitsAdded = Object.values(memberHabits).flat().length > 0 || Object.values(lockedHabits).flat().length > 0;
@@ -526,41 +542,47 @@ const GroupDetail = () => {
   };
 
   const handleLoadPreset = (presetId) => {
-    // Prevent loading if there's an active challenge
-    if (group?.activeChallenge) {
+    // When creating a new challenge, prevent loading if there's already an active challenge
+    if (group?.activeChallenge && !editChallengeHabitsMode) {
       return;
     }
 
-    // Convert presetId to number for comparison (dropdown passes string)
     const presetIdNum = typeof presetId === 'string' ? parseInt(presetId, 10) : presetId;
     const preset = habitPresets.find(p => p.id === presetIdNum || p.id === presetId);
     if (!preset) return;
 
-    // Load preset habits for all members
+    const mappedHabits = preset.habits.map(habit => ({
+      ...habit,
+      minValue: habit.habitType === 'numeric' ? (habit.minValue ?? 0) : habit.minValue,
+      maxValue: habit.habitType === 'numeric' ? (habit.maxValue ?? 10) : habit.maxValue,
+      scheduleDays: habit.scheduleDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+      combatType: habit.combatType || 'neutral'
+    }));
+
+    if (editChallengeHabitsMode) {
+      // Apply preset only to editable (new) members – never change locked existing challenge members
+      const newMemberHabits = { ...memberHabits };
+      Object.keys(memberHabits).forEach(memberId => {
+        if (!lockedChallengeMemberIds.has(memberId)) {
+          newMemberHabits[memberId] = [...mappedHabits];
+        }
+      });
+      setMemberHabits(newMemberHabits);
+      return;
+    }
+
+    // Create flow: load preset for all group members
     const allMembers = group?.members || [];
     const newMemberHabits = {};
-    
     allMembers.forEach(member => {
-      newMemberHabits[member.id] = preset.habits.map(habit => ({
-        ...habit,
-        // Ensure numeric habits have default min/max values if missing
-        minValue: habit.habitType === 'numeric' ? (habit.minValue ?? 0) : habit.minValue,
-        maxValue: habit.habitType === 'numeric' ? (habit.maxValue ?? 10) : habit.maxValue,
-        // Ensure scheduleDays and combatType have defaults
-        scheduleDays: habit.scheduleDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
-        combatType: habit.combatType || 'neutral'
-      }));
+      newMemberHabits[member.id] = [...mappedHabits];
     });
-
     setMemberHabits(newMemberHabits);
-    
-    // If modal is not open, open it and set to editing mode
-    // If modal is already open, just load the habits (it's already in editing mode)
+
     if (!showCreateChallengeModal) {
       setIsEditingHabits(true);
       setShowCreateChallengeModal(true);
     }
-    // If modal is already open, the state update above will automatically show the loaded habits
   };
 
   const handleAddPresetHabit = () => {
@@ -698,6 +720,35 @@ const GroupDetail = () => {
     }
   };
 
+  const handleAddMembersToChallenge = async () => {
+    if (!group?.activeChallenge || !addMembersToChallengeSelected.length) return;
+    setAddMembersToChallengeSubmitting(true);
+    try {
+      const res = await axios.post(
+        `/groups/${groupId}/challenge/${group.activeChallenge.id}/add-members`,
+        { memberIds: addMembersToChallengeSelected }
+      );
+      setShowAddMembersToChallengeModal(false);
+      setAddMembersToChallengeSelected([]);
+      if (res.data?.group) {
+        setGroup(res.data.group);
+        openEditChallengeHabitsModal(res.data.group);
+      } else {
+        await fetchGroupDetails();
+      }
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to add members to challenge.');
+    } finally {
+      setAddMembersToChallengeSubmitting(false);
+    }
+  };
+
+  const toggleAddMemberToChallenge = (memberId) => {
+    setAddMembersToChallengeSelected(prev =>
+      prev.includes(memberId) ? prev.filter(id => id !== memberId) : [...prev, memberId]
+    );
+  };
+
   const toggleMemberCollapse = (memberId) => {
     setCollapsedMembers(prev => ({
       ...prev,
@@ -725,6 +776,8 @@ const GroupDetail = () => {
   const confirmCancel = () => {
     setShowCreateChallengeModal(false);
     setShowCancelConfirm(false);
+    setEditChallengeHabitsMode(false);
+    setLockedChallengeMemberIds(new Set());
     setMemberHabits({});
     setLockedHabits({});
     setCollapsedMembersInModal({});
@@ -833,32 +886,72 @@ const GroupDetail = () => {
     // Keep the current memberHabits for editing
   };
 
+  const openEditChallengeHabitsModal = (groupData) => {
+    const data = groupData || group;
+    const memberHabitsList = data?.activeChallenge?.memberHabits;
+    if (!memberHabitsList) return;
+    const fromChallenge = {};
+    memberHabitsList.forEach(mh => {
+      const mid = mh.member?.id ?? mh.member;
+      if (mid != null) fromChallenge[String(mid)] = mh.habits || [];
+    });
+    setMemberHabits(fromChallenge);
+    setLockedHabits({});
+    setIsEditingHabits(true);
+    setEditChallengeHabitsMode(true);
+    const lockedIds = new Set(
+      Object.entries(fromChallenge).filter(([, h]) => h.length > 0).map(([id]) => id)
+    );
+    setLockedChallengeMemberIds(lockedIds);
+    setShowCreateChallengeModal(true);
+  };
+
   const handleCreateChallenge = async (e) => {
     e.preventDefault();
-    
-    // Validate dates
+
+    // Use locked habits if in overview mode, otherwise use current memberHabits
+    const habitsToSubmit = isEditingHabits ? memberHabits : lockedHabits;
+
+    if (editChallengeHabitsMode) {
+      // Updating habits for existing active challenge
+      try {
+        const memberHabitsArray = Object.entries(habitsToSubmit).map(([memberId, habits]) => ({
+          member: memberId,
+          habits: habits
+        }));
+        await axios.put(`/groups/${groupId}/challenge/${group.activeChallenge.id}/member-habits`, {
+          memberHabits: memberHabitsArray
+        });
+        setShowCreateChallengeModal(false);
+        setEditChallengeHabitsMode(false);
+        setLockedChallengeMemberIds(new Set());
+        await fetchGroupDetails();
+      } catch (error) {
+        console.error('Error updating challenge habits:', error);
+        alert('Failed to save habits: ' + (error.response?.data?.error || error.message));
+      }
+      return;
+    }
+
+    // Validate dates for new challenge
     if (!newChallenge.startDate || !newChallenge.endDate) {
       alert('Please select both start and end dates for the challenge.');
       return;
     }
-    
+
+    // Validate that habits exist
+    if (Object.keys(habitsToSubmit).length === 0) {
+      alert('Please add at least one habit before creating the challenge.');
+      return;
+    }
+
     try {
-      // Use locked habits if in overview mode, otherwise use current memberHabits
-      const habitsToSubmit = isEditingHabits ? memberHabits : lockedHabits;
-      
-      // Validate that habits exist
-      if (Object.keys(habitsToSubmit).length === 0) {
-        alert('Please add at least one habit before creating the challenge.');
-        return;
-      }
-      
-      // Convert habits to the format expected by the backend
       const memberHabitsArray = Object.entries(habitsToSubmit).map(([memberId, habits]) => ({
         member: memberId,
         habits: habits
       }));
 
-      const response = await axios.post('/groups/challenge', {
+      await axios.post('/groups/challenge', {
         groupId,
         startDate: newChallenge.startDate,
         endDate: newChallenge.endDate,
@@ -1392,7 +1485,7 @@ const GroupDetail = () => {
             </button>
           ) : (
             <button
-              onClick={() => setShowCreateChallengeModal(true)}
+              onClick={() => { setEditChallengeHabitsMode(false); setLockedChallengeMemberIds(new Set()); setShowCreateChallengeModal(true); }}
               className="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 w-full sm:w-auto text-sm sm:text-base"
             >
               Create Challenge
@@ -1569,23 +1662,48 @@ const GroupDetail = () => {
         <div className="mb-8">
           <h2 className="text-2xl font-semibold mb-4">Active Challenge</h2>
           <div className="border rounded-lg p-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <p className="text-gray-600 dark:text-gray-400">
-                  Start Date: {new Date(group.activeChallenge.startDate).toLocaleDateString()}
-                </p>
-                <p className="text-gray-600 dark:text-gray-400">
-                  End Date: {new Date(group.activeChallenge.endDate).toLocaleDateString()}
-                </p>
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
+                <div>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    Start Date: {new Date(group.activeChallenge.startDate).toLocaleDateString()}
+                  </p>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    End Date: {new Date(group.activeChallenge.endDate).toLocaleDateString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-600 dark:text-gray-400">Status: {group.activeChallenge.status}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    Today's Date: {new Date().toLocaleDateString()}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-gray-600 dark:text-gray-400">Status: {group.activeChallenge.status}</p>
-              </div>
-              <div>
-                <p className="text-gray-600 dark:text-gray-400">
-                  Today's Date: {new Date().toLocaleDateString()}
-                </p>
-              </div>
+              {isLeader && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {membersNotInChallenge.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddMembersToChallengeSelected([]);
+                        setShowAddMembersToChallengeModal(true);
+                      }}
+                      className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium"
+                    >
+                      Add members to challenge
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openEditChallengeHabitsModal}
+                    className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium"
+                  >
+                    Set habits
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Group Progress Overview */}
@@ -3423,7 +3541,7 @@ const GroupDetail = () => {
               </p>
               {isLeader && (
                 <button
-                  onClick={() => setShowCreateChallengeModal(true)}
+                  onClick={() => { setEditChallengeHabitsMode(false); setLockedChallengeMemberIds(new Set()); setShowCreateChallengeModal(true); }}
                   className="bg-primary-600 text-white py-3 px-8 rounded-xl hover:bg-primary-700 transition-colors font-semibold shadow-lg hover:shadow-xl"
                 >
                   Create Challenge
@@ -3581,7 +3699,9 @@ const GroupDetail = () => {
             {/* Header */}
             <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between">
-                <h2 className="text-xl sm:text-2xl font-semibold text-secondary-900 dark:text-white">Create New Challenge</h2>
+                <h2 className="text-xl sm:text-2xl font-semibold text-secondary-900 dark:text-white">
+                  {editChallengeHabitsMode ? 'Edit challenge habits' : 'Create New Challenge'}
+                </h2>
                 {hasHabitsAdded && (
                   <div className="flex items-center gap-2 text-sm text-orange-600 dark:text-orange-400">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3655,13 +3775,14 @@ const GroupDetail = () => {
                       {Object.entries(habitsToShow).map(([memberId, habits]) => {
                       const member = group?.members?.find(m => String(m.id) === String(memberId));
                       const isCollapsed = collapsedMembersInModal[memberId];
+                      const isLocked = editChallengeHabitsMode && lockedChallengeMemberIds.has(String(memberId));
                       return (
-                        <div key={memberId} className="bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+                        <div key={memberId} className={`rounded-lg border ${isLocked ? 'bg-gray-100 dark:bg-gray-800 border-amber-200 dark:border-amber-800' : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600'}`}>
                           <div 
-                            className={`flex items-center gap-3 p-4 ${isEditingHabits ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors' : ''}`}
-                            onClick={isEditingHabits ? () => toggleMemberCollapseInModal(memberId) : undefined}
+                            className={`flex items-center gap-3 p-4 ${isEditingHabits && !isLocked ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors' : ''}`}
+                            onClick={isEditingHabits && !isLocked ? () => toggleMemberCollapseInModal(memberId) : undefined}
                           >
-                            {isEditingHabits && (
+                            {isEditingHabits && !isLocked && (
                     <button
                       type="button"
                                 className="flex-shrink-0 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
@@ -3678,11 +3799,20 @@ const GroupDetail = () => {
                                 </svg>
                     </button>
                             )}
+                            {isLocked && (
+                              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center" title="Locked – already in challenge">
+                                <svg className="w-4 h-4 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                                </svg>
+                              </div>
+                            )}
+                            {!isLocked && (
                             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200 flex-shrink-0">
                               {member?.username?.[0]?.toUpperCase() || '?'}
                   </div>
+                            )}
                             <div className="flex-1">
-                              <h4 className="font-medium text-secondary-900 dark:text-white">{member?.username || 'Unknown Member'}</h4>
+                              <h4 className="font-medium text-secondary-900 dark:text-white">{member?.username || 'Unknown Member'}{isLocked && <span className="ml-1.5 text-amber-600 dark:text-amber-400 text-xs font-normal">(locked)</span>}</h4>
                               <p className="text-xs text-gray-500 dark:text-gray-400">{habits.length} habit{habits.length !== 1 ? 's' : ''}</p>
                         </div>
                             {!isEditingHabits && (
@@ -3692,9 +3822,17 @@ const GroupDetail = () => {
                                 </span>
                               </div>
                             )}
+                            {isLocked && isEditingHabits && (
+                              <div className="flex-shrink-0">
+                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
+                                  Locked
+                                </span>
+                              </div>
+                            )}
                           </div>
                           <div className={`px-4 pb-4 transition-all duration-300 ease-in-out overflow-hidden ${
-                            isEditingHabits && isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[1000px] opacity-100'
+                            isEditingHabits && !isLocked && isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[1000px] opacity-100'
                           }`}>
                             <div className="space-y-2">
                               {habits.map((habit, habitIndex) => (
@@ -3754,7 +3892,7 @@ const GroupDetail = () => {
                                       )}
                                     </div>
                                   </div>
-                                  {isEditingHabits && (
+                                  {isEditingHabits && !isLocked && (
                             <button
                               type="button"
                                       onClick={() => {
@@ -3789,7 +3927,33 @@ const GroupDetail = () => {
               <div className="w-full lg:w-1/2 p-4 sm:p-6 overflow-y-auto">
                 {isEditingHabits ? (
                   <form onSubmit={handleCreateChallenge} className="space-y-6">
-                    {/* Challenge Settings */}
+                    {/* Load Preset for new members only - when editing existing challenge habits */}
+                    {editChallengeHabitsMode && habitPresets.length > 0 && (
+                      <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                        <label className="block text-sm font-medium text-amber-800 dark:text-amber-200 mb-2">
+                          Load preset for new members only
+                        </label>
+                        <p className="text-xs text-amber-700 dark:text-amber-300 mb-3">
+                          Applies only to editable (newly added) members. Existing challenge members are not changed.
+                        </p>
+                        <select
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              handleLoadPreset(e.target.value);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="w-full px-3 py-2 text-sm border border-amber-300 dark:border-amber-700 rounded-lg bg-white dark:bg-gray-800 text-secondary-900 dark:text-white"
+                        >
+                          <option value="">Choose preset...</option>
+                          {habitPresets.map(preset => (
+                            <option key={preset.id} value={preset.id}>{preset.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    {/* Challenge Settings - only when creating new challenge */}
+                    {!editChallengeHabitsMode && (
                   <div className="mb-6">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">Challenge Settings</h3>
@@ -3893,6 +4057,7 @@ const GroupDetail = () => {
                       </div>
                     </div>
                         </div>
+                    )}
 
                   {/* Add Habit Form */}
                   <div className="mb-6">
@@ -3979,23 +4144,30 @@ const GroupDetail = () => {
                         
                         {/* Apply to All Toggle */}
                         <div className="mb-4">
-                          <label className="flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                          <label className={`flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors ${editChallengeHabitsMode ? '' : 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600'}`}>
                               <input
                               type="checkbox"
                               checked={currentHabit.applyToAll}
                               onChange={(e) => {
                                 const applyToAll = e.target.checked;
+                                const membersToAssign = editChallengeHabitsMode
+                                  ? (Object.keys(memberHabits).filter(id => !lockedChallengeMemberIds.has(id)).map(id => group?.members?.find(m => String(m.id) === id)).filter(Boolean).map(m => m.id) || [])
+                                  : (group?.members?.map(m => m.id) || []);
                                 setCurrentHabit({
                                   ...currentHabit,
                                   applyToAll,
-                                  assignedMembers: applyToAll ? group?.members?.map(m => m.id) || [] : []
+                                  assignedMembers: applyToAll ? membersToAssign : []
                                 });
                               }}
                               className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                             />
                             <div>
-                              <div className="font-medium text-secondary-900 dark:text-white">Apply to All Members</div>
-                              <div className="text-sm text-gray-500 dark:text-gray-400">Assign this habit to all group members</div>
+                              <div className="font-medium text-secondary-900 dark:text-white">
+                                Apply to All {editChallengeHabitsMode ? 'Editable Members' : 'Members'}
+                              </div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400">
+                                {editChallengeHabitsMode ? 'Assign this habit to all members you can edit (newly added)' : 'Assign this habit to all group members'}
+                              </div>
                             </div>
                           </label>
                           </div>
@@ -4003,12 +4175,22 @@ const GroupDetail = () => {
                         {/* Individual Member Selection */}
                         {!currentHabit.applyToAll && (
                           <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {group?.members?.map((member) => (
-                              <label key={member.id} className="flex items-center gap-3 p-2 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+                            {(editChallengeHabitsMode
+                              ? Object.keys(memberHabits).map(id => group?.members?.find(m => String(m.id) === id)).filter(Boolean)
+                              : (group?.members || [])
+                            ).map((member) => {
+                              const memberIdStr = String(member.id);
+                              const isMemberLocked = editChallengeHabitsMode && lockedChallengeMemberIds.has(memberIdStr);
+                              return (
+                              <label
+                                key={member.id}
+                                className={`flex items-center gap-3 p-2 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors ${isMemberLocked ? 'opacity-75 bg-gray-50 dark:bg-gray-800 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600'}`}
+                              >
                             <input
                                   type="checkbox"
                                   checked={currentHabit.assignedMembers.includes(member.id)}
                                   onChange={(e) => {
+                                    if (isMemberLocked) return;
                                     const isChecked = e.target.checked;
                                     setCurrentHabit({
                                       ...currentHabit,
@@ -4017,16 +4199,24 @@ const GroupDetail = () => {
                                         : currentHabit.assignedMembers.filter(id => id !== member.id)
                                     });
                                   }}
-                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                  disabled={isMemberLocked}
+                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
                                 />
-                                <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-3 flex-1">
                                   <div className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">
-                                    {member.username[0].toUpperCase()}
+                                    {member.username?.[0]?.toUpperCase() || '?'}
                           </div>
                                   <span className="text-sm font-medium text-secondary-900 dark:text-white">{member.username}</span>
+                                  {isMemberLocked && (
+                                    <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 text-xs">
+                                      <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
+                                      Locked
+                                    </span>
+                                  )}
                       </div>
                               </label>
-                            ))}
+                            );
+                            })}
                           </div>
                         )}
                         
@@ -4334,21 +4524,33 @@ const GroupDetail = () => {
                       </button>
                     </div>
 
-                    {/* Create Challenge Button */}
+                    {/* Create Challenge / Save habits Button */}
                     <div className="mb-6">
-                      <button
-                        type="button"
-                        onClick={(e) => handleCreateChallenge(e)}
-                        disabled={!newChallenge.startDate || !newChallenge.endDate || Object.values(lockedHabits).flat().length === 0}
-                        className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
-                      >
-                        🚀 Create Challenge
-                      </button>
-                      {(!newChallenge.startDate || !newChallenge.endDate || Object.values(lockedHabits).flat().length === 0) && (
-                        <p className="text-sm text-red-500 dark:text-red-400 mt-2 text-center">
-                          Please complete all fields above
-                        </p>
-                  )}
+                      {editChallengeHabitsMode ? (
+                        <button
+                          type="button"
+                          onClick={(e) => handleCreateChallenge(e)}
+                          className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                        >
+                          Save habits
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => handleCreateChallenge(e)}
+                            disabled={!newChallenge.startDate || !newChallenge.endDate || Object.values(lockedHabits).flat().length === 0}
+                            className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+                          >
+                            🚀 Create Challenge
+                          </button>
+                          {(!newChallenge.startDate || !newChallenge.endDate || Object.values(lockedHabits).flat().length === 0) && (
+                            <p className="text-sm text-red-500 dark:text-red-400 mt-2 text-center">
+                              Please complete all fields above
+                            </p>
+                          )}
+                        </>
+                      )}
                 </div>
               </div>
                   )}
@@ -4410,6 +4612,58 @@ const GroupDetail = () => {
           </div>
         </div>
       )}
+
+      {/* Add Members to Challenge Modal */}
+      {showAddMembersToChallengeModal && group?.activeChallenge && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg p-6 w-full max-w-lg max-h-[90vh] flex flex-col">
+            <h2 className="text-xl font-semibold mb-2 text-secondary-900 dark:text-white">Add members to challenge</h2>
+            <p className="text-secondary-700 dark:text-secondary-300 mb-3 text-sm">
+              Same challenge dates: <strong>{new Date(group.activeChallenge.startDate).toLocaleDateString()}</strong> – <strong>{new Date(group.activeChallenge.endDate).toLocaleDateString()}</strong>. New members start with no habits; use <strong>Set habits</strong> after adding them to assign habits on the habit setting screen.
+            </p>
+            <div className="flex-1 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-3 mb-4">
+              {membersNotInChallenge.length === 0 ? (
+                <p className="text-gray-500 dark:text-gray-400">No members available to add.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {membersNotInChallenge.map(m => (
+                    <li key={m.id} className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id={`add-member-${m.id}`}
+                        checked={addMembersToChallengeSelected.includes(m.id)}
+                        onChange={() => toggleAddMemberToChallenge(m.id)}
+                        className="rounded border-gray-300 dark:border-gray-600"
+                      />
+                      <label htmlFor={`add-member-${m.id}`} className="cursor-pointer text-secondary-800 dark:text-white">
+                        {m.username || m.email || `Member ${m.id}`}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowAddMembersToChallengeModal(false); setAddMembersToChallengeSelected([]); }}
+                className="px-4 py-2 rounded bg-gray-200 dark:bg-secondary-700 text-secondary-800 dark:text-white hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAddMembersToChallenge}
+                disabled={addMembersToChallengeSubmitting || addMembersToChallengeSelected.length === 0}
+                className="px-4 py-2 rounded bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {addMembersToChallengeSubmitting ? 'Adding…' : `Add ${addMembersToChallengeSelected.length || ''} member(s)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Archives Tab */}
       {activeTab === 'archives' && (
         <div>

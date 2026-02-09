@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../services/api';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroupId, groupType: propGroupType }) => {
   const params = useParams();
@@ -34,6 +35,9 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
   const [colorsEdited, setColorsEdited] = useState(false); // Track if colors were edited by user
   const [hoveredCell, setHoveredCell] = useState(null); // Track which cell is being hovered for tooltip
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 }); // Tooltip position
+  const [showAllTerms, setShowAllTerms] = useState(false); // Toggle between current term and all terms view
+  const [allTermsData, setAllTermsData] = useState({}); // Store data for all terms
+  const [chartVisibleSkills, setChartVisibleSkills] = useState({}); // { skillName: true/false } - which skills to show on line chart
   const hasFetchedGroupTypeRef = useRef(!!propGroupType);
   const previousGroupTypeRef = useRef(resolvedGroupType);
   const previousTermRef = useRef(null); // Track previous term to save before switching
@@ -78,6 +82,14 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
 
   // Order of levels from worst to best
   const levelOrder = ['urgent', 'development', 'growth', 'aboveAverage', 'excellent', 'unstarted'];
+
+  // Distinct colors for line chart (no repeats, easy to tell apart)
+  const CHART_LINE_COLORS = [
+    '#2563eb', '#dc2626', '#16a34a', '#ca8a04', '#9333ea', '#0891b2', '#ea580c', '#be185d',
+    '#0d9488', '#4f46e5', '#b91c1c', '#15803d', '#a16207', '#7e22ce', '#0e7490', '#c2410c',
+    '#9d174d', '#047857', '#1d4ed8', '#991b1b', '#65a30d', '#7c3aed', '#0f766e', '#c026d3',
+    '#4d7c0f', '#6366f1', '#0d9488', '#e11d48', '#84cc16', '#8b5cf6'
+  ];
 
   // Skill categories and skills based on the image structure
   const skillCategories = useMemo(() => {
@@ -574,6 +586,182 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
     return descriptions[level] || '';
   };
 
+  // Convert skill level to numeric value for chart (urgent=0, excellent=4)
+  const levelToNumeric = (level) => {
+    const levelMap = {
+      'urgent': 0,
+      'development': 1,
+      'growth': 2,
+      'aboveAverage': 3,
+      'excellent': 4,
+      'unstarted': null // Don't plot unstarted
+    };
+    return levelMap[level] ?? null;
+  };
+
+  // Load data for all terms
+  const loadAllTermsData = async () => {
+    if (!memberId) return;
+    
+    let targetGroupId = groupId;
+    if (!targetGroupId) {
+      try {
+        const response = await api.get('/auth/user');
+        const user = response.data.user;
+        if (user && user.groups && user.groups.length > 0) {
+          targetGroupId = user.groups[0].groupId;
+        } else {
+          return;
+        }
+      } catch (error) {
+        console.error('Error fetching user groups:', error);
+        return;
+      }
+    }
+
+    const terms = Object.keys(termConfig);
+    const allData = {};
+    
+    for (const term of terms) {
+      try {
+        const response = await api.get(`/groups/${targetGroupId}/members/${memberId}/skill-charts/${term}`);
+        if (response.data.skillLevels) {
+          allData[term] = response.data.skillLevels;
+        }
+      } catch (error) {
+        // Term might not have data yet, that's okay
+        console.log(`No data for term ${term}`);
+      }
+    }
+    
+    setAllTermsData(allData);
+  };
+
+  // Prepare chart data for line chart
+  const prepareChartData = useMemo(() => {
+    if (showAllTerms) {
+      // Combine all terms data - calculate average across all terms for each block
+      const allSkills = new Set();
+      const blockDataMap = {}; // { blockNum: { skill1: value, skill2: value, ... } }
+      
+      // Collect all skills and blocks from all terms
+      Object.entries(allTermsData).forEach(([term, termData]) => {
+        const termBlocks = termConfig[term]?.blocks || 0;
+        Object.keys(termData).forEach(key => {
+          const parts = key.split('-');
+          if (parts[0] === term) {
+            const skillName = parts.slice(1, -1).join('-');
+            const blockNum = parseInt(parts[parts.length - 1]);
+            allSkills.add(skillName);
+            
+            if (blockNum <= termBlocks) {
+              if (!blockDataMap[blockNum]) {
+                blockDataMap[blockNum] = {};
+              }
+              if (!blockDataMap[blockNum][skillName]) {
+                blockDataMap[blockNum][skillName] = [];
+              }
+              const numericValue = levelToNumeric(termData[key]);
+              if (numericValue !== null) {
+                blockDataMap[blockNum][skillName].push(numericValue);
+              }
+            }
+          }
+        });
+      });
+
+      // Calculate averages and create chart data array
+      const maxBlock = Math.max(...Object.keys(blockDataMap).map(Number), 0);
+      const chartData = [];
+      
+      for (let blockNum = 1; blockNum <= maxBlock; blockNum++) {
+        const blockEntry = { block: blockNum };
+        allSkills.forEach(skill => {
+          if (blockDataMap[blockNum] && blockDataMap[blockNum][skill]) {
+            const values = blockDataMap[blockNum][skill];
+            if (values.length > 0) {
+              const avg = values.reduce((a, b) => a + b, 0) / values.length;
+              blockEntry[skill] = Math.round(avg * 10) / 10;
+            }
+          }
+        });
+        chartData.push(blockEntry);
+      }
+
+      return { data: chartData, skills: Array.from(allSkills) };
+    } else {
+      // Current term only
+      const skillDataMap = {};
+      const maxBlock = activeTermConfig.blocks || 0;
+
+      // Group data by block
+      Object.keys(skillLevels).forEach(key => {
+        if (key.startsWith(`${activeTerm}-`)) {
+          const parts = key.split('-');
+          const skillName = parts.slice(1, -1).join('-');
+          const blockNum = parseInt(parts[parts.length - 1]);
+          
+          if (blockNum <= maxBlock) {
+            if (!skillDataMap[blockNum]) {
+              skillDataMap[blockNum] = {};
+            }
+            
+            const level = skillLevels[key];
+            const numericValue = levelToNumeric(level);
+            if (numericValue !== null) {
+              skillDataMap[blockNum][skillName] = numericValue;
+            }
+          }
+        }
+      });
+
+      // Convert to array format
+      const chartData = [];
+      const allSkills = new Set();
+      
+      Object.entries(skillDataMap).forEach(([blockNum, skills]) => {
+        Object.keys(skills).forEach(skill => allSkills.add(skill));
+      });
+
+      for (let blockNum = 1; blockNum <= maxBlock; blockNum++) {
+        const blockEntry = { block: blockNum };
+        if (skillDataMap[blockNum]) {
+          Object.entries(skillDataMap[blockNum]).forEach(([skill, value]) => {
+            blockEntry[skill] = value;
+          });
+        }
+        chartData.push(blockEntry);
+      }
+
+      return { data: chartData, skills: Array.from(allSkills) };
+    }
+  }, [skillLevels, activeTerm, showAllTerms, allTermsData, termConfig, activeTermConfig]);
+
+  // Load all terms data when toggle is switched to "all terms"
+  useEffect(() => {
+    if (showAllTerms && Object.keys(allTermsData).length === 0) {
+      loadAllTermsData();
+    }
+  }, [showAllTerms]);
+
+  // When available skills change, add new ones to chartVisibleSkills (default on)
+  const chartSkillsKey = prepareChartData.skills ? prepareChartData.skills.slice().sort().join(',') : '';
+  useEffect(() => {
+    if (prepareChartData.skills && prepareChartData.skills.length > 0) {
+      setChartVisibleSkills(prev => {
+        const next = { ...prev };
+        let changed = false;
+        prepareChartData.skills.forEach(skill => {
+          if (next[skill] === undefined) {
+            next[skill] = true;
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }
+  }, [chartSkillsKey]);
+
   const handleColorChange = (level, color) => {
     setColorScheme(prev => ({
       ...prev,
@@ -1007,6 +1195,135 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
             ))}
           </tbody>
         </table>
+        </div>
+      )}
+
+      {/* Line Chart Visualization */}
+      {!loading && (
+        <div className="mt-8 bg-white dark:bg-secondary-800 rounded-lg shadow-card p-4 sm:p-6">
+          <div className="flex flex-wrap justify-between items-center gap-4 mb-4">
+            <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
+              Skill Development Trend
+            </h3>
+            <div className="flex flex-wrap gap-2 items-center">
+              <button
+                onClick={() => setShowAllTerms(!showAllTerms)}
+                className="px-4 py-2 rounded-lg font-medium transition-colors bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50"
+              >
+                {showAllTerms ? '📊 Show Current Term' : '📈 Show All Terms'}
+              </button>
+              {prepareChartData.skills?.length > 0 && (
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Toggle skills below to show/hide lines
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Skill toggles - show/hide lines */}
+          {prepareChartData.skills && prepareChartData.skills.length > 0 && (
+            <div className="mb-4 p-3 bg-gray-50 dark:bg-secondary-700/50 rounded-lg border border-gray-200 dark:border-secondary-600">
+              <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Show on graph:</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {prepareChartData.skills.map((skill, index) => (
+                  <label key={skill} className="inline-flex items-center gap-1.5 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={chartVisibleSkills[skill] !== false}
+                      onChange={() => {
+                        setChartVisibleSkills(prev => ({ ...prev, [skill]: prev[skill] === false }));
+                      }}
+                      className="rounded border-gray-400 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span
+                      className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white"
+                      style={{ borderBottomWidth: 2, borderBottomColor: CHART_LINE_COLORS[index % CHART_LINE_COLORS.length] }}
+                    >
+                      {skill}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const on = {};
+                    prepareChartData.skills.forEach(s => { on[s] = true; });
+                    setChartVisibleSkills(on);
+                  }}
+                  className="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-secondary-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-secondary-500"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const off = {};
+                    prepareChartData.skills.forEach(s => { off[s] = false; });
+                    setChartVisibleSkills(off);
+                  }}
+                  className="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-secondary-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-secondary-500"
+                >
+                  Deselect all
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {prepareChartData.data && prepareChartData.data.length > 0 && prepareChartData.skills.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={prepareChartData.data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis 
+                    dataKey="block" 
+                    type="number"
+                    domain={['dataMin', 'dataMax']}
+                    label={{ value: 'Block', position: 'insideBottom', offset: -5 }}
+                    tick={{ fill: '#6b7280' }}
+                  />
+                  <YAxis 
+                    domain={[0, 4]}
+                    label={{ value: 'Development Level', angle: -90, position: 'insideLeft' }}
+                    tick={{ fill: '#6b7280' }}
+                    tickFormatter={(value) => {
+                      const levelMap = ['Urgent', 'Development', 'Growth', 'Above Avg', 'Excellent'];
+                      return levelMap[value] || '';
+                    }}
+                  />
+                  <Tooltip 
+                    formatter={(value, name) => {
+                      const levelMap = ['Urgent', 'Development', 'Growth', 'Above Average', 'Excellent'];
+                      return [levelMap[Math.round(value)] || value, name];
+                    }}
+                    labelFormatter={(label) => `Block ${label}`}
+                  />
+                  <Legend />
+                  {prepareChartData.skills
+                    .filter(skill => chartVisibleSkills[skill] !== false)
+                    .map(skill => (
+                      <Line
+                        key={skill}
+                        type="monotone"
+                        dataKey={skill}
+                        name={skill}
+                        stroke={CHART_LINE_COLORS[prepareChartData.skills.indexOf(skill) % CHART_LINE_COLORS.length]}
+                        strokeWidth={2}
+                        dot={{ r: 4 }}
+                        connectNulls={false}
+                      />
+                    ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </>
+          ) : (
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              {showAllTerms 
+                ? 'No data available across all terms' 
+                : `No skill data available for ${activeTermConfig.name}`}
+            </div>
+          )}
         </div>
       )}
 

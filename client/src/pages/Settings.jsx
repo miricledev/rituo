@@ -2,39 +2,56 @@ import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import PinUnlock from '../components/PinUnlock';
+
+const KEYPAD_PIN = '302185'; // Same as create group / keypad screen
 
 const Settings = () => {
-  const { currentUser, updateUsername, deleteAccount, logout } = useAuth();
+  const { currentUser, updateUsername, updateEmail, logout } = useAuth();
   const navigate = useNavigate();
   const [newUsername, setNewUsername] = useState(currentUser?.username || '');
-  const [isEditing, setIsEditing] = useState(false);
+  const [newEmail, setNewEmail] = useState(currentUser?.email || '');
+  const [showPinForUsername, setShowPinForUsername] = useState(false);
+  const [showPinForEmail, setShowPinForEmail] = useState(false);
+  const [isEditingUsername, setIsEditingUsername] = useState(false);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [resetEmail, setResetEmail] = useState(currentUser?.email || '');
   const [resetSuccess, setResetSuccess] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
 
   const handleUsernameUpdate = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
-
+    setPasswordError('');
     try {
-      const res = await axios.put(
-        `${import.meta.env.VITE_API_URL}/api/auth/update-username`,
-        { username: newUsername },
-        {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`
-          }
-        }
-      );
+      await updateUsername(newUsername.trim(), KEYPAD_PIN);
       setSuccess('Username updated successfully');
-      updateUsername(newUsername);
-      setNewUsername('');
+      setIsEditingUsername(false);
+      setNewUsername(currentUser?.username || '');
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to update username');
+      setPasswordError(err.response?.data?.message);
+    }
+  };
+
+  const handleEmailUpdate = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    setPasswordError('');
+    try {
+      await updateEmail(newEmail.trim(), KEYPAD_PIN);
+      setSuccess('Email updated successfully');
+      setIsEditingEmail(false);
+      setNewEmail(currentUser?.email || '');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to update email');
+      setPasswordError(err.response?.data?.message);
     }
   };
 
@@ -107,46 +124,18 @@ const Settings = () => {
                 Username
               </label>
               <div className="flex items-center space-x-4">
-                {isEditing ? (
-                  <form onSubmit={handleUpdateUsername} className="flex-1 flex items-center space-x-4">
-                    <input
-                      type="text"
-                      value={newUsername}
-                      onChange={(e) => setNewUsername(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-secondary-700 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 dark:bg-secondary-700 dark:text-white"
-                      placeholder="Enter new username"
-                    />
-                    <button
-                      type="submit"
-                      className="btn btn-primary px-4 py-2"
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditing(false);
-                        setNewUsername(currentUser?.username || '');
-                        setError('');
-                      }}
-                      className="btn btn-outline px-4 py-2"
-                    >
-                      Cancel
-                    </button>
-                  </form>
-                ) : (
-                  <>
-                    <div className="flex-1 px-3 py-2 bg-gray-50 dark:bg-secondary-700 rounded-md">
-                      {currentUser?.username}
-                    </div>
-                    <button
-                      onClick={() => setIsEditing(true)}
-                      className="btn btn-outline px-4 py-2"
-                    >
-                      Edit
-                    </button>
-                  </>
-                )}
+                <div className="flex-1 px-3 py-2 bg-gray-50 dark:bg-secondary-700 rounded-md">
+                  {currentUser?.username}
+                </div>
+                <button
+                  onClick={() => {
+                    setNewUsername(currentUser?.username || '');
+                    setShowPinForUsername(true);
+                  }}
+                  className="btn btn-outline px-4 py-2"
+                >
+                  Edit
+                </button>
               </div>
             </div>
 
@@ -154,8 +143,19 @@ const Settings = () => {
               <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">
                 Email
               </label>
-              <div className="px-3 py-2 bg-gray-50 dark:bg-secondary-700 rounded-md">
-                {currentUser?.email}
+              <div className="flex items-center space-x-4">
+                <div className="flex-1 px-3 py-2 bg-gray-50 dark:bg-secondary-700 rounded-md">
+                  {currentUser?.email}
+                </div>
+                <button
+                  onClick={() => {
+                    setNewEmail(currentUser?.email || '');
+                    setShowPinForEmail(true);
+                  }}
+                  className="btn btn-outline px-4 py-2"
+                >
+                  Edit
+                </button>
               </div>
             </div>
 
@@ -292,6 +292,136 @@ const Settings = () => {
           </div>
         </div>
       </div>
+
+      {/* Keypad screen for Edit Username */}
+      {showPinForUsername && (
+        <div className="fixed inset-0 z-50">
+          <PinUnlock
+            title="Edit username"
+            onUnlock={() => {
+              setShowPinForUsername(false);
+              setIsEditingUsername(true);
+            }}
+          />
+          <button
+            type="button"
+            className="absolute top-4 right-4 z-10 text-white text-2xl hover:text-gray-300 p-2"
+            onClick={() => setShowPinForUsername(false)}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Edit Username Modal (after keypad verified) */}
+      {isEditingUsername && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">
+              Edit Username
+            </h3>
+            <form onSubmit={handleUsernameUpdate} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-1">
+                  New username
+                </label>
+                <input
+                  type="text"
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-secondary-700 rounded-md focus:ring-primary-500 focus:border-primary-500 dark:bg-secondary-700 dark:text-white"
+                  placeholder="Enter new username"
+                  required
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{passwordError}</p>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingUsername(false);
+                    setPasswordError('');
+                  }}
+                  className="btn btn-outline px-4 py-2"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary px-4 py-2">
+                  Save username
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Keypad screen for Edit Email */}
+      {showPinForEmail && (
+        <div className="fixed inset-0 z-50">
+          <PinUnlock
+            title="Edit email"
+            onUnlock={() => {
+              setShowPinForEmail(false);
+              setIsEditingEmail(true);
+            }}
+          />
+          <button
+            type="button"
+            className="absolute top-4 right-4 z-10 text-white text-2xl hover:text-gray-300 p-2"
+            onClick={() => setShowPinForEmail(false)}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Edit Email Modal (after keypad verified) */}
+      {isEditingEmail && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-secondary-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">
+              Edit Email
+            </h3>
+            <form onSubmit={handleEmailUpdate} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-1">
+                  New email
+                </label>
+                <input
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-secondary-700 rounded-md focus:ring-primary-500 focus:border-primary-500 dark:bg-secondary-700 dark:text-white"
+                  placeholder="Enter new email"
+                  required
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{passwordError}</p>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingEmail(false);
+                    setPasswordError('');
+                  }}
+                  className="btn btn-outline px-4 py-2"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary px-4 py-2">
+                  Save email
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Delete Account Confirmation Modal */}
       {isDeleting && (

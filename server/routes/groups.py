@@ -107,6 +107,99 @@ def create_challenge():
         db.session.rollback()
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
+
+@groups_bp.route('/<group_id>/challenge/<int:challenge_id>/add-members', methods=['POST'])
+@jwt_required()
+def add_members_to_challenge(group_id, challenge_id):
+    """Add group members to the active challenge (same dates as original). Only leader. Members already in challenge are ignored."""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only the group leader can add members to the challenge'}), 403
+        if not group.active_challenge or group.active_challenge.id != challenge_id:
+            return jsonify({'error': 'Challenge not found or not the active challenge'}), 404
+
+        challenge = group.active_challenge
+        data = request.get_json() or {}
+        member_ids = data.get('memberIds', [])
+        if not member_ids:
+            return jsonify({'error': 'memberIds array is required'}), 400
+
+        # Existing challenge member ids (from member_habits)
+        existing_member_ids = {str(mh.get('member')) for mh in (challenge.member_habits or [])}
+        existing_member_ids |= {str(mh.get('member', {}).get('id')) for mh in (challenge.member_habits or []) if isinstance(mh.get('member'), dict)}
+
+        member_habits = list(challenge.member_habits or [])
+        added = []
+
+        for mid in member_ids:
+            mid_str = str(mid)
+            if mid_str in existing_member_ids:
+                continue
+            user = User.query.get(mid)
+            if not user:
+                continue
+            # Must be a member of the group
+            if not any(m.id == user.id for m in group.members):
+                continue
+            # Only add to user_active_challenges if not already in this challenge (avoids UniqueViolation)
+            if challenge not in user.active_group_challenges:
+                user.active_group_challenges.append(challenge)
+            # Add member_habits entry with empty habits so leader can set habits manually on the habit setting screen
+            member_habits.append({'member': user.id, 'habits': []})
+            existing_member_ids.add(mid_str)
+            added.append(user.id)
+
+        if not added:
+            return jsonify({
+                'message': 'No new members added (none selected or all already in challenge)',
+                'group': group.to_dict()
+            }), 200
+
+        challenge.member_habits = member_habits
+        flag_modified(challenge, 'member_habits')
+        db.session.commit()
+        return jsonify({
+            'message': f'Added {len(added)} member(s) to the challenge',
+            'group': group.to_dict()
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/challenge/<int:challenge_id>/member-habits', methods=['PUT'])
+@jwt_required()
+def update_challenge_member_habits(group_id, challenge_id):
+    """Update member_habits for the active challenge (leader only). Use this to set habits for new members or edit existing ones."""
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        if group.leader_id != current_user_id:
+            return jsonify({'error': 'Only the group leader can update challenge habits'}), 403
+        if not group.active_challenge or group.active_challenge.id != challenge_id:
+            return jsonify({'error': 'Challenge not found or not the active challenge'}), 404
+
+        challenge = group.active_challenge
+        data = request.get_json() or {}
+        member_habits = data.get('memberHabits')
+        if member_habits is None:
+            return jsonify({'error': 'memberHabits array is required'}), 400
+
+        challenge.member_habits = member_habits
+        flag_modified(challenge, 'member_habits')
+        db.session.commit()
+        return jsonify({'message': 'Challenge habits updated', 'group': group.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
 @groups_bp.route('/my-groups', methods=['GET'])
 @jwt_required()
 def get_my_groups():
