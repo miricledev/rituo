@@ -1,3 +1,12 @@
+# Ensure pkg_resources is available on Python 3.12+ (required by APScheduler; Render cache may skip setuptools)
+try:
+    import pkg_resources  # noqa: F401
+except ModuleNotFoundError:
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools>=65.0.0", "-q"])
+    import pkg_resources  # noqa: F401
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, get_jwt, verify_jwt_in_request
