@@ -173,6 +173,8 @@ def log_request_info():
         request_headers = dict(request.headers)
         if 'Authorization' in request_headers:
             request_headers['Authorization'] = '[REDACTED]'
+        if 'Cookie' in request_headers:
+            request_headers['Cookie'] = '[REDACTED]'
         app.logger.info(f'Request Headers: {request_headers}')
         if request.is_json:
             body_msg = f'Request Body: {redact_request_data(request.get_json(silent=True) or {})}'

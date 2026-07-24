@@ -14,7 +14,10 @@ const getPageName = (pathname) => {
 const inferGroupId = (pathname) => {
   const groupMatch = pathname.match(/^\/groups\/([^/?#]+)/);
   if (groupMatch?.[1]) return groupMatch[1];
-  return localStorage.getItem('teacher-desk-group') || '';
+  if (pathname.startsWith('/teacher-desk')) {
+    return localStorage.getItem('teacher-desk-group') || '';
+  }
+  return '';
 };
 
 const fallbackConfigs = {
