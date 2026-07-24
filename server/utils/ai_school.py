@@ -18,12 +18,14 @@ VALID_AI_ACTION_TYPES = (
     "group-dashboard",
     "group-teaching",
     "teacher-desk",
+    "school-admin",
     "goal-plan",
     "none",
 )
 
 RITUO_APP_GUIDE = """
 Rituo is a school-first app with these top-level school areas: Dashboard, Students, Teaching, Homework, Operations, Reports, and Community.
+Administrators manage each school from its Admin tab. It includes generated student, teacher, and admin accounts; AI-assisted CSV student import; review before creation; people search and editing; password resets; student login packs; school access removal; setup shortcuts; and school settings.
 Teacher Desk is the fastest daily workflow for staff. It combines my classes today, lesson register, behaviour logging, homework review, reminders, at-risk cards, interventions, coverage warnings, and recommended next actions.
 The school dashboard summarizes live attendance, homework, behaviour, interventions, class coverage, and staff accountability.
 Students are managed through profile panels that include goals, linked habits, planner scheduling, goal activity unlocks, attendance, behaviour, parent contacts, homework, and interventions.
@@ -107,7 +109,7 @@ COPILOT_ROLE_PROFILES = {
 COPILOT_PAGE_PROMPTS = {
     "admin": {
         "groups": ["How do I create a school and add its students?"],
-        "group-detail": ["What should I review first in this school?"],
+        "group-detail": ["How do I use this school’s Admin tab to add people or import students?"],
         "teacher-desk": ["Which operational risks are visible in Teacher Desk?"],
     },
     "teacher": {
@@ -602,6 +604,8 @@ def build_copilot_action_link(action_type, group_id=None, target_date=None):
     if action_type == "teacher-desk":
         suffix = f"?group={group_id}" if group_id else ""
         return {"label": "Open Teacher Desk", "route": f"/teacher-desk{suffix}"}
+    if action_type == "school-admin" and group_id:
+        return {"label": "Open School Admin", "route": f"/groups/{group_id}?tab=admin"}
     if action_type == "homework" and group_id:
         return {"label": "Open Homework", "route": f"/groups/{group_id}?section=school-homework"}
     if action_type == "students" and group_id:

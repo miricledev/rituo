@@ -6,10 +6,20 @@ import os
 import re
 import secrets
 
-from db.models import db, Group, SchoolClass, SchoolEnrollment, SchoolRoleAssignment, User
+from db.models import (
+    db,
+    CoachAssignment,
+    Group,
+    SchoolClass,
+    SchoolEnrollment,
+    SchoolRoleAssignment,
+    SchoolTeachingAssignment,
+    User,
+)
 from utils.openai_responses import OpenAIResponsesError, create_structured_response, structured_contract_metadata
 from utils.student_import import (
     EXPECTED_HEADERS,
+    INNER_PERFORMANCE_EMAIL_DOMAIN,
     StudentImportError,
     build_column_mapping_schema,
     generate_student_credentials,
@@ -74,6 +84,21 @@ def _admin_can_manage_account(admin, user):
     ).first() is not None
 
 
+def _temporary_password_for_role(account_role):
+    if account_role == 'student':
+        return f"{secrets.randbelow(1_000_000):06d}"
+    return secrets.token_urlsafe(10)
+
+
+def _generate_account_identity(first_name, last_name, existing_usernames, existing_emails):
+    generated = generate_student_credentials(
+        [{'firstName': first_name, 'lastName': last_name}],
+        existing_usernames,
+        existing_emails,
+    )[0]
+    return generated['username'], generated['email']
+
+
 def _remove_student_from_other_current_schools(user, destination_group):
     assignments = SchoolRoleAssignment.query.filter(
         SchoolRoleAssignment.user_id == user.id,
@@ -95,6 +120,21 @@ def _remove_student_from_other_current_schools(user, destination_group):
 def _assign_account_to_school(user, group, school_role):
     if school_role == 'student':
         _remove_student_from_other_current_schools(user, group)
+        SchoolTeachingAssignment.query.filter_by(group_id=group.id, teacher_id=user.id).delete(
+            synchronize_session=False
+        )
+        CoachAssignment.query.filter_by(group_id=group.id, coach_id=user.id).delete(
+            synchronize_session=False
+        )
+        if user in group.coaches:
+            group.coaches.remove(user)
+    else:
+        SchoolEnrollment.query.filter_by(group_id=group.id, student_id=user.id).delete(
+            synchronize_session=False
+        )
+        CoachAssignment.query.filter_by(group_id=group.id, student_id=user.id).delete(
+            synchronize_session=False
+        )
 
     assignment = SchoolRoleAssignment.query.filter_by(group_id=group.id, user_id=user.id).first()
     if assignment:
@@ -155,16 +195,39 @@ def create_account():
         return jsonify({'error': 'Admin account required'}), 403
 
     data = request.get_json() or {}
+    first_name = str(data.get('firstName') or '').strip()
+    last_name = str(data.get('lastName') or '').strip()
     username = str(data.get('username') or '').strip()
     email = str(data.get('email') or '').strip().lower()
     account_role = str(data.get('accountRole') or '').strip().lower()
     supplied_password = str(data.get('password') or '')
-    generated_password = supplied_password or secrets.token_urlsafe(10)
 
-    if not username or not email or account_role not in VALID_ACCOUNT_ROLES:
-        return jsonify({'error': 'username, email, and a valid accountRole are required'}), 400
-    if len(generated_password) < 8:
-        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    if account_role not in VALID_ACCOUNT_ROLES:
+        return jsonify({'error': 'A valid accountRole is required'}), 400
+
+    if not username:
+        if not first_name or not last_name:
+            return jsonify({'error': 'First and last name are required when generating login details'}), 400
+        existing_users = User.query.with_entities(User.username, User.email).all()
+        username, generated_email = _generate_account_identity(
+            first_name,
+            last_name,
+            {row.username for row in existing_users},
+            {row.email for row in existing_users},
+        )
+        email = email or generated_email
+    elif not email:
+        email = f'{username.lower()}@{INNER_PERFORMANCE_EMAIL_DOMAIN}'
+
+    if not re.fullmatch(r'[A-Za-z0-9._-]{3,80}', username):
+        return jsonify({'error': 'Username must use 3-80 letters, numbers, dots, hyphens, or underscores'}), 400
+    if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
+        return jsonify({'error': 'A valid email is required'}), 400
+
+    generated_password = supplied_password or _temporary_password_for_role(account_role)
+    valid_student_pin = account_role == 'student' and re.fullmatch(r'\d{6}', generated_password)
+    if len(generated_password) < 8 and not valid_student_pin:
+        return jsonify({'error': 'Password must be at least 8 characters, or a 6-digit student password'}), 400
     if User.query.filter((User.username == username) | (User.email == email)).first():
         return jsonify({'error': 'Username or email already exists'}), 409
 
@@ -182,8 +245,8 @@ def create_account():
         account_role=account_role,
         managed_by_id=admin.id,
         is_active=True,
-        first_name=str(data.get('firstName') or '').strip() or None,
-        last_name=str(data.get('lastName') or '').strip() or None,
+        first_name=first_name or None,
+        last_name=last_name or None,
         year_group=str(data.get('yearGroup') or '').strip() or None,
         tutor_group=str(data.get('tutorGroup') or '').strip() or None,
     )
@@ -236,11 +299,15 @@ def update_account(user_id):
             return jsonify({'error': 'Email already exists'}), 409
         user.email = email
     if 'isActive' in data:
+        if user.id == admin.id and not bool(data['isActive']):
+            return jsonify({'error': 'You cannot deactivate your own admin account'}), 400
         user.is_active = bool(data['isActive'])
     if 'accountRole' in data:
         account_role = str(data['accountRole']).strip().lower()
         if account_role not in VALID_ACCOUNT_ROLES:
             return jsonify({'error': 'Invalid account role'}), 400
+        if user.id == admin.id and account_role != 'admin':
+            return jsonify({'error': 'You cannot remove your own admin access'}), 400
         user.account_role = account_role
     if data.get('password'):
         password = str(data['password'])
@@ -496,6 +563,122 @@ def list_school_students(group_id):
             }
             for student in students
         ],
+    }), 200
+
+
+@admin_bp.route('/schools/<group_id>/accounts', methods=['GET'])
+@jwt_required()
+def list_school_accounts(group_id):
+    admin = _current_admin()
+    if not admin:
+        return jsonify({'error': 'Admin account required'}), 403
+
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not _admin_can_manage_school(admin, group):
+        return jsonify({'error': 'You cannot manage this school'}), 403
+
+    assignments = SchoolRoleAssignment.query.filter_by(group_id=group.id).all()
+    accounts = []
+    for assignment in assignments:
+        if not assignment.user:
+            continue
+        accounts.append({
+            **assignment.user.to_dict(),
+            'schoolRole': assignment.role,
+            'schoolAssignmentId': assignment.id,
+            'schoolAssignments': [{
+                'id': assignment.id,
+                'groupId': group.id,
+                'userId': assignment.user_id,
+                'role': assignment.role,
+            }],
+        })
+    accounts.sort(key=lambda account: (
+        {'school-admin': 0, 'headteacher': 1, 'teacher': 2, 'coach': 3, 'student': 4}.get(account['schoolRole'], 5),
+        account['lastName'].lower(),
+        account['firstName'].lower(),
+        account['username'].lower(),
+    ))
+
+    return jsonify({
+        'school': {'groupId': group.group_id, 'name': group.name},
+        'accounts': accounts,
+        'summary': {
+            'total': len(accounts),
+            'students': sum(account['accountRole'] == 'student' for account in accounts),
+            'teachers': sum(account['accountRole'] == 'teacher' for account in accounts),
+            'admins': sum(account['accountRole'] == 'admin' for account in accounts),
+            'inactive': sum(not account['isActive'] for account in accounts),
+        },
+    }), 200
+
+
+@admin_bp.route('/schools/<group_id>/accounts/<int:user_id>/reset-password', methods=['POST'])
+@jwt_required()
+def reset_school_account_password(group_id, user_id):
+    admin = _current_admin()
+    if not admin:
+        return jsonify({'error': 'Admin account required'}), 403
+
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not _admin_can_manage_school(admin, group):
+        return jsonify({'error': 'You cannot manage this school'}), 403
+
+    assignment = SchoolRoleAssignment.query.filter_by(group_id=group.id, user_id=user_id).first()
+    user = User.query.get(user_id)
+    if not assignment or not user or not _admin_can_manage_account(admin, user):
+        return jsonify({'error': 'Account not found in this school'}), 404
+    if user.id == admin.id:
+        return jsonify({'error': 'Use account settings to change your own password'}), 400
+
+    temporary_password = _temporary_password_for_role(user.account_role)
+    user.password = generate_password_hash(temporary_password)
+    db.session.commit()
+    response = jsonify({
+        'account': user.to_dict(),
+        'temporaryPassword': temporary_password,
+        'message': f'Temporary password generated for {user.username}',
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response, 200
+
+
+@admin_bp.route('/schools/<group_id>/accounts/<int:user_id>', methods=['DELETE'])
+@jwt_required()
+def remove_school_account(group_id, user_id):
+    admin = _current_admin()
+    if not admin:
+        return jsonify({'error': 'Admin account required'}), 403
+
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not _admin_can_manage_school(admin, group):
+        return jsonify({'error': 'You cannot manage this school'}), 403
+    if admin.id == user_id:
+        return jsonify({'error': 'You cannot remove your own admin access'}), 400
+
+    assignment = SchoolRoleAssignment.query.filter_by(group_id=group.id, user_id=user_id).first()
+    user = User.query.get(user_id)
+    if not assignment or not user or not _admin_can_manage_account(admin, user):
+        return jsonify({'error': 'Account not found in this school'}), 404
+
+    if user in group.members:
+        group.members.remove(user)
+    if user in group.coaches:
+        group.coaches.remove(user)
+    SchoolEnrollment.query.filter_by(group_id=group.id, student_id=user.id).delete(
+        synchronize_session=False
+    )
+    SchoolTeachingAssignment.query.filter_by(group_id=group.id, teacher_id=user.id).delete(
+        synchronize_session=False
+    )
+    CoachAssignment.query.filter(
+        CoachAssignment.group_id == group.id,
+        (CoachAssignment.coach_id == user.id) | (CoachAssignment.student_id == user.id),
+    ).delete(synchronize_session=False)
+    db.session.delete(assignment)
+    db.session.commit()
+    return jsonify({
+        'message': f'{user.username} was removed from {group.name}. The account was not deleted.',
     }), 200
 
 

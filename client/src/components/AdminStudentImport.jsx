@@ -36,12 +36,12 @@ const downloadCsv = (filename, headers, rows) => {
   URL.revokeObjectURL(url);
 };
 
-const AdminStudentImport = ({ schools, onImported, onToast }) => {
+const AdminStudentImport = ({ schools, lockedGroupId = '', onImported, onToast }) => {
   const manageableSchools = useMemo(
     () => schools.filter((school) => school.viewerCanManage),
     [schools]
   );
-  const [groupId, setGroupId] = useState('');
+  const [groupId, setGroupId] = useState(lockedGroupId);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [students, setStudents] = useState([]);
@@ -51,10 +51,14 @@ const AdminStudentImport = ({ schools, onImported, onToast }) => {
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
+    if (lockedGroupId) {
+      setGroupId(lockedGroupId);
+      return;
+    }
     if (!groupId && manageableSchools.length) {
       setGroupId(manageableSchools[0].groupId);
     }
-  }, [groupId, manageableSchools]);
+  }, [groupId, lockedGroupId, manageableSchools]);
 
   const errorMap = useMemo(() => {
     const result = new Map();
@@ -121,7 +125,7 @@ const AdminStudentImport = ({ schools, onImported, onToast }) => {
         title: 'Students imported',
         message: response.data.message
       });
-      await onImported();
+      await onImported?.();
     } catch (error) {
       setValidationErrors(error.response?.data?.validationErrors || []);
       onToast({
@@ -175,11 +179,13 @@ const AdminStudentImport = ({ schools, onImported, onToast }) => {
         </button>
       </div>
 
-      <div className="mt-5 grid gap-3 lg:grid-cols-[.8fr_1.2fr_auto]">
-        <select value={groupId} onChange={(event) => setGroupId(event.target.value)} className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm outline-none focus:border-cyan-400">
-          <option value="">Choose school</option>
-          {manageableSchools.map((school) => <option key={school.id} value={school.groupId}>{school.name}</option>)}
-        </select>
+      <div className={`mt-5 grid gap-3 ${lockedGroupId ? 'lg:grid-cols-[1fr_auto]' : 'lg:grid-cols-[.8fr_1.2fr_auto]'}`}>
+        {!lockedGroupId && (
+          <select value={groupId} onChange={(event) => setGroupId(event.target.value)} className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm outline-none focus:border-cyan-400">
+            <option value="">Choose school</option>
+            {manageableSchools.map((school) => <option key={school.id} value={school.groupId}>{school.name}</option>)}
+          </select>
+        )}
         <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-white/15 bg-slate-950/50 px-4 py-3 text-sm text-slate-300 transition hover:border-cyan-400/50">
           <FaUpload className="text-cyan-300" />
           <span className="truncate">{file?.name || 'Choose a UTF-8 CSV file'}</span>

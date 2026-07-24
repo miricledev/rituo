@@ -11,6 +11,7 @@ import ArchivePanel from './ArchivePanel';
 import LeaderboardPanel from './LeaderboardPanel';
 import ColorChartPanel from './ColorChartPanel';
 import HabitPresetModal from './HabitPresetModal';
+import SchoolAdminWorkspace from './SchoolAdminWorkspace';
 
 function formatChannelActivityTime(timestamp) {
   if (!timestamp) return 'No activity yet';
@@ -135,7 +136,14 @@ function GroupDetailWorkspace(props) {
     onSavePreset,
     onUpdatePresetHabit,
     presetFormData,
-    setPresetFormData
+    setPresetFormData,
+    showPageToast,
+    onOpenSchoolSection,
+    deleteGroupConfirmText,
+    setDeleteGroupConfirmText,
+    setShowDeleteGroupStep,
+    showDeleteGroupStep,
+    handleDeleteGroup
   } = props;
   const schoolWideUnreadCount = chatChannel?.schoolWideUnreadCount || 0;
   const accessibleClasses = chatChannel?.accessibleClasses || [];
@@ -528,6 +536,22 @@ function GroupDetailWorkspace(props) {
         renderLazyPanel={renderLazyPanel}
         HabitCalendar={HabitCalendar}
       />
+
+      {activeTab === 'admin' && isLeader && (group?.groupType || 'school') === 'school' && (
+        <SchoolAdminWorkspace
+          group={group}
+          groupId={groupId}
+          user={user}
+          fetchGroupDetails={fetchGroupDetails}
+          showPageToast={showPageToast}
+          onOpenSchoolSection={onOpenSchoolSection}
+          deleteGroupConfirmText={deleteGroupConfirmText}
+          setDeleteGroupConfirmText={setDeleteGroupConfirmText}
+          setShowDeleteGroupStep={setShowDeleteGroupStep}
+          showDeleteGroupStep={showDeleteGroupStep}
+          onDeleteGroup={handleDeleteGroup}
+        />
+      )}
 
       <ChallengeEditorModal
         show={showCreateChallengeModal}

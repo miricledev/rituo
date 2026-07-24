@@ -5,26 +5,29 @@ const GroupManagementSection = ({
   setShowDeleteGroupStep,
   showDeleteGroupStep,
   onDeleteGroup
-}) => (
+}) => {
+  const workspaceLabel = group?.groupType === 'school' ? 'School' : 'Group';
+
+  return (
   <div>
     <div className="mb-8">
-      <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">Group Management</h2>
-      <p className="text-secondary-600 dark:text-secondary-400">Manage group settings and delete the group</p>
+      <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">{workspaceLabel} Management</h2>
+      <p className="text-secondary-600 dark:text-secondary-400">Manage workspace settings and delete the {workspaceLabel.toLowerCase()}</p>
     </div>
 
     <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-6">
       <div className="mb-6">
         <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-4">Danger Zone</h3>
         <div className="border-2 border-red-300 dark:border-red-700 rounded-lg p-4 bg-red-50 dark:bg-red-900/20">
-          <h4 className="font-semibold text-red-900 dark:text-red-300 mb-2">Delete Group</h4>
+          <h4 className="font-semibold text-red-900 dark:text-red-300 mb-2">Delete {workspaceLabel}</h4>
           <p className="text-sm text-red-700 dark:text-red-400 mb-4">
-            Permanently delete this group and all its data. This action cannot be undone.
+            Permanently delete this {workspaceLabel.toLowerCase()} and all its data. This action cannot be undone.
           </p>
           <button
             onClick={() => setShowDeleteGroupStep(1)}
             className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
           >
-            Delete Group
+            Delete {workspaceLabel}
           </button>
         </div>
       </div>
@@ -147,6 +150,7 @@ const GroupManagementSection = ({
       </div>
     )}
   </div>
-);
+  );
+};
 
 export default GroupManagementSection;

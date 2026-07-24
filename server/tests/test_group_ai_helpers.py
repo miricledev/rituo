@@ -181,6 +181,10 @@ class GroupAiHelperTests(unittest.TestCase):
             build_copilot_action_link("goal-plan", group_id="DEMOHS1"),
             {"label": "Open Students", "route": "/groups/DEMOHS1?section=student-profiles"},
         )
+        self.assertEqual(
+            build_copilot_action_link("school-admin", group_id="DEMOHS1"),
+            {"label": "Open School Admin", "route": "/groups/DEMOHS1?tab=admin"},
+        )
 
 
 if __name__ == "__main__":

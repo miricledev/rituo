@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import axios from 'axios';
 import { FaSave, FaTimes } from 'react-icons/fa';
 
-const AdminAccountEditor = ({ account, schools, onClose, onSaved, onToast }) => {
+const AdminAccountEditor = ({ account, schools, lockedGroupId = '', onClose, onSaved, onToast }) => {
   const manageableSchools = useMemo(
     () => schools.filter((school) => school.viewerCanManage),
     [schools]
@@ -20,7 +20,7 @@ const AdminAccountEditor = ({ account, schools, onClose, onSaved, onToast }) => 
     accountRole: account.accountRole || 'student',
     isActive: account.isActive !== false,
     password: '',
-    groupId: currentSchool?.groupId || manageableSchools[0]?.groupId || ''
+    groupId: lockedGroupId || currentSchool?.groupId || manageableSchools[0]?.groupId || ''
   });
   const [saving, setSaving] = useState(false);
 
@@ -80,10 +80,12 @@ const AdminAccountEditor = ({ account, schools, onClose, onSaved, onToast }) => 
             <option value="teacher">Teacher account</option>
             <option value="admin">Admin account</option>
           </select>
-          <select value={form.groupId} onChange={(event) => updateForm('groupId', event.target.value)} className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm outline-none focus:border-cyan-400">
-            <option value="">No school change</option>
-            {manageableSchools.map((school) => <option key={school.id} value={school.groupId}>{school.name}</option>)}
-          </select>
+          {!lockedGroupId && (
+            <select value={form.groupId} onChange={(event) => updateForm('groupId', event.target.value)} className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm outline-none focus:border-cyan-400">
+              <option value="">No school change</option>
+              {manageableSchools.map((school) => <option key={school.id} value={school.groupId}>{school.name}</option>)}
+            </select>
+          )}
           <input value={form.yearGroup} onChange={(event) => updateForm('yearGroup', event.target.value)} placeholder="Year group" className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
           <input value={form.tutorGroup} onChange={(event) => updateForm('tutorGroup', event.target.value)} placeholder="Tutor group" className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
         </div>

@@ -457,11 +457,12 @@ const GroupDetail = () => {
     setSelectedChatClassId(Number.isFinite(parsedClassId) ? parsedClassId : null);
     if (tab === 'course') setActiveTab('course');
     if (tab === 'school-impact' || tab === 'school') setActiveTab('school');
+    if (tab === 'admin' && isLeader) setActiveTab('admin');
     if (tab === 'chat') setActiveTab('chat');
     if (tab === 'dms' || tab === 'dm') {
       setActiveTab(isSchoolGroup ? 'chat' : tab);
     }
-  }, [isSchoolGroup, searchParams]);
+  }, [isLeader, isSchoolGroup, searchParams]);
 
   useEffect(() => {
     const currentClassParam = searchParams.get('class');
@@ -762,6 +763,12 @@ const GroupDetail = () => {
     setForcedSchoolSection(area.defaultSection || null);
   };
 
+  const handleOpenSchoolSection = (section) => {
+    setActiveTab('school');
+    setCurrentSchoolSection(section);
+    setForcedSchoolSection(section);
+  };
+
   const workspaceProps = {
     activeTab,
     isLeader,
@@ -888,7 +895,14 @@ const GroupDetail = () => {
     onSavePreset: handleSavePreset,
     onUpdatePresetHabit: handleUpdatePresetHabit,
     presetFormData,
-    setPresetFormData
+    setPresetFormData,
+    showPageToast,
+    onOpenSchoolSection: handleOpenSchoolSection,
+    deleteGroupConfirmText,
+    setDeleteGroupConfirmText,
+    setShowDeleteGroupStep,
+    showDeleteGroupStep,
+    handleDeleteGroup
   };
 
   return isSchoolGroup ? (

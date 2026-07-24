@@ -84,7 +84,9 @@ The server derives the role from the authenticated account, filters suggested ac
 
 ## Bulk Student CSV Import
 
-Administrators can upload a CSV from the dashboard, review every generated account, edit the proposed details, and then import all students into one school. The exact template headers are:
+Administrators can open the **Admin** tab inside any school to manage that school from one control centre. It includes account totals, automatic student/teacher/admin account generation, a searchable people directory, account editing and activation controls, individual password resets, school-access removal, roster exports, student login packs, school naming, setup shortcuts, and protected school deletion.
+
+Administrators can upload a CSV from the school Admin tab or dashboard, review every generated account, edit the proposed details, and then import all students into one school. The exact template headers are:
 
 ```csv
 first_name,last_name,year_group,tutor_group
@@ -93,7 +95,7 @@ Amina,Khan,Year 10,10AK
 
 Exact-template files are handled locally. Other header layouts use OpenAI to identify the matching columns. Every proposed student receives a unique username, an `@innerperformance.co.uk` email, and a six-digit temporary password. Download the generated login CSV immediately after import because passwords are stored only as hashes.
 
-The admin dashboard also includes a school-specific student directory. Administrators can download a roster at any time or generate a fresh login CSV. Generating a fresh login CSV resets every listed student to a new six-digit password so readable passwords never need to be stored.
+The school Admin tab and admin dashboard include school-specific directories. Administrators can download a roster at any time or generate a fresh login CSV. Generating a fresh login CSV resets every listed student to a new six-digit password so readable passwords never need to be stored.
 
 ## Validation
 
