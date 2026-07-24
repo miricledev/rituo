@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -40,19 +40,31 @@ const AuthContext = createContext();
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [postLoginStage, setPostLoginStage] = useState(null);
   const [error, setError] = useState(null);
+  const postLoginTimer = useRef(null);
+
+  const beginPostLogin = () => {
+    if (postLoginTimer.current) {
+      window.clearTimeout(postLoginTimer.current);
+    }
+
+    setPostLoginStage('loading');
+    postLoginTimer.current = window.setTimeout(() => {
+      setPostLoginStage('affirmations');
+      postLoginTimer.current = null;
+    }, 3500);
+  };
 
   // Check if user is already logged in on mount
   useEffect(() => {
     const checkAuthStatus = async () => {
       const token = localStorage.getItem('token');
-      console.log('Checking auth status, token exists:', !!token);
       
       if (token) {
         try {
           // Verify token validity by fetching user data
           const response = await axios.get('/auth/user');
-          console.log('Auth check successful:', response.data);
           
           if (response.data && response.data.user) {
             setCurrentUser(response.data.user);
@@ -91,6 +103,12 @@ export function AuthProvider({ children }) {
     };
 
     checkAuthStatus();
+
+    return () => {
+      if (postLoginTimer.current) {
+        window.clearTimeout(postLoginTimer.current);
+      }
+    };
   }, []);
 
   // Register a new user
@@ -107,6 +125,7 @@ export function AuthProvider({ children }) {
       localStorage.setItem('token', access_token);
       
       setCurrentUser(response.data.user);
+      beginPostLogin();
       return response.data;
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed');
@@ -124,10 +143,10 @@ export function AuthProvider({ children }) {
       });
       
       const { access_token } = response.data;
-      console.log('Storing token:', access_token); // Debug log
       localStorage.setItem('token', access_token);
       
       setCurrentUser(response.data.user);
+      beginPostLogin();
       return response.data;
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed');
@@ -137,8 +156,21 @@ export function AuthProvider({ children }) {
 
   // Logout the user
   const logout = () => {
+    if (postLoginTimer.current) {
+      window.clearTimeout(postLoginTimer.current);
+      postLoginTimer.current = null;
+    }
     localStorage.removeItem('token');
+    setPostLoginStage(null);
     setCurrentUser(null);
+  };
+
+  const completePostLogin = () => {
+    if (postLoginTimer.current) {
+      window.clearTimeout(postLoginTimer.current);
+      postLoginTimer.current = null;
+    }
+    setPostLoginStage(null);
   };
 
   // Update user profile
@@ -220,11 +252,13 @@ export function AuthProvider({ children }) {
   const value = {
     currentUser,
     loading,
+    postLoginStage,
     error,
     isAuthenticated: !!currentUser,
     register,
     login,
     logout,
+    completePostLogin,
     updateProfile,
     updateUsername,
     updateEmail,

@@ -2,17 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useTask } from '../contexts/TaskContext';
-
-// Helper to parse date string in local timezone (avoiding UTC conversion)
-function parseDateLocal(dateStr) {
-  if (!dateStr) return new Date();
-  // If it's already YYYY-MM-DD format, parse it in local time
-  if (dateStr.includes('T')) {
-    dateStr = dateStr.split('T')[0];
-  }
-  const [year, month, day] = dateStr.split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
+import { parseDateLocal } from '../utils/habitScheduleUtils';
+import InlineToast from '../components/InlineToast';
 
 const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, editMode = false, onUpdateDay, saving = false }) => {
   const { taskId } = useParams();
@@ -20,6 +11,7 @@ const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, ed
   const [taskData, setTaskData] = useState(taskDataProp || null);
   const [isLoading, setIsLoading] = useState(!taskDataProp);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState(null);
   const [editingDay, setEditingDay] = useState(null);  // {date, currentValue}
   const [editValue, setEditValue] = useState('');
 
@@ -58,7 +50,11 @@ const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, ed
     // Check if it's today - can't edit today
     const today = new Date().toISOString().slice(0, 10);
     if (day.date === today) {
-      alert('Cannot modify today\'s data. Students must log their own progress for today.');
+      setToast({
+        type: 'info',
+        title: 'Today cannot be edited',
+        message: 'Students must log their own progress for today.'
+      });
       return;
     }
     
@@ -88,7 +84,11 @@ const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, ed
     if (habitType === 'numeric') {
       const numValue = parseFloat(editValue);
       if (isNaN(numValue)) {
-        alert('Please enter a valid number');
+        setToast({
+          type: 'error',
+          title: 'Invalid number',
+          message: 'Please enter a valid number.'
+        });
         return;
       }
       onUpdateDay(editingDay.date, { numericValue: numValue });
@@ -148,6 +148,12 @@ const TaskStats = ({ taskData: taskDataProp, habitData, loading: loadingProp, ed
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-colors duration-200">
+      {toast && (
+        <div className="mb-6">
+          <InlineToast toast={toast} onClose={() => setToast(null)} />
+        </div>
+      )}
+
       {/* Header with back button */}
       {!taskDataProp && (
         <div className="flex items-center mb-2">

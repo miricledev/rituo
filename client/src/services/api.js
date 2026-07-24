@@ -9,7 +9,7 @@ const api = axios.create({
   },
 });
 
-// Add request interceptor for debugging and JWT token
+// Add request interceptor for JWT token
 api.interceptors.request.use(
   (config) => {
     // Add JWT token to all requests
@@ -17,8 +17,6 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    
-    console.log('API Request:', config.method?.toUpperCase(), config.url, config.data);
     return config;
   },
   (error) => {
@@ -27,16 +25,12 @@ api.interceptors.request.use(
   }
 );
 
-// Add response interceptor for debugging
 api.interceptors.response.use(
-  (response) => {
-    console.log('API Response:', response.status, response.config.url, response.data);
-    return response;
-  },
+  (response) => response,
   (error) => {
     console.error('API Response Error:', error.response?.status, error.config?.url, error.response?.data);
     return Promise.reject(error);
   }
 );
 
-export default api; 
+export default api;

@@ -3,10 +3,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from db.models import db, User
 import re
+import os
 
 
 
 auth_bp = Blueprint('auth', __name__)
+VALID_ACCOUNT_ROLES = {'admin', 'teacher', 'student'}
 
 # Helper function to validate email format
 def is_valid_email(email):
@@ -38,10 +40,17 @@ def register():
     
     # Create new user
     hashed_password = generate_password_hash(data.get('password'))
+    initial_admin_emails = {
+        value.strip().lower()
+        for value in os.getenv('INITIAL_ADMIN_EMAILS', '').split(',')
+        if value.strip()
+    }
+    account_role = 'admin' if data.get('email', '').strip().lower() in initial_admin_emails else 'student'
     new_user = User(
         username=data.get('username'),
         email=data.get('email'),
-        password=hashed_password
+        password=hashed_password,
+        account_role=account_role
     )
     
     try:
@@ -50,8 +59,6 @@ def register():
         
         # Generate access token
         access_token = create_access_token(identity=str(new_user.id))
-        print(f"Generated token for new user {new_user.username}: {access_token}")
-        
         return jsonify({
             'message': 'User registered successfully',
             'user': new_user.to_dict(),
@@ -77,6 +84,9 @@ def login():
     if not user:
         print(f"Login attempt failed: User not found - {data.get('username')}")
         return jsonify({'message': 'Invalid username or password'}), 401
+
+    if not user.is_active:
+        return jsonify({'message': 'This account has been deactivated'}), 403
     
     # Check if password is correct
     if not check_password_hash(user.password, data.get('password')):
@@ -85,8 +95,6 @@ def login():
     
     # Generate access token
     access_token = create_access_token(identity=str(user.id))
-    print(f"Generated token for user {user.username}: {access_token}")
-    
     return jsonify({
         'message': 'Login successful',
         'user': user.to_dict(),

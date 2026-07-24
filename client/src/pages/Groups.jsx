@@ -1,752 +1,572 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { loadStripe } from '@stripe/stripe-js';
-import {
-  Elements,
-  PaymentElement,
-  useStripe,
-  useElements,
-} from '@stripe/react-stripe-js';
 import axios from 'axios';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  FaCrown, 
-  FaUserFriends, 
-  FaStar, 
-  FaRegStar, 
-  FaCopy, 
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  FaArrowRight,
   FaCheckCircle,
-  FaPlus,
-  FaSignInAlt,
-  FaUsers,
+  FaCopy,
+  FaCrown,
   FaFootballBall,
   FaGraduationCap,
-  FaTimes
+  FaKey,
+  FaLayerGroup,
+  FaPlus,
+  FaRegStar,
+  FaSchool,
+  FaSearch,
+  FaShieldAlt,
+  FaSignInAlt,
+  FaStar,
+  FaTimes,
+  FaUserGraduate,
+  FaUsers
 } from 'react-icons/fa';
-import PinUnlock from '../components/PinUnlock';
+import { useAuth } from '../contexts/AuthContext';
+import InlineToast from '../components/InlineToast';
 
-// Add shine animation style
-const shineStyle = `
-  @keyframes shine {
-    0% {
-      background-position: -200% center;
-    }
-    100% {
-      background-position: 200% center;
-    }
-  }
-  
-  @keyframes goldPulse {
-    0%, 100% {
-      filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.8));
-      transform: scale(1);
-    }
-    50% {
-      filter: drop-shadow(0 0 16px rgba(251, 191, 36, 1)) drop-shadow(0 0 24px rgba(251, 191, 36, 0.6));
-      transform: scale(1.05);
-    }
-  }
-  
-  @keyframes goldGlow {
-    0%, 100% {
-      box-shadow: 0 0 20px rgba(251, 191, 36, 0.5), 0 0 40px rgba(251, 191, 36, 0.3);
-    }
-    50% {
-      box-shadow: 0 0 30px rgba(251, 191, 36, 0.8), 0 0 60px rgba(251, 191, 36, 0.5), 0 0 80px rgba(251, 191, 36, 0.3);
-    }
-  }
-  
-  .gold-shine {
-    background: linear-gradient(
-      90deg,
-      rgba(251, 191, 36, 0) 0%,
-      rgba(251, 191, 36, 0.3) 50%,
-      rgba(251, 191, 36, 0) 100%
-    );
-    background-size: 200% 100%;
-    animation: shine 3s infinite;
-    -webkit-background-clip: text;
-    background-clip: text;
-  }
-  
-  .gold-pulse {
-    animation: goldPulse 2s ease-in-out infinite;
-  }
-  
-  .gold-glow {
-    animation: goldGlow 2s ease-in-out infinite;
-  }
-`;
-
-// Inject styles (only once)
-if (typeof document !== 'undefined' && !document.getElementById('gold-shine-styles')) {
-  const styleSheet = document.createElement('style');
-  styleSheet.id = 'gold-shine-styles';
-  styleSheet.type = 'text/css';
-  styleSheet.innerText = shineStyle;
-  document.head.appendChild(styleSheet);
-}
-
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
-
-// Royal blue and gold gradient variations
-const groupGradients = [
-  'from-blue-600 via-blue-700 to-blue-800',
-  'from-blue-500 via-blue-600 to-blue-700',
-  'from-indigo-600 via-indigo-700 to-indigo-800',
-  'from-cyan-600 via-cyan-700 to-cyan-800',
-  'from-sky-600 via-sky-700 to-sky-800',
-  'from-blue-700 via-indigo-700 to-purple-800',
+const cardGradients = [
+  'from-violet-500 via-indigo-500 to-cyan-400',
+  'from-blue-500 via-cyan-400 to-emerald-400',
+  'from-fuchsia-500 via-violet-500 to-blue-400',
+  'from-indigo-500 via-blue-500 to-sky-300'
 ];
 
-const getGradient = (idx) => groupGradients[idx % groupGradients.length];
+const roleLabels = {
+  'school-admin': 'School admin',
+  headteacher: 'Headteacher',
+  teacher: 'Teacher',
+  student: 'Student',
+  coach: 'Coach',
+  'pastoral-lead': 'Pastoral lead'
+};
 
-const Groups = () => {
+const workspaceCopy = {
+  admin: {
+    eyebrow: 'School network',
+    title: 'Lead every school from one place.',
+    description: 'Open a school workspace, provision its people, and keep every operational workflow connected.',
+    icon: FaShieldAlt
+  },
+  teacher: {
+    eyebrow: 'Assigned schools',
+    title: 'Move straight into the work that matters.',
+    description: 'Your assigned schools bring classes, registers, behaviour, homework, and interventions together.',
+    icon: FaGraduationCap
+  },
+  student: {
+    eyebrow: 'My school',
+    title: 'Your school, goals, and habits in one space.',
+    description: 'Open your school workspace to see the routines, support, and daily actions connected to you.',
+    icon: FaUserGraduate
+  }
+};
+
+const emptyGroupForm = {
+  name: '',
+  password: '',
+  memberCount: 1,
+  groupType: 'school'
+};
+
+const emptyJoinForm = {
+  groupId: '',
+  password: ''
+};
+
+const Groups = ({ legacyMode = false }) => {
   const [groups, setGroups] = useState({ memberOf: [], leading: [] });
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showPinUnlock, setShowPinUnlock] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
-  const [newGroup, setNewGroup] = useState({
-    name: '',
-    password: '',
-    memberCount: 1,
-    groupType: 'school'
-  });
-  const [joinGroup, setJoinGroup] = useState({
-    groupId: '',
-    password: ''
-  });
+  const [newGroup, setNewGroup] = useState(emptyGroupForm);
+  const [joinGroup, setJoinGroup] = useState(emptyJoinForm);
   const [favoriteGroups, setFavoriteGroups] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [toast, setToast] = useState(null);
   const { currentUser } = useAuth();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchGroups();
-  }, [currentUser]);
+  const role = currentUser?.accountRole || 'student';
+  const pageMeta = legacyMode
+    ? {
+        eyebrow: 'Preserved access',
+        title: 'Your legacy workspaces.',
+        description: 'Older owner-created schools and groups remain available exactly where you left them.',
+        icon: FaLayerGroup
+      }
+    : workspaceCopy[role] || workspaceCopy.student;
+  const PageIcon = pageMeta.icon;
 
   const fetchGroups = async () => {
     try {
+      setLoading(true);
       const response = await axios.get('/groups/my-groups');
-      setGroups(response.data);
+      const topLevelGroups = {
+        memberOf: response.data.memberOf || [],
+        leading: response.data.leading || []
+      };
+      const legacyGroups = response.data.legacy || {
+        memberOf: topLevelGroups.memberOf.filter((group) => group.isLegacy !== false),
+        leading: topLevelGroups.leading.filter((group) => group.isLegacy !== false)
+      };
+      setGroups(legacyMode ? legacyGroups : {
+        memberOf: topLevelGroups.memberOf.filter((group) => group.isLegacy === false),
+        leading: topLevelGroups.leading.filter((group) => group.isLegacy === false)
+      });
     } catch (error) {
-      console.error('Error fetching groups:', error);
+      setToast({
+        type: 'error',
+        title: 'Schools could not be loaded',
+        message: error.response?.data?.error || error.message
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleCreateGroup = async (e) => {
-    e.preventDefault();
+  useEffect(() => {
+    fetchGroups();
+  }, [currentUser, legacyMode]);
+
+  const allGroups = useMemo(() => [...groups.leading, ...groups.memberOf], [groups]);
+  const totalStudents = useMemo(
+    () => allGroups.reduce((total, group) => total + (group.members?.length || 0), 0),
+    [allGroups]
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const filterGroups = (items) => (
+    normalizedQuery
+      ? items.filter((group) => `${group.name} ${group.groupId} ${group.viewerSchoolRole || ''}`.toLowerCase().includes(normalizedQuery))
+      : items
+  );
+  const visibleLeading = filterGroups(groups.leading);
+  const visibleMemberOf = filterGroups(groups.memberOf);
+
+  const handleCreateGroup = async (event) => {
+    event.preventDefault();
     try {
+      setSubmitting(true);
       await axios.post('/groups/create', {
-        name: newGroup.name,
-        password: newGroup.password,
-        memberCount: newGroup.memberCount,
-        groupType: newGroup.groupType
+        ...newGroup,
+        memberCount: Number(newGroup.memberCount)
       });
       setShowCreateModal(false);
-      setNewGroup({ name: '', password: '', memberCount: 1, groupType: 'school' });
-      fetchGroups();
+      setNewGroup(emptyGroupForm);
+      setToast({
+        type: 'success',
+        title: 'School created',
+        message: 'Your new school workspace is ready.'
+      });
+      await fetchGroups();
     } catch (error) {
-      alert('Failed to create group: ' + (error.response?.data?.error || error.message));
+      setToast({
+        type: 'error',
+        title: 'School was not created',
+        message: error.response?.data?.error || error.message
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const handleJoinGroup = async (e) => {
-    e.preventDefault();
+  const handleJoinGroup = async (event) => {
+    event.preventDefault();
     try {
+      setSubmitting(true);
       await axios.post('/groups/join', joinGroup);
       setShowJoinModal(false);
-      fetchGroups();
+      setJoinGroup(emptyJoinForm);
+      setToast({
+        type: 'success',
+        title: 'Legacy school joined',
+        message: 'The workspace is now available in your legacy list.'
+      });
+      await fetchGroups();
     } catch (error) {
-      alert('Failed to join group: ' + (error.response?.data?.error || error.message));
+      setToast({
+        type: 'error',
+        title: 'School was not joined',
+        message: error.response?.data?.error || error.message
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const toggleFavorite = (groupId) => {
-    setFavoriteGroups((prev) =>
-      prev.includes(groupId)
-        ? prev.filter((id) => id !== groupId)
-        : [...prev, groupId]
-    );
+    setFavoriteGroups((current) => (
+      current.includes(groupId)
+        ? current.filter((id) => id !== groupId)
+        : [...current, groupId]
+    ));
   };
 
-  const handleCopyId = (groupId) => {
-    navigator.clipboard.writeText(groupId);
+  const handleCopyId = async (groupId) => {
+    await navigator.clipboard.writeText(groupId);
     setCopiedId(groupId);
-    setTimeout(() => setCopiedId(null), 1200);
+    window.setTimeout(() => setCopiedId(null), 1200);
   };
 
-  // High-tech neon animated background
-  const AnimatedBackground = () => (
-    <div className="fixed inset-0 bg-black -z-10 overflow-hidden">
-      {/* Grid pattern overlay */}
-      <div 
-        className="absolute inset-0 opacity-20"
-        style={{
-          backgroundImage: `
-            linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px)
-          `,
-          backgroundSize: '50px 50px'
-        }}
-      />
-      
-      {/* Animated neon orbs */}
-      {[...Array(8)].map((_, i) => {
-        const size = 200 + Math.random() * 150;
-        const top = Math.random() * 100;
-        const left = Math.random() * 100;
-        const isBlue = i % 2 === 0;
-        const color = isBlue 
-          ? 'rgba(59, 130, 246, 0.15)' 
-          : 'rgba(251, 191, 36, 0.1)';
-        
-        return (
-          <motion.div
-            key={i}
-            className="absolute rounded-full blur-3xl"
-            style={{
-              width: size,
-              height: size,
-              top: `${top}%`,
-              left: `${left}%`,
-              background: `radial-gradient(circle, ${color}, transparent 70%)`,
-            }}
-            animate={{
-              x: [0, Math.random() * 100 - 50, 0],
-              y: [0, Math.random() * 100 - 50, 0],
-              scale: [1, 1.2, 1],
-            }}
-            transition={{
-              duration: 10 + Math.random() * 10,
-              repeat: Infinity,
-              ease: 'easeInOut'
-            }}
-          />
-        );
-      })}
-      
-      {/* Scanning lines effect */}
-      <motion.div
-        className="absolute inset-0 opacity-10"
-        style={{
-          background: 'linear-gradient(180deg, transparent 0%, rgba(59, 130, 246, 0.3) 50%, transparent 100%)',
-        }}
-        animate={{
-          y: ['-100%', '200%'],
-        }}
-        transition={{
-          duration: 8,
-          repeat: Infinity,
-          ease: 'linear'
-        }}
-      />
-    </div>
-  );
-
-  // High-tech group card
-  const GroupCard = ({ group, idx, isLeader }) => {
+  const GroupCard = ({ group, index, isLeader }) => {
     const groupType = group.groupType || 'school';
-    const gradient = getGradient(idx);
-    
+    const gradient = cardGradients[index % cardGradients.length];
+    const viewerRole = roleLabels[group.viewerSchoolRole] || group.viewerSchoolRole || (isLeader ? 'Leader' : role);
+    const isFavorite = favoriteGroups.includes(group.groupId);
+
     return (
-      <motion.div
+      <motion.article
         layout
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 20 }}
-        transition={{ duration: 0.3, delay: Math.min(idx * 0.05, 0.5) }}
-        whileHover={{ scale: 1.03, y: -5 }}
-        className="relative group cursor-pointer"
+        exit={{ opacity: 0, y: 12 }}
+        transition={{ duration: 0.35, delay: Math.min(index * 0.05, 0.3) }}
+        whileHover={{ y: -5 }}
+        role="button"
+        tabIndex={0}
         onClick={() => navigate(`/groups/${group.groupId}`)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') navigate(`/groups/${group.groupId}`);
+        }}
+        className="group relative cursor-pointer overflow-hidden rounded-[1.65rem] border border-white/10 bg-white/[0.055] p-5 text-left shadow-xl shadow-slate-950/20 backdrop-blur-xl outline-none transition hover:border-cyan-300/30 focus:border-cyan-300/50"
       >
-        {/* Neon border glow */}
-        <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 via-cyan-500 to-blue-500 rounded-xl opacity-0 group-hover:opacity-75 blur-sm transition-opacity duration-300" />
-        
-        {/* Main card */}
-        <div className="relative bg-gradient-to-br from-gray-900 via-gray-800 to-black rounded-xl border border-blue-500/30 p-6 backdrop-blur-sm">
-          {/* Shine effect - pointer-events-none so it doesn't block clicks */}
-          <div className="absolute inset-0 bg-gradient-to-br from-transparent via-white/5 to-transparent rounded-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-          
-          {/* Corner accents - pointer-events-none so they don't block clicks */}
-          <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-blue-400 rounded-tl-xl pointer-events-none" />
-          <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-blue-400 rounded-tr-xl pointer-events-none" />
-          <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-blue-400 rounded-bl-xl pointer-events-none" />
-          <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-blue-400 rounded-br-xl pointer-events-none" />
-          
-          {/* Avatar with neon glow */}
-          <div className="relative mx-auto mb-4 w-20 h-20">
-            <div className={`absolute inset-0 bg-gradient-to-br ${gradient} rounded-full blur-lg opacity-60`} />
-            <div className={`relative w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold bg-gradient-to-br ${gradient} border-2 border-cyan-400/50 shadow-[0_0_20px_rgba(59,130,246,0.5)]`}>
-              <span className="text-white drop-shadow-lg">
-                {group.name?.[0]?.toUpperCase() || '?'}
-              </span>
-            </div>
-          </div>
+        <div className={`pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r ${gradient}`} />
+        <div className={`pointer-events-none absolute -right-16 -top-20 h-48 w-48 rounded-full bg-gradient-to-br ${gradient} opacity-10 blur-3xl transition group-hover:opacity-20`} />
 
-          {/* Group Name */}
-          <div className="flex items-center justify-center gap-2 mb-3">
-            <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-400 text-center">
-              {group.name}
-            </h3>
+        <div className="relative flex items-start justify-between gap-4">
+          <div className={`flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br ${gradient} text-xl font-black text-slate-950 shadow-lg`}>
+            {group.name?.[0]?.toUpperCase() || 'S'}
+          </div>
+          <div className="flex items-center gap-2">
             {isLeader && (
-              <FaCrown 
-                className="text-yellow-400 gold-pulse" 
-                style={{
-                  filter: 'drop-shadow(0 0 8px rgba(251,191,36,0.8))',
-                  animation: 'goldPulse 2s ease-in-out infinite'
-                }}
-                title="You are the leader" 
-              />
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-400/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-200">
+                <FaCrown /> Lead
+              </span>
             )}
             <button
-              onClick={e => { 
-                e.stopPropagation(); 
-                toggleFavorite(group.groupId); 
+              type="button"
+              aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleFavorite(group.groupId);
               }}
-              className="relative z-10 text-gray-400 hover:text-yellow-400 transition-colors"
+              className="rounded-xl border border-white/10 bg-slate-950/40 p-2.5 text-slate-500 transition hover:border-amber-300/30 hover:text-amber-300"
             >
-              {favoriteGroups.includes(group.groupId) ? (
-                <FaStar 
-                  className="text-yellow-400 gold-pulse" 
-                  style={{
-                    filter: 'drop-shadow(0 0 8px rgba(251,191,36,0.8))',
-                    animation: 'goldPulse 2s ease-in-out infinite'
-                  }}
-                />
-              ) : (
-                <FaRegStar />
-              )}
+              {isFavorite ? <FaStar className="text-amber-300" /> : <FaRegStar />}
             </button>
-          </div>
-
-          {/* Stats */}
-          <div className="flex items-center justify-center gap-4 mb-4">
-            <div className="flex items-center gap-2 text-cyan-400">
-              <FaUserFriends className="drop-shadow-[0_0_6px_rgba(34,211,238,0.6)]" />
-              <span className="font-semibold text-sm">{group.members?.length || 1}</span>
-            </div>
-            {isLeader ? (
-              <div className="flex items-center gap-2">
-                <FaCrown 
-                  className="text-yellow-400 gold-pulse" 
-                  style={{
-                    filter: 'drop-shadow(0 0 8px rgba(251,191,36,0.8))',
-                    animation: 'goldPulse 2s ease-in-out infinite'
-                  }}
-                />
-                <span 
-                  className="font-semibold text-sm text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-400"
-                  style={{
-                    backgroundSize: '200% 100%',
-                    animation: 'shine 3s infinite'
-                  }}
-                >
-                  Leader
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-gray-400">
-                <span className="font-semibold text-sm">{group.leader?.username || 'Leader'}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Group ID + Copy */}
-          <div className="relative flex items-center justify-center gap-2 mb-4 p-2 bg-black/50 rounded-lg border border-blue-500/20 z-10">
-            <span className="text-xs text-gray-400 font-mono select-all">
-              ID: {group.groupId.slice(0, 8)}...
-            </span>
-            <button
-              className="relative z-20 ml-1 px-2 py-1 rounded bg-blue-900/50 hover:bg-blue-800/50 border border-blue-500/30 text-xs text-cyan-300 hover:text-cyan-200 transition-all hover:shadow-[0_0_8px_rgba(34,211,238,0.4)]"
-              onClick={e => { e.stopPropagation(); handleCopyId(group.groupId); }}
-            >
-              {copiedId === group.groupId ? (
-                <span className="flex items-center gap-1">
-                  <FaCheckCircle className="text-green-400" /> 
-                  <span>Copied!</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1">
-                  <FaCopy /> Copy
-                </span>
-              )}
-            </button>
-          </div>
-
-          {/* Group Type Badge */}
-          <div className="text-center">
-            <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border ${
-              groupType === 'football'
-                ? 'bg-orange-900/30 text-orange-300 border-orange-500/50 shadow-[0_0_10px_rgba(249,115,22,0.3)]'
-                : 'bg-blue-900/30 text-blue-300 border-blue-500/50 shadow-[0_0_10px_rgba(59,130,246,0.3)]'
-            }`}>
-              {groupType === 'football' ? (
-                <>
-                  <FaFootballBall /> Football Group
-                </>
-              ) : (
-                <>
-                  <FaGraduationCap /> School Group
-                </>
-              )}
-            </span>
           </div>
         </div>
-      </motion.div>
+
+        <div className="relative mt-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${legacyMode ? 'bg-amber-400/10 text-amber-200' : 'bg-cyan-400/10 text-cyan-200'}`}>
+              {groupType === 'football' ? <FaFootballBall /> : <FaSchool />}
+              {groupType === 'football' ? 'Football group' : 'School'}
+            </span>
+            <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              {viewerRole}
+            </span>
+          </div>
+          <h2 className="mt-4 truncate text-xl font-bold tracking-tight text-white">{group.name}</h2>
+          <p className="mt-2 min-h-[40px] text-sm leading-5 text-slate-400">
+            {isLeader
+              ? 'Manage people, performance, habits, and school operations.'
+              : 'Open your assigned workspace and continue where you left off.'}
+          </p>
+        </div>
+
+        <div className="relative mt-6 grid grid-cols-2 gap-3">
+          <div className="rounded-xl border border-white/10 bg-slate-950/35 px-3 py-3">
+            <div className="flex items-center gap-2 text-xs text-slate-500"><FaUsers /> Students</div>
+            <div className="mt-2 text-lg font-bold">{group.members?.length || 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-950/35 px-3 py-3">
+            <div className="text-xs text-slate-500">Workspace ID</div>
+            <div className="mt-2 truncate font-mono text-sm font-semibold text-slate-200">{group.groupId}</div>
+          </div>
+        </div>
+
+        <div className="relative mt-4 flex items-center justify-between border-t border-white/10 pt-4">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleCopyId(group.groupId);
+            }}
+            className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/5 hover:text-white"
+          >
+            {copiedId === group.groupId ? <><FaCheckCircle className="text-emerald-400" /> Copied</> : <><FaCopy /> Copy ID</>}
+          </button>
+          <span className="inline-flex items-center gap-2 text-xs font-bold text-cyan-300 transition group-hover:translate-x-1">
+            Open workspace <FaArrowRight />
+          </span>
+        </div>
+      </motion.article>
     );
   };
 
-  // PaymentForm
-  const PaymentForm = () => {
-    const stripe = useStripe();
-    const elements = useElements();
-    const handleSubmit = async (e) => {
-      e.preventDefault();
-      if (!stripe || !elements) return;
-      const { error } = await stripe.confirmPayment({
-        elements,
-        confirmParams: { return_url: `${window.location.origin}/groups` },
-      });
-      if (error) {
-        console.error('Payment error:', error);
-      } else {
-        fetchGroups();
-      }
-    };
+  const WorkspaceSection = ({ title, description, icon: Icon, items, isLeader, startIndex = 0 }) => {
+    if (!items.length) return null;
     return (
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <PaymentElement />
-        <button
-          type="submit"
-          disabled={!stripe}
-          className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 text-white py-3 px-4 rounded-lg hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 transition-all shadow-lg shadow-blue-500/50 font-semibold"
-        >
-          Pay Now
-        </button>
-      </form>
+      <section className="mt-8">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.24em] text-slate-400">
+              <Icon className={isLeader ? 'text-amber-300' : 'text-cyan-300'} /> {title}
+            </div>
+            <p className="mt-2 text-sm text-slate-500">{description}</p>
+          </div>
+          <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-400">{items.length} workspace{items.length === 1 ? '' : 's'}</span>
+        </div>
+        <AnimatePresence mode="popLayout">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {items.map((group, index) => (
+              <GroupCard key={group.id} group={group} index={startIndex + index} isLeader={isLeader} />
+            ))}
+          </div>
+        </AnimatePresence>
+      </section>
     );
   };
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden w-full bg-black">
-      <AnimatedBackground />
-      
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 relative z-20">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-10 gap-6">
-          <motion.h1 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="text-4xl sm:text-5xl font-extrabold tracking-tight"
-          >
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-400 drop-shadow-[0_0_20px_rgba(59,130,246,0.5)]">
-              My Groups
-            </span>
-          </motion.h1>
-          
-          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-            <motion.button
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              whileTap={{ scale: 0.95 }}
-              whileHover={{ scale: 1.05 }}
-              onClick={() => setShowPinUnlock(true)}
-              className="relative group px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-lg font-semibold shadow-lg shadow-blue-500/50 hover:shadow-blue-500/70 transition-all overflow-hidden"
-            >
-              <span className="absolute inset-0 bg-gradient-to-r from-cyan-600 to-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <span className="relative flex items-center gap-2">
-                <FaPlus /> Create Group
-              </span>
-            </motion.button>
-            
-            <motion.button
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              whileTap={{ scale: 0.95 }}
-              whileHover={{ scale: 1.05 }}
-              onClick={() => setShowJoinModal(true)}
-              className="relative group px-6 py-3 bg-gradient-to-r from-yellow-600 to-amber-600 text-white rounded-lg font-semibold shadow-lg shadow-yellow-500/50 hover:shadow-yellow-500/70 transition-all overflow-hidden gold-glow"
-              style={{
-                animation: 'goldGlow 2s ease-in-out infinite'
-              }}
-            >
-              <span 
-                className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{
-                  background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%)',
-                  backgroundSize: '200% 100%',
-                  animation: 'shine 2s infinite'
-                }}
-              />
-              <span className="relative flex items-center gap-2 z-10">
-                <FaSignInAlt /> Join Group
-              </span>
-            </motion.button>
+    <div className="relative min-h-screen overflow-hidden bg-[#050816] text-white">
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: legacyMode
+            ? 'radial-gradient(circle at 12% 0%, rgba(245,158,11,.16), transparent 32%), radial-gradient(circle at 88% 12%, rgba(99,102,241,.14), transparent 28%), linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px)'
+            : 'radial-gradient(circle at 10% 0%, rgba(99,102,241,.22), transparent 32%), radial-gradient(circle at 90% 15%, rgba(6,182,212,.16), transparent 30%), linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px)',
+          backgroundSize: 'auto, auto, 44px 44px, 44px 44px'
+        }}
+      />
+
+      <div className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <InlineToast toast={toast} onClose={() => setToast(null)} />
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.055] p-6 shadow-2xl shadow-indigo-950/30 backdrop-blur-xl sm:p-8"
+        >
+          <div className="grid gap-8 lg:grid-cols-[1.25fr_.75fr] lg:items-center">
+            <div>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] ${legacyMode ? 'bg-amber-300 text-amber-950' : 'bg-gradient-to-r from-violet-300 to-cyan-300 text-slate-950'}`}>
+                  <PageIcon /> {pageMeta.eyebrow}
+                </span>
+                <span className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
+                  {legacyMode ? 'Historical mode' : role}
+                </span>
+              </div>
+              <h1 className="mt-7 max-w-3xl text-4xl font-extrabold tracking-tight sm:text-6xl">{pageMeta.title}</h1>
+              <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300">{pageMeta.description}</p>
+              <div className="mt-7 flex flex-wrap gap-3">
+                {!legacyMode && role === 'admin' && (
+                  <button onClick={() => setShowCreateModal(true)} className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950 transition hover:-translate-y-0.5 hover:bg-cyan-100">
+                    <FaPlus /> Create school
+                  </button>
+                )}
+                {legacyMode && (
+                  <button onClick={() => setShowJoinModal(true)} className="inline-flex items-center gap-2 rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-amber-950 transition hover:-translate-y-0.5 hover:bg-amber-200">
+                    <FaSignInAlt /> Join legacy school
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                [allGroups.length, 'Schools', FaSchool],
+                [totalStudents, 'Students', FaUsers],
+                [groups.leading.length, legacyMode ? 'Leading' : 'Managing', FaCrown],
+                [roleLabels[allGroups[0]?.viewerSchoolRole] || role, 'Your role', FaShieldAlt]
+              ].map(([value, label, Icon]) => (
+                <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                  <Icon className={legacyMode ? 'text-amber-300' : 'text-cyan-300'} />
+                  <div className="mt-5 truncate text-2xl font-bold capitalize">{value}</div>
+                  <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.section>
+
+        <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+          <label className="flex flex-1 items-center gap-3 rounded-xl bg-slate-950/50 px-4 py-3">
+            <FaSearch className="text-slate-500" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search schools, workspace ID, or role"
+              className="w-full bg-transparent text-sm outline-none placeholder:text-slate-600"
+            />
+          </label>
+          <div className="px-3 text-xs text-slate-500">
+            {normalizedQuery ? `${visibleLeading.length + visibleMemberOf.length} matching` : `${allGroups.length} total workspaces`}
           </div>
         </div>
 
-        {/* Groups I'm Leading */}
-        {groups.leading.length > 0 && (
-          <div className="mb-12">
-            <motion.h2 
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="text-2xl sm:text-3xl font-bold mb-6 flex items-center gap-3"
-            >
-              <FaCrown 
-                className="text-yellow-400 gold-pulse" 
-                style={{
-                  filter: 'drop-shadow(0 0 12px rgba(251,191,36,0.8))',
-                  animation: 'goldPulse 2s ease-in-out infinite'
-                }}
-              />
-              <span 
-                className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-400"
-                style={{
-                  backgroundSize: '200% 100%',
-                  animation: 'shine 3s infinite'
-                }}
-              >
-                Groups I'm Leading
-              </span>
-            </motion.h2>
-            <AnimatePresence>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {groups.leading.map((group, idx) => (
-                  <GroupCard key={group.id} group={group} idx={idx} isLeader={true} />
-                ))}
-              </div>
-            </AnimatePresence>
+        {loading ? (
+          <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {[0, 1, 2].map((item) => (
+              <div key={item} className="h-[330px] animate-pulse rounded-[1.65rem] border border-white/10 bg-white/[0.04]" />
+            ))}
           </div>
-        )}
+        ) : (
+          <>
+            <WorkspaceSection
+              title={legacyMode ? 'Schools I lead' : 'Schools I administer'}
+              description={legacyMode ? 'Owner-created workspaces where you retain legacy leader controls.' : 'Schools where you can manage people, structure, and performance.'}
+              icon={FaCrown}
+              items={visibleLeading}
+              isLeader
+            />
+            <WorkspaceSection
+              title={legacyMode ? 'Schools I joined' : 'Assigned schools'}
+              description={legacyMode ? 'Older workspaces where you participate as a member.' : 'Schools assigned to your account by an administrator.'}
+              icon={FaUsers}
+              items={visibleMemberOf}
+              startIndex={100}
+            />
 
-        {/* Groups I'm a Member Of */}
-        {groups.memberOf.length > 0 && (
-          <div>
-            <motion.h2 
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="text-2xl sm:text-3xl font-bold mb-6 flex items-center gap-3"
-            >
-              <FaUsers className="text-blue-400 drop-shadow-[0_0_12px_rgba(59,130,246,0.8)]" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400">
-                Groups I'm a Member Of
-              </span>
-            </motion.h2>
-            <AnimatePresence>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {groups.memberOf.map((group, idx) => (
-                  <GroupCard key={group.id} group={group} idx={idx + 100} isLeader={false} />
-                ))}
-              </div>
-            </AnimatePresence>
-          </div>
-        )}
-
-        {/* Empty state */}
-        {groups.leading.length === 0 && groups.memberOf.length === 0 && (
-          <div className="text-center py-20">
-            <div className="inline-block p-6 bg-gradient-to-br from-gray-900 to-black rounded-2xl border border-blue-500/30 shadow-lg">
-              <FaUsers className="text-6xl text-blue-400/50 mx-auto mb-4 drop-shadow-[0_0_20px_rgba(59,130,246,0.5)]" />
-              <h3 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400 mb-2">
-                No Groups Yet
-              </h3>
-              <p className="text-gray-400 mb-6">Create or join a group to get started</p>
-              <button
-                onClick={() => setShowPinUnlock(true)}
-                className="px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-lg font-semibold hover:from-blue-700 hover:to-cyan-700 transition-all shadow-lg shadow-blue-500/50"
-              >
-                Create Your First Group
-              </button>
-            </div>
-          </div>
+            {!visibleLeading.length && !visibleMemberOf.length && (
+              <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-8 rounded-[2rem] border border-dashed border-white/15 bg-white/[0.035] px-6 py-16 text-center">
+                <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-2xl ${legacyMode ? 'bg-amber-400/10 text-amber-300' : 'bg-cyan-400/10 text-cyan-300'}`}>
+                  {normalizedQuery ? <FaSearch className="text-2xl" /> : <FaSchool className="text-2xl" />}
+                </div>
+                <h2 className="mt-5 text-2xl font-bold">{normalizedQuery ? 'No schools match your search' : 'No schools here yet'}</h2>
+                <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-400">
+                  {normalizedQuery
+                    ? 'Try a school name, workspace ID, or assigned role.'
+                    : legacyMode
+                      ? 'Older owner-created schools will remain available here when you have legacy access.'
+                      : role === 'admin'
+                        ? 'Create your first managed school and start provisioning staff and students.'
+                        : 'An administrator will assign your school to this account.'}
+                </p>
+                {!normalizedQuery && !legacyMode && role === 'admin' && (
+                  <button onClick={() => setShowCreateModal(true)} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950">
+                    <FaPlus /> Create your first school
+                  </button>
+                )}
+              </motion.section>
+            )}
+          </>
         )}
       </div>
 
-      {/* PIN Unlock Modal */}
-      {showPinUnlock && (
-        <div className="fixed inset-0 z-50">
-          <PinUnlock 
-            onUnlock={() => {
-              setShowPinUnlock(false);
-              setShowCreateModal(true);
-            }} 
-            title="Create Group" 
-          />
-          <button
-            className="absolute top-4 right-4 text-white text-2xl hover:text-gray-300 z-10"
-            onClick={() => setShowPinUnlock(false)}
-          >
-            <FaTimes />
-          </button>
-        </div>
-      )}
-
-      {/* Create Group Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <AnimatePresence>
+        {showCreateModal && !legacyMode && role === 'admin' && (
           <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.8, opacity: 0 }}
-            className="relative bg-gradient-to-br from-gray-900 via-gray-800 to-black rounded-2xl p-8 shadow-2xl w-full max-w-md border border-blue-500/30"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={() => setShowCreateModal(false)}
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
           >
-            {/* Corner accents */}
-            <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-blue-400 rounded-tl-xl" />
-            <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-blue-400 rounded-tr-xl" />
-            <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-blue-400 rounded-bl-xl" />
-            <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-blue-400 rounded-br-xl" />
-            
-            <button
-              className="absolute top-4 right-4 text-gray-400 hover:text-white text-xl transition-colors"
-              onClick={() => setShowCreateModal(false)}
+            <motion.form
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onSubmit={handleCreateGroup}
+              className="w-full max-w-lg rounded-[2rem] border border-white/10 bg-[#0b1022] p-6 shadow-2xl sm:p-8"
             >
-              <FaTimes />
-            </button>
-            
-            <h2 className="text-2xl font-bold mb-6 text-center text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400">
-              Create a New Group
-            </h2>
-            
-            <form onSubmit={handleCreateGroup} className="space-y-4">
-              <div>
-                <input
-                  type="text"
-                  placeholder="Group Name"
-                  value={newGroup.name}
-                  onChange={e => setNewGroup({ ...newGroup, name: e.target.value })}
-                  className="w-full px-4 py-3 rounded-lg bg-black/50 border border-blue-500/30 text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/50 transition-all"
-                  required
-                />
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-300">New school workspace</p>
+                  <h2 className="mt-2 text-2xl font-bold">Create a managed school</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">You will become its school administrator and can provision accounts immediately.</p>
+                </div>
+                <button type="button" onClick={() => setShowCreateModal(false)} className="rounded-xl border border-white/10 p-3 text-slate-400 hover:bg-white/5 hover:text-white"><FaTimes /></button>
               </div>
-              
-              <div>
-                <input
-                  type="password"
-                  placeholder="Group Password"
-                  value={newGroup.password}
-                  onChange={e => setNewGroup({ ...newGroup, password: e.target.value })}
-                  className="w-full px-4 py-3 rounded-lg bg-black/50 border border-blue-500/30 text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/50 transition-all"
-                  required
-                />
-              </div>
-              
-              <div>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  placeholder="Member Count"
-                  value={newGroup.memberCount}
-                  onChange={e => setNewGroup({ ...newGroup, memberCount: e.target.value })}
-                  className="w-full px-4 py-3 rounded-lg bg-black/50 border border-blue-500/30 text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/50 transition-all"
-                  required
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-semibold text-cyan-400 mb-2">
-                  Group Type
+
+              <div className="mt-6 space-y-4">
+                <label className="block">
+                  <span className="mb-2 block text-xs font-semibold text-slate-400">School name</span>
+                  <input value={newGroup.name} onChange={(event) => setNewGroup({ ...newGroup, name: event.target.value })} placeholder="Northbridge Academy" required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400" />
                 </label>
-                <select
-                  value={newGroup.groupType}
-                  onChange={e => setNewGroup({ ...newGroup, groupType: e.target.value })}
-                  className="w-full px-4 py-3 rounded-lg bg-black/50 border border-blue-500/30 text-white focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/50 transition-all"
-                >
-                  <option value="school" className="bg-gray-900">School Group</option>
-                  <option value="football" className="bg-gray-900">Football Group</option>
-                </select>
+                <label className="block">
+                  <span className="mb-2 block text-xs font-semibold text-slate-400">Workspace password</span>
+                  <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-slate-950/70 px-4 focus-within:border-cyan-400">
+                    <FaKey className="text-slate-600" />
+                    <input type="password" value={newGroup.password} onChange={(event) => setNewGroup({ ...newGroup, password: event.target.value })} placeholder="Secure school password" required className="w-full bg-transparent py-3 outline-none" />
+                  </div>
+                </label>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold text-slate-400">Expected students</span>
+                    <input type="number" min="1" max="100" value={newGroup.memberCount} onChange={(event) => setNewGroup({ ...newGroup, memberCount: event.target.value })} required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400" />
+                  </label>
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold text-slate-400">Workspace type</span>
+                    <select value={newGroup.groupType} onChange={(event) => setNewGroup({ ...newGroup, groupType: event.target.value })} className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400">
+                      <option value="school">School</option>
+                      <option value="football">Football group</option>
+                    </select>
+                  </label>
+                </div>
               </div>
-              
-              <button
-                type="submit"
-                className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-lg hover:from-blue-700 hover:to-cyan-700 transition-all shadow-lg shadow-blue-500/50 font-semibold mt-6"
-              >
-                Create Group
-              </button>
-            </form>
-          </motion.div>
-        </div>
-      )}
 
-      {/* Join Group Modal */}
-      {showJoinModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.8, opacity: 0 }}
-            className="relative bg-gradient-to-br from-gray-900 via-gray-800 to-black rounded-2xl p-8 shadow-2xl w-full max-w-md border border-yellow-500/30"
-          >
-            {/* Corner accents */}
-            <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-yellow-400 rounded-tl-xl" />
-            <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-yellow-400 rounded-tr-xl" />
-            <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-yellow-400 rounded-bl-xl" />
-            <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-yellow-400 rounded-br-xl" />
-            
-            <button
-              className="absolute top-4 right-4 text-gray-400 hover:text-white text-xl transition-colors"
-              onClick={() => setShowJoinModal(false)}
-            >
-              <FaTimes />
-            </button>
-            
-            <h2 
-              className="text-2xl font-bold mb-6 text-center text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-400"
-              style={{
-                backgroundSize: '200% 100%',
-                animation: 'shine 3s infinite'
-              }}
-            >
-              Join a Group
-            </h2>
-            
-            <form onSubmit={handleJoinGroup} className="space-y-4">
-              <div>
-                <input
-                  type="text"
-                  placeholder="Group ID"
-                  value={joinGroup.groupId}
-                  onChange={e => setJoinGroup({ ...joinGroup, groupId: e.target.value })}
-                  className="w-full px-4 py-3 rounded-lg bg-black/50 border border-yellow-500/30 text-white placeholder-gray-500 focus:outline-none focus:border-yellow-400 focus:ring-2 focus:ring-yellow-500/50 transition-all font-mono"
-                  required
-                />
+              <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setShowCreateModal(false)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold hover:bg-white/5">Cancel</button>
+                <button disabled={submitting} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950 disabled:opacity-50">
+                  <FaPlus /> {submitting ? 'Creating...' : 'Create school'}
+                </button>
               </div>
-              
-              <div>
-                <input
-                  type="password"
-                  placeholder="Group Password"
-                  value={joinGroup.password}
-                  onChange={e => setJoinGroup({ ...joinGroup, password: e.target.value })}
-                  className="w-full px-4 py-3 rounded-lg bg-black/50 border border-yellow-500/30 text-white placeholder-gray-500 focus:outline-none focus:border-yellow-400 focus:ring-2 focus:ring-yellow-500/50 transition-all"
-                  required
-                />
-              </div>
-              
-              <button
-                type="submit"
-                className="relative w-full py-3 bg-gradient-to-r from-yellow-600 to-amber-600 text-white rounded-lg hover:from-yellow-700 hover:to-amber-700 transition-all shadow-lg shadow-yellow-500/50 font-semibold mt-6 overflow-hidden gold-glow"
-                style={{
-                  animation: 'goldGlow 2s ease-in-out infinite'
-                }}
-              >
-                <span 
-                  className="absolute inset-0 opacity-0 hover:opacity-100 transition-opacity"
-                  style={{
-                    background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%)',
-                    backgroundSize: '200% 100%',
-                    animation: 'shine 2s infinite'
-                  }}
-                />
-                <span className="relative z-10">Join Group</span>
-              </button>
-            </form>
+            </motion.form>
           </motion.div>
-        </div>
-      )}
+        )}
+
+        {showJoinModal && legacyMode && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={() => setShowJoinModal(false)}
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+          >
+            <motion.form
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onSubmit={handleJoinGroup}
+              className="w-full max-w-lg rounded-[2rem] border border-amber-300/20 bg-[#11101c] p-6 shadow-2xl sm:p-8"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-amber-300">Legacy access</p>
+                  <h2 className="mt-2 text-2xl font-bold">Join an older workspace</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">Use the original workspace ID and password supplied by its owner.</p>
+                </div>
+                <button type="button" onClick={() => setShowJoinModal(false)} className="rounded-xl border border-white/10 p-3 text-slate-400 hover:bg-white/5 hover:text-white"><FaTimes /></button>
+              </div>
+
+              <div className="mt-6 space-y-4">
+                <label className="block">
+                  <span className="mb-2 block text-xs font-semibold text-slate-400">Workspace ID</span>
+                  <input value={joinGroup.groupId} onChange={(event) => setJoinGroup({ ...joinGroup, groupId: event.target.value })} placeholder="8-character ID" required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 font-mono outline-none focus:border-amber-300" />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-xs font-semibold text-slate-400">Workspace password</span>
+                  <input type="password" value={joinGroup.password} onChange={(event) => setJoinGroup({ ...joinGroup, password: event.target.value })} placeholder="Password" required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-amber-300" />
+                </label>
+              </div>
+
+              <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setShowJoinModal(false)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold hover:bg-white/5">Cancel</button>
+                <button disabled={submitting} className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-amber-950 disabled:opacity-50">
+                  <FaSignInAlt /> {submitting ? 'Joining...' : 'Join workspace'}
+                </button>
+              </div>
+            </motion.form>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

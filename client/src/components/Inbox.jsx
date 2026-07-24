@@ -1,79 +1,172 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import chatService from '../services/chat.js';
 
+const filterOptions = [
+  { value: 'all', label: 'All' },
+  { value: 'system', label: 'System' },
+  { value: 'group', label: 'Group' },
+  { value: 'dm', label: 'DM' }
+];
+
+const getInboxTone = (message) => {
+  const content = (message.content || '').toLowerCase();
+  if (message.category === 'system') {
+    return {
+      pill: 'bg-amber-500 text-white',
+      text: 'text-amber-200',
+      accent: 'border-l-amber-400'
+    };
+  }
+  if (content.startsWith('homework set:')) {
+    return {
+      pill: 'bg-blue-500 text-white',
+      text: 'text-blue-200',
+      accent: 'border-l-blue-400'
+    };
+  }
+  if (content.includes('submitted homework:')) {
+    return {
+      pill: 'bg-emerald-500 text-white',
+      text: 'text-emerald-200',
+      accent: 'border-l-emerald-400'
+    };
+  }
+  if (content.startsWith('homework reviewed:')) {
+    return {
+      pill: 'bg-violet-500 text-white',
+      text: 'text-violet-200',
+      accent: 'border-l-violet-400'
+    };
+  }
+  if (content.startsWith('homework reminder sent:')) {
+    return {
+      pill: 'bg-amber-500 text-white',
+      text: 'text-amber-200',
+      accent: 'border-l-amber-400'
+    };
+  }
+  return {
+    pill: message.category === 'group' ? 'bg-blue-500 text-white' : 'bg-purple-500 text-white',
+    text: 'text-gray-300',
+    accent: 'border-l-transparent'
+  };
+};
+
 const Inbox = () => {
   const [inboxMessages, setInboxMessages] = useState([]);
+  const [counts, setCounts] = useState({ all: 0, system: 0, group: 0, dm: 0 });
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('all');
+  const [scopeFilter, setScopeFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [batchUpdating, setBatchUpdating] = useState(false);
   const navigate = useNavigate();
 
-  // Fetch inbox messages and unread count
   const fetchInbox = async () => {
     try {
       setLoading(true);
-      const [messages, count] = await Promise.all([
+      const [inboxResponse, count] = await Promise.all([
         chatService.getInbox(),
         chatService.getUnreadCount()
       ]);
+      const messages = inboxResponse?.messages || [];
       setInboxMessages(messages);
+      setCounts(inboxResponse?.counts || {
+        all: messages.length,
+        system: messages.filter((item) => item.category === 'system').length,
+        group: messages.filter((item) => item.category === 'group').length,
+        dm: messages.filter((item) => item.category === 'dm').length
+      });
       setUnreadCount(count);
-    } catch (error) {
-      console.error('Error fetching inbox:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Mark message as read and navigate to the appropriate chat
+  const availableClassScopes = useMemo(() => {
+    const scopes = new Map();
+    inboxMessages.forEach((message) => {
+      if (message.class_id && message.class_name) {
+        scopes.set(String(message.class_id), message.class_name);
+      }
+    });
+    return Array.from(scopes.entries()).map(([id, name]) => ({ id, name }));
+  }, [inboxMessages]);
+
+  const filteredMessages = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return inboxMessages.filter((message) => {
+      if (activeFilter !== 'all' && message.category !== activeFilter) {
+        return false;
+      }
+      if (scopeFilter === 'class-only' && !message.class_id) {
+        return false;
+      }
+      if (scopeFilter !== 'all' && scopeFilter !== 'class-only' && String(message.class_id || '') !== scopeFilter) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      const haystack = [
+        message.sender_username,
+        message.group_name,
+        message.class_name,
+        message.content
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [activeFilter, inboxMessages, scopeFilter, searchQuery]);
+
+  const visibleUnreadMessages = filteredMessages.filter((message) => message.unread);
+
   const handleMessageClick = async (message) => {
     try {
       await chatService.markMessageRead(message.id);
-      
-      // Navigate to the appropriate chat
-      if (message.type === 'group_chat') {
-        navigate(`/groups/${message.group_id}?tab=chat`);
-      } else if (message.type === 'dm') {
-        navigate(`/groups/${message.group_id}?tab=dm&user=${message.sender_id}`);
-      }
-      
-      // Refresh inbox
+      setIsOpen(false);
+      navigate(message.deep_link || '/groups');
       fetchInbox();
-    } catch (error) {
-      console.error('Error marking message as read:', error);
+    } catch (_error) {
+      fetchInbox();
     }
   };
 
-  // Format timestamp
   const formatTime = (timestamp) => {
     const date = new Date(timestamp);
     const now = new Date();
     const diffInHours = (now - date) / (1000 * 60 * 60);
-    
     if (diffInHours < 1) {
-      const diffInMinutes = Math.floor((now - date) / (1000 * 60));
-      return `${diffInMinutes}m ago`;
-    } else if (diffInHours < 24) {
-      return `${Math.floor(diffInHours)}h ago`;
-    } else {
-      return date.toLocaleDateString();
+      return `${Math.max(1, Math.floor((now - date) / (1000 * 60)))}m ago`;
     }
+    if (diffInHours < 24) {
+      return `${Math.floor(diffInHours)}h ago`;
+    }
+    return date.toLocaleDateString();
   };
 
-  // Truncate message content
-  const truncateContent = (content, maxLength = 50) => {
-    if (content.length <= maxLength) return content;
-    return content.substring(0, maxLength) + '...';
+  const truncateContent = (content, maxLength = 72) => {
+    if ((content || '').length <= maxLength) return content;
+    return `${content.substring(0, maxLength)}...`;
+  };
+
+  const handleMarkVisibleRead = async () => {
+    if (!visibleUnreadMessages.length) return;
+    try {
+      setBatchUpdating(true);
+      await Promise.all(visibleUnreadMessages.map((message) => chatService.markMessageRead(message.id).catch(() => null)));
+    } finally {
+      setBatchUpdating(false);
+      fetchInbox();
+    }
   };
 
   useEffect(() => {
     fetchInbox();
     window.refreshInboxUnreadCount = fetchInbox;
-    
-    // Set up periodic refresh
-    const interval = setInterval(fetchInbox, 30000); // Refresh every 30 seconds
-    
+    const interval = setInterval(fetchInbox, 30000);
     return () => {
       clearInterval(interval);
       window.refreshInboxUnreadCount = undefined;
@@ -82,121 +175,140 @@ const Inbox = () => {
 
   return (
     <div className="relative">
-      {/* Inbox Button with Notification Badge */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 text-gray-300 hover:text-white transition-colors"
+        aria-label="Open notifications"
       >
         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
         </svg>
-        
-        {/* Notification Badge */}
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
+          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 min-w-[20px] px-1 flex items-center justify-center font-bold">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
       </button>
 
-      {/* Inbox Dropdown */}
       {isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50"
-             onClick={() => setIsOpen(false)}>
-          <div className="w-80 max-w-[calc(100vw-2rem)] bg-gray-800 border border-gray-700 rounded-lg shadow-lg"
-               onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-20 z-50" onClick={() => setIsOpen(false)}>
+          <div className="w-[28rem] max-w-[calc(100vw-2rem)] bg-gray-800 border border-gray-700 rounded-lg shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-700 flex justify-between items-start gap-3">
               <div>
-                <h3 className="text-lg font-semibold text-white">Inbox</h3>
-                <p className="text-sm text-gray-400">
-                  {unreadCount > 0 ? `${unreadCount} unread message${unreadCount !== 1 ? 's' : ''}` : 'No unread messages'}
-                </p>
+                <h3 className="text-lg font-semibold text-white">Notification center</h3>
+                <p className="text-sm text-gray-400">{unreadCount > 0 ? `${unreadCount} unread notifications` : 'All caught up'}</p>
               </div>
-              <button
-                onClick={() => setIsOpen(false)}
-                className="text-gray-400 hover:text-white transition-colors p-1"
-                aria-label="Close inbox"
-              >
+              <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-white transition-colors p-1" aria-label="Close notifications">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
-          <div className="max-h-96 overflow-y-auto">
-            {loading ? (
-              <div className="p-4 text-center text-gray-400">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mx-auto"></div>
-                <p className="mt-2">Loading messages...</p>
-              </div>
-            ) : inboxMessages.length === 0 ? (
-              <div className="p-4 text-center text-gray-400">
-                <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-                </svg>
-                <p>No unread messages</p>
-              </div>
-            ) : (
-              inboxMessages.map((message) => (
-                <div
-                  key={message.id}
-                  onClick={() => handleMessageClick(message)}
-                  className="p-4 border-b border-gray-700 hover:bg-gray-700 cursor-pointer transition-colors"
+            <div className="px-4 py-3 border-b border-gray-700 flex flex-wrap gap-2">
+              {filterOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setActiveFilter(option.value)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${activeFilter === option.value ? 'bg-primary-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center space-x-2 mb-1">
-                        {message.message_type === 'system' ? (
-                          <>
-                            <span className="text-sm font-medium text-orange-300">
-                              System
-                            </span>
-                            <span className="text-xs px-2 py-1 rounded-full bg-orange-500 text-white">
-                              System
-                            </span>
-                            <span className="text-xs text-gray-400">
-                              in {message.group_name}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-sm font-medium text-white">
-                              {message.sender_username || 'Unknown User'}
-                            </span>
-                            <span className={`text-xs px-2 py-1 rounded-full ${
-                              message.type === 'group_chat' 
-                                ? 'bg-blue-500 text-white' 
-                                : 'bg-purple-500 text-white'
-                            }`}>
-                              {message.type === 'group_chat' ? 'Group' : 'DM'}
-                            </span>
-                            <span className="text-xs text-gray-400">
-                              in {message.group_name}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <p className={`text-sm mb-1 ${
-                        message.message_type === 'system' 
-                          ? 'text-orange-200' 
-                          : 'text-gray-300'
-                      }`}>
-                        {truncateContent(message.content)}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {formatTime(message.created_at)}
-                      </p>
-                    </div>
-                    <div className="ml-2">
-                      <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+                  {option.label} ({counts[option.value] ?? 0})
+                </button>
+              ))}
+            </div>
 
-          {inboxMessages.length > 0 && (
+            <div className="px-4 py-3 border-b border-gray-700 space-y-3">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search inbox"
+                  className="flex-1 rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <select
+                  value={scopeFilter}
+                  onChange={(event) => setScopeFilter(event.target.value)}
+                  className="rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="all">All scopes</option>
+                  <option value="class-only">Class chat only</option>
+                  {availableClassScopes.map((scope) => (
+                    <option key={scope.id} value={scope.id}>
+                      {scope.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-gray-400">
+                  {filteredMessages.length} visible
+                  {visibleUnreadMessages.length > 0 ? ` • ${visibleUnreadMessages.length} unread in view` : ''}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleMarkVisibleRead}
+                  disabled={!visibleUnreadMessages.length || batchUpdating}
+                  className="rounded-full border border-gray-600 px-3 py-1 text-xs font-semibold text-gray-200 transition-colors hover:border-primary-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {batchUpdating ? 'Marking...' : 'Mark Visible Read'}
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[28rem] overflow-y-auto">
+              {loading ? (
+                <div className="p-6 text-center text-gray-400">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mx-auto"></div>
+                  <p className="mt-2">Loading notifications...</p>
+                </div>
+              ) : filteredMessages.length === 0 ? (
+                <div className="p-6 text-center text-gray-400">
+                  <p>No notifications in this view.</p>
+                </div>
+              ) : (
+                filteredMessages.map((message) => (
+                  (() => {
+                    const tone = getInboxTone(message);
+                    const channelLabel = message.class_name
+                      ? `${message.group_name} • ${message.class_name}`
+                      : message.group_name;
+                    return (
+                      <button
+                        key={message.id}
+                        type="button"
+                        onClick={() => handleMessageClick(message)}
+                        className={`w-full border-b border-l-4 border-gray-700 p-4 text-left transition-colors hover:bg-gray-700 ${tone.accent}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-1 flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-white">
+                                {message.sender_username || (message.category === 'system' ? 'System' : 'Unknown')}
+                              </span>
+                              <span className={`rounded-full px-2 py-1 text-[11px] ${tone.pill}`}>
+                                {message.category === 'system' ? 'System' : message.category === 'group' ? 'Group' : 'DM'}
+                              </span>
+                              {message.class_name && (
+                                <span className="rounded-full bg-gray-700 px-2 py-1 text-[11px] text-gray-200">
+                                  {message.class_name}
+                                </span>
+                              )}
+                              <span className="text-xs text-gray-400">in {channelLabel}</span>
+                            </div>
+                            <p className={`text-sm ${tone.text}`}>{truncateContent(message.content)}</p>
+                            <p className="mt-1 text-xs text-gray-500">{formatTime(message.created_at)}</p>
+                          </div>
+                          {message.unread ? <div className="mt-1 h-2 w-2 rounded-full bg-red-500"></div> : null}
+                        </div>
+                      </button>
+                    );
+                  })()
+                ))
+              )}
+            </div>
+
             <div className="p-4 border-t border-gray-700">
               <button
                 onClick={() => {
@@ -205,16 +317,14 @@ const Inbox = () => {
                 }}
                 className="w-full text-center text-sm text-blue-400 hover:text-blue-300 transition-colors"
               >
-                View All Groups
+                Go to groups
               </button>
             </div>
-          )}
           </div>
         </div>
       )}
-
     </div>
   );
 };
 
-export default Inbox; 
+export default Inbox;

@@ -1,28 +1,17 @@
-import React, { useMemo, useState } from 'react';
+import React, { Suspense, lazy, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import TaskStats from './TaskStats';
 import TaskProgress from '../components/TaskProgress';
-import HabitCalendar from '../components/HabitCalendar';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
+import {
+  formatDateLocal,
+  getNextAvailableDayFromDate,
+  isHabitScheduledForDay,
+  parseDateLocal
+} from '../utils/habitScheduleUtils';
 
-// Helper to format date as YYYY-MM-DD in local time
-function formatDateLocal(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-// Helper to parse date string in local timezone (avoiding UTC conversion)
-function parseDateLocal(dateStr) {
-  // If it's already YYYY-MM-DD format, parse it in local time
-  if (dateStr.includes('T')) {
-    dateStr = dateStr.split('T')[0];
-  }
-  const [year, month, day] = dateStr.split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
+const HabitCalendar = lazy(() => import('../components/HabitCalendar'));
 
 const MemberStats = () => {
   const { groupId, memberId } = useParams();
@@ -56,20 +45,18 @@ const MemberStats = () => {
   const updateHabitDay = async (habitIndex, date, updateData) => {
     try {
       setSaving(true);
-      console.log('Updating habit:', { habitIndex, date, updateData });
-      const response = await axios.post(
+      await axios.post(
         `/groups/${groupId}/challenge/${group.activeChallenge.id}/member/${memberId}/habit/${habitIndex}/toggle-day`,
         {
           date: date,
           ...updateData  // Can include: completed, numericValue, textValue
         }
       );
-      console.log('Update response:', response.data);
       // Refresh group data to show the change
       await fetchGroupDetails();
     } catch (err) {
       console.error('Error updating habit:', err);
-      alert('Failed to update habit. Please try again.');
+      setError('Failed to update habit. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -119,17 +106,6 @@ const MemberStats = () => {
         d.setDate(d.getDate() + 1);
       }
     }
-    // Helper to check if habit is scheduled for a day
-    const isHabitScheduledForDay = (habit, dateStr) => {
-      if (!habit.scheduleDays || habit.scheduleDays.length === 0) return true;
-      // Parse YYYY-MM-DD string as local date to avoid timezone issues
-      const [year, month, day] = dateStr.split('-').map(Number);
-      const date = new Date(year, month - 1, day);
-      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const dayName = days[date.getDay()];
-      return habit.scheduleDays.includes(dayName);
-    };
-
     // For each habit, build a map of date->progress
     const tasks_stats = memberHabit.habits.map((habit, idx) => {
       let days_completed = 0;
@@ -263,27 +239,8 @@ const MemberStats = () => {
       });
       while (d <= endBound) {
         const dateStr = formatDateLocal(d);
-        const isScheduled = !habit.scheduleDays || habit.scheduleDays.length === 0 || habit.scheduleDays.includes(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()]);
-        let nextAvailable = null;
-        if (!isScheduled) {
-          // Calculate next available day
-          const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-          const todayIndex = d.getDay();
-          for (let i = 1; i <= 7; i++) {
-            const nextIndex = (todayIndex + i) % 7;
-            const nextDay = days[nextIndex];
-            if (habit.scheduleDays.includes(nextDay)) {
-              const nextDate = new Date(d);
-              nextDate.setDate(d.getDate() + i);
-              nextAvailable = {
-                day: nextDay,
-                date: formatDateLocal(nextDate),
-                hoursUntil: i * 24
-              };
-              break;
-            }
-          }
-        }
+        const isScheduled = isHabitScheduledForDay(habit, d);
+        const nextAvailable = isScheduled ? null : getNextAvailableDayFromDate(habit, d);
         completeDailyData.push({
           date: dateStr,
           is_complete: progressMap[dateStr] !== undefined ? progressMap[dateStr] : false,
@@ -408,14 +365,16 @@ const MemberStats = () => {
             <TaskProgress analytics={analytics} />
           </div>
         ) : selectedSection === 'calendar' ? (
-          <div>
-            <HabitCalendar 
-              habits={memberHabit.habits}
-              startDate={startDate}
-              endDate={endDate}
-              memberHabit={memberHabit}
-            />
-          </div>
+          <Suspense fallback={<div className="rounded-2xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-secondary-500 shadow-card">Loading calendar...</div>}>
+            <div>
+              <HabitCalendar
+                habits={memberHabit.habits}
+                startDate={startDate}
+                endDate={endDate}
+                memberHabit={memberHabit}
+              />
+            </div>
+          </Suspense>
         ) : (
           <TaskStats 
             key={selectedSection} 
@@ -431,4 +390,4 @@ const MemberStats = () => {
   );
 };
 
-export default MemberStats; 
+export default MemberStats;

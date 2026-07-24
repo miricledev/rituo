@@ -19,19 +19,13 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     minify: 'terser',
+    chunkSizeWarningLimit: 700,
     terserOptions: {
       compress: {
         drop_console: true,
         drop_debugger: true
       }
     },
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          stripe: ['@stripe/stripe-js', '@stripe/react-stripe-js']
-        }
-      }
-    }
+    rollupOptions: {}
   }
 });

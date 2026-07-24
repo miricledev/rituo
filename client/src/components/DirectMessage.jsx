@@ -43,9 +43,7 @@ const DirectMessage = ({ groupId, targetUserId, targetUsername, isLeader }) => {
       setMessages(prev => [...prev, message]);
     };
 
-    const handleJoinedDM = (data) => {
-      console.log('Joined DM:', data);
-    };
+    const handleJoinedDM = () => {};
 
     const handleError = (error) => {
       console.error('DM error:', error);
@@ -173,4 +171,4 @@ const DirectMessage = ({ groupId, targetUserId, targetUsername, isLeader }) => {
   );
 };
 
-export default DirectMessage; 
+export default DirectMessage;

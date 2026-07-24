@@ -221,7 +221,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
             hasFetchedGroupTypeRef.current = true;
           }
         } else {
-          console.log('User has no groups');
           return;
         }
       } catch (error) {
@@ -288,7 +287,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
 
   const saveSkillChartData = async (term = activeTerm) => {
     if (!memberId || (!isLeader && !isCoach)) {
-      console.log('Save skipped:', { groupId, memberId, isLeader, isCoach });
       return;
     }
     
@@ -307,7 +305,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
             hasFetchedGroupTypeRef.current = true;
           }
         } else {
-          console.log('User has no groups');
           return;
         }
       } catch (error) {
@@ -343,7 +340,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
     // it means we haven't loaded the data yet - don't overwrite with empty
     const hasDataForTerm = Object.keys(termSpecificSkillLevels).length > 0;
     if (!hasDataForTerm && loading && isSwitchingTermRef.current) {
-      console.log('Save skipped: no data for term and switch in progress - data may not be loaded yet');
       return;
     }
     
@@ -353,20 +349,9 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
     // Don't save if there are no actual user edits (no edited cells and no color changes)
     // This prevents saving on load when data is just being loaded from the server
     if (termEditedCells.length === 0 && !colorsEdited) {
-      console.log('Save skipped: no user edits detected (no edited cells and colors not changed)');
       return;
     }
-    
-    console.log('Saving skill chart data:', { 
-      groupId: targetGroupId, 
-      memberId, 
-      term, 
-      totalSkillLevels: Object.keys(skillLevels).length,
-      termSpecificSkillLevels: Object.keys(termSpecificSkillLevels).length,
-      colorScheme,
-      editedCellsCount: termEditedCells.length,
-      colorsEdited
-    });
+
     setSaving(true);
     try {
       const response = await api.put(`/groups/${targetGroupId}/members/${memberId}/skill-charts/${term}`, {
@@ -374,7 +359,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
         colorScheme: colorScheme,
         editedCells: termEditedCells // Send array of edited cell keys
       });
-      console.log('Save successful:', response.data);
       
       // Update edit history and last edited info from response
       if (response.data.skillChart) {
@@ -447,10 +431,8 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
             // saveSkillChartData now filters by term, so we can call it safely
             // This is critical: we MUST save the previous term before loading the new one
             // to prevent data loss
-            console.log('Saving previous term data before switch:', previousTerm);
             await saveSkillChartData(previousTerm);
           } else {
-            console.log('Skipping save for previous term - no data in state (may not have been loaded yet)');
           }
           
           // After saving (or skipping), load the new term
@@ -487,38 +469,31 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
   // NOTE: We exclude activeTerm from dependencies to prevent saving wrong term's data
   useEffect(() => {
     if (!isLeader && !isCoach) {
-      console.log('Auto-save skipped: not a leader or coach');
       return;
     }
     
     // Don't auto-save if we're in the middle of switching terms
     if (isSwitchingTermRef.current) {
-      console.log('Auto-save skipped: term switch in progress');
       return;
     }
     
     // Don't auto-save if we're currently loading data - this prevents saving empty/bad data
     // when the network is bad and data doesn't load properly
     if (isLoadingDataRef.current || loading) {
-      console.log('Auto-save skipped: data is currently loading');
       return;
     }
     
-    console.log('Auto-save effect triggered:', { skillLevels, colorScheme, activeTerm });
     const timeoutId = setTimeout(() => {
       // Double-check we're not switching terms (race condition protection)
       if (isSwitchingTermRef.current) {
-        console.log('Auto-save cancelled: term switch detected during timeout');
         return;
       }
       
       // Double-check we're not loading data (race condition protection)
       if (isLoadingDataRef.current || loading) {
-        console.log('Auto-save cancelled: data loading detected during timeout');
         return;
       }
       
-      console.log('Auto-save timeout triggered, calling saveSkillChartData');
       // saveSkillChartData filters by activeTerm, so this is safe
       saveSkillChartData();
     }, 1000); // Auto-save after 1 second of no changes
@@ -630,7 +605,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
         }
       } catch (error) {
         // Term might not have data yet, that's okay
-        console.log(`No data for term ${term}`);
       }
     }
     
@@ -916,7 +890,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
               onClick={async () => {
                 // Prevent rapid term switching - wait for pending operations to complete
                 if (pendingOperationRef.current) {
-                  console.log('Term switch blocked: pending operation in progress');
                   return;
                 }
                 
@@ -928,7 +901,6 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
                   // Save current term's data first (this ensures any unsaved edits are saved)
                   try {
                     await saveSkillChartData(activeTerm);
-                    console.log('Saved current term data before switching (edit mode was on)');
                   } catch (err) {
                     console.error('Error saving before term switch:', err);
                   }

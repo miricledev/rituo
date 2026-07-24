@@ -2,8 +2,8 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
+const ProtectedRoute = ({ children, allowedRoles, requireLegacyAccess = false }) => {
+  const { isAuthenticated, loading, currentUser } = useAuth();
 
   // Show loading indicator while checking authentication
   if (loading) {
@@ -17,6 +17,14 @@ const ProtectedRoute = ({ children }) => {
   // Redirect to login if not authenticated
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (allowedRoles && !allowedRoles.includes(currentUser?.accountRole)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  if (requireLegacyAccess && !currentUser?.hasLegacyAccess) {
+    return <Navigate to="/groups" replace />;
   }
 
   // Render children if authenticated

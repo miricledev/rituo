@@ -23,12 +23,10 @@ class ChatService {
     });
 
     this.socket.on('connect', () => {
-      console.log('Connected to chat server');
       this.isConnected = true;
     });
 
     this.socket.on('disconnect', () => {
-      console.log('Disconnected from chat server');
       this.isConnected = false;
     });
 
@@ -53,33 +51,27 @@ class ChatService {
   setupMessageHandlers() {
     // Group chat events
     this.socket.on('joined_group_chat', (data) => {
-      console.log('Joined group chat:', data);
       this.triggerHandler('joined_group_chat', data);
     });
 
     this.socket.on('left_group_chat', (data) => {
-      console.log('Left group chat:', data);
       this.triggerHandler('left_group_chat', data);
     });
 
     this.socket.on('receive_group_message', (message) => {
-      console.log('Received group message:', message);
       this.triggerHandler('receive_group_message', message);
     });
 
     // DM events
     this.socket.on('joined_dm', (data) => {
-      console.log('Joined DM:', data);
       this.triggerHandler('joined_dm', data);
     });
 
     this.socket.on('left_dm', (data) => {
-      console.log('Left DM:', data);
       this.triggerHandler('left_dm', data);
     });
 
     this.socket.on('receive_dm', (message) => {
-      console.log('Received DM:', message);
       this.triggerHandler('receive_dm', message);
     });
 
@@ -91,22 +83,22 @@ class ChatService {
   }
 
   // Join group chat
-  joinGroupChat(groupId, userId) {
+  joinGroupChat(groupId, userId, classId = null) {
     if (!this.socket || !this.isConnected) {
       console.error('Socket not connected');
       return;
     }
-    this.socket.emit('join_group_chat', { group_id: groupId, user_id: userId });
+    this.socket.emit('join_group_chat', { group_id: groupId, user_id: userId, class_id: classId });
   }
 
   // Leave group chat
-  leaveGroupChat(groupId) {
+  leaveGroupChat(groupId, classId = null) {
     if (!this.socket || !this.isConnected) return;
-    this.socket.emit('leave_group_chat', { group_id: groupId });
+    this.socket.emit('leave_group_chat', { group_id: groupId, class_id: classId });
   }
 
   // Send group chat message
-  sendGroupMessage(groupId, userId, content) {
+  sendGroupMessage(groupId, userId, content, classId = null) {
     if (!this.socket || !this.isConnected) {
       console.error('Socket not connected');
       return;
@@ -114,7 +106,8 @@ class ChatService {
     this.socket.emit('send_group_message', {
       group_id: groupId,
       user_id: userId,
-      content: content
+      content: content,
+      class_id: classId
     });
   }
 
@@ -188,15 +181,27 @@ class ChatService {
   }
 
   // API calls for fetching message history
-  async getGroupChatMessages(groupId) {
+  async getGroupChatMessages(groupId, classId = null) {
     try {
-      const response = await fetch(`${this.apiBaseUrl}/groups/${groupId}/chat`, {
+      const params = new URLSearchParams();
+      if (classId !== null && classId !== undefined && classId !== '') {
+        params.set('classId', classId);
+      }
+      const url = `${this.apiBaseUrl}/groups/${groupId}/chat${params.toString() ? `?${params.toString()}` : ''}`;
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
       });
       if (!response.ok) throw new Error('Failed to fetch group chat messages');
-      return await response.json();
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        return { messages: data, channel: null };
+      }
+      return {
+        messages: data.messages || [],
+        channel: data.channel || null
+      };
     } catch (error) {
       console.error('Error fetching group chat messages:', error);
       throw error;
@@ -269,9 +274,14 @@ class ChatService {
   }
 
   // Mark all group chat messages as read
-  async markAllGroupChatRead(groupId) {
+  async markAllGroupChatRead(groupId, classId = null) {
     try {
-      const response = await fetch(`${this.apiBaseUrl}/groups/${groupId}/chat/mark-all-read`, {
+      const params = new URLSearchParams();
+      if (classId !== null && classId !== undefined && classId !== '') {
+        params.set('classId', classId);
+      }
+      const url = `${this.apiBaseUrl}/groups/${groupId}/chat/mark-all-read${params.toString() ? `?${params.toString()}` : ''}`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -305,4 +315,4 @@ class ChatService {
 
 // Create singleton instance
 const chatService = new ChatService();
-export default chatService; 
+export default chatService;

@@ -6,6 +6,7 @@ from datetime import timedelta, datetime, timezone
 import os
 import time
 import threading
+import click
 from dotenv import load_dotenv
 import logging
 from logging.handlers import RotatingFileHandler
@@ -13,10 +14,15 @@ from flask_migrate import Migrate
 
 # Import routes
 from routes.auth import auth_bp
+from routes.admin import admin_bp
 from routes.tasks import tasks_bp
 from routes.analytics import analytics_bp
 from routes.payments import payments_bp
-from routes.groups import groups_bp
+from routes.groups import (
+    groups_bp,
+    get_chat_channel_context,
+    mark_messages_read_for_user,
+)
 
 # Import utils
 from utils.reset_tasks import reset_daily_tasks
@@ -110,9 +116,36 @@ socketio = SocketIO(app, cors_allowed_origins=[
 db.init_app(app)
 migrate = Migrate(app, db)
 
+
+@app.cli.command('set-account-role')
+@click.argument('username_or_email')
+@click.argument('role', type=click.Choice(['admin', 'teacher', 'student']))
+def set_account_role(username_or_email, role):
+    """Set a platform account role for bootstrap or support."""
+    user = User.query.filter(
+        (User.username == username_or_email) | (User.email == username_or_email.lower())
+    ).first()
+    if not user:
+        raise click.ClickException('Account not found')
+    user.account_role = role
+    db.session.commit()
+    click.echo(f'{user.username} is now a {role} account.')
+
 # Add request logging middleware - log ALL requests including OPTIONS
 # Only print to stdout in development to avoid cluttering production logs
 DEBUG_MODE = os.getenv('FLASK_ENV') == 'development' or os.getenv('DEBUG') == 'True'
+SENSITIVE_LOG_FIELDS = {'password', 'current_password', 'new_password', 'pin', 'access_token', 'token'}
+
+
+def redact_request_data(value):
+    if isinstance(value, dict):
+        return {
+            key: '[REDACTED]' if key.lower() in SENSITIVE_LOG_FIELDS else redact_request_data(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_request_data(item) for item in value]
+    return value
 
 @app.before_request
 def log_request_info():
@@ -137,9 +170,12 @@ def log_request_info():
         # Don't return - let Flask-CORS handle the OPTIONS request
     
     if request.method != 'OPTIONS':
-        app.logger.info(f'Request Headers: {dict(request.headers)}')
+        request_headers = dict(request.headers)
+        if 'Authorization' in request_headers:
+            request_headers['Authorization'] = '[REDACTED]'
+        app.logger.info(f'Request Headers: {request_headers}')
         if request.is_json:
-            body_msg = f'Request Body: {request.get_json()}'
+            body_msg = f'Request Body: {redact_request_data(request.get_json(silent=True) or {})}'
             if DEBUG_MODE:
                 print(body_msg)
             app.logger.info(body_msg)
@@ -201,6 +237,7 @@ with app.app_context():
 
 # Register blueprints without trailing slashes
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
+app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(tasks_bp, url_prefix='/api/tasks')
 app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
 app.register_blueprint(payments_bp, url_prefix='/api/payments')
@@ -220,32 +257,38 @@ def handle_join_group_chat(data):
     try:
         group_id = data.get('group_id')
         user_id = data.get('user_id')
+        class_id = data.get('class_id')
         
-        # Verify user is in the group
         group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
         if not group:
             emit('error', {'message': 'Group not found'})
             return
-        
-        user = User.query.get(user_id)
-        if not user or (user_id not in [m.id for m in group.members] and user_id != group.leader_id):
-            emit('error', {'message': 'Not authorized to join group chat'})
+
+        context, error_response, _ = get_chat_channel_context(group, int(user_id), class_id)
+        if error_response:
+            payload = error_response.get_json(silent=True) or {}
+            emit('error', {'message': payload.get('error', 'Not authorized to join group chat')})
             return
-        
-        # Always use the public group code for the room name
-        room = f'group_chat_{group.group_id}'
+
+        room = (
+            f'class_chat_{group.group_id}_{context["class_id"]}'
+            if context['class_id'] is not None
+            else f'group_chat_{group.group_id}'
+        )
         join_room(room)
-        emit('joined_group_chat', {'group_id': group.group_id, 'room': room})
+        emit('joined_group_chat', {
+            'group_id': group.group_id,
+            'room': room,
+            'channel': context['channel']
+        })
         app.logger.info('User %s joined group chat %s (room: %s)', user_id, group.group_id, room)
-        
-        # Mark all group chat messages as read for this user
-        import json
-        group_messages = Message.query.filter_by(group_id=group.id, recipient_id=None).all()
-        for msg in group_messages:
-            read_by = json.loads(msg.read_by or '[]')
-            if user_id not in read_by:
-                read_by.append(user_id)
-                msg.read_by = json.dumps(read_by)
+
+        group_messages = Message.query.filter_by(
+            group_id=group.id,
+            recipient_id=None,
+            class_id=context['class_id']
+        ).all()
+        mark_messages_read_for_user(group_messages, int(user_id))
         db.session.commit()
         
     except Exception as e:
@@ -256,9 +299,10 @@ def handle_join_group_chat(data):
 def handle_leave_group_chat(data):
     try:
         group_id = data.get('group_id')
-        room = f'group_chat_{group_id}'
+        class_id = data.get('class_id')
+        room = f'class_chat_{group_id}_{class_id}' if class_id not in (None, '', 'null', 'undefined') else f'group_chat_{group_id}'
         leave_room(room)
-        emit('left_group_chat', {'group_id': group_id})
+        emit('left_group_chat', {'group_id': group_id, 'class_id': class_id})
         app.logger.info('User left group chat %s', group_id)
         
     except Exception as e:
@@ -269,6 +313,7 @@ def handle_send_group_message(data):
     try:
         group_id = data.get('group_id')
         user_id = data.get('user_id')
+        class_id = data.get('class_id')
         content = data.get('content', '').strip()
         
         if not content:
@@ -282,24 +327,28 @@ def handle_send_group_message(data):
             return
         
         user = User.query.get(user_id)
-        if not user or (user_id not in [m.id for m in group.members] and user_id != group.leader_id):
-            emit('error', {'message': 'Not authorized to send message'})
+        if not user:
+            emit('error', {'message': 'User not found'})
             return
-        
-        # Save message to database
-        msg = Message(group_id=group.id, sender_id=user_id, content=content)
+
+        context, error_response, _ = get_chat_channel_context(group, int(user_id), class_id)
+        if error_response:
+            payload = error_response.get_json(silent=True) or {}
+            emit('error', {'message': payload.get('error', 'Not authorized to send message')})
+            return
+
+        msg = Message(group_id=group.id, sender_id=user_id, class_id=context['class_id'], content=content)
         db.session.add(msg)
         db.session.commit()
-        
-        # Broadcast to all users in the group chat
-        room = f'group_chat_{group.group_id}'
+
+        room = (
+            f'class_chat_{group.group_id}_{context["class_id"]}'
+            if context['class_id'] is not None
+            else f'group_chat_{group.group_id}'
+        )
         emit('receive_group_message', {
-            'id': msg.id,
-            'sender_id': msg.sender_id,
-            'sender_username': user.username,
-            'content': msg.content,
-            'created_at': msg.created_at.isoformat(),
-            'message_type': msg.message_type
+            **msg.to_dict(),
+            'channel': context['channel']
         }, room=room)
         
         app.logger.info('Group message sent by user %s in group %s', user_id, group_id)

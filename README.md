@@ -1,72 +1,107 @@
-# Rituo - Habit Building App
+# MindHeartGut / Inner Performance
 
-Rituo is a modern web application designed to help users build and maintain daily habits through a 30-day commitment system. The app provides a clean, intuitive interface with powerful analytics to track progress and maintain motivation.
+A React and Flask school performance platform for administrators, teachers, and students.
 
-## Features
+## Stack
 
-- 30-day commitment system for habit formation
-- Daily task tracking and progress visualization
-- Beautiful analytics and statistics
-- Dark mode support
-- Responsive design for all devices
-- Smooth animations and transitions
+- React 18, Vite, Tailwind CSS
+- Flask, Flask-JWT-Extended, Flask-SQLAlchemy
+- PostgreSQL and Alembic migrations
+- OpenAI Responses API for structured habit drafts and student schedules
 
-## Tech Stack
+## Account Model
 
-- Frontend: React.js with Tailwind CSS
-- Backend: Node.js with Express
-- Database: MongoDB
-- Authentication: JWT
+- **Admin:** creates schools and managed admin, teacher, or student accounts.
+- **Teacher:** accesses assigned schools, classes, registers, homework, behaviour, and interventions.
+- **Student:** accesses one assigned school, habits, goals, and the daily calendar.
+- **Legacy:** existing owner-created groups remain available at `/legacy`; ownership and data are preserved.
 
-## Getting Started
+## Local Setup (Windows CMD)
 
-### Prerequisites
+### Backend
 
-- Node.js (v14 or higher)
-- npm or yarn
-- MongoDB
-
-### Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/rituo.git
-cd rituo
+```cmd
+cd /d C:\Users\rohan\Documents\react\rituo-v1\server
+venv\Scripts\activate.bat
+set FLASK_APP=server.py
+python -m flask db upgrade
+python server.py
 ```
 
-2. Install dependencies:
-```bash
-# Install server dependencies
-cd server
-npm install
+The API runs at `http://localhost:5000`.
 
-# Install client dependencies
-cd ../client
-npm install
-```
+### Frontend
 
-3. Set up environment variables:
-   - Create a `.env` file in the server directory
-   - Add the following variables:
-     ```
-     PORT=5000
-     MONGODB_URI=your_mongodb_uri
-     JWT_SECRET=your_jwt_secret
-     ```
+Open a second CMD window:
 
-4. Start the development servers:
-```bash
-# Start the backend server (from server directory)
-npm run dev
-
-# Start the frontend development server (from client directory)
+```cmd
+cd /d C:\Users\rohan\Documents\react\rituo-v1\client
 npm run dev
 ```
 
-## Contributing
+The app runs at `http://localhost:5173`.
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## Bootstrap an Admin
 
-## License
+Existing production accounts intentionally remain student accounts with Legacy access. Promote the first platform admin explicitly:
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+```cmd
+cd /d C:\Users\rohan\Documents\react\rituo-v1\server
+venv\Scripts\activate.bat
+set FLASK_APP=server.py
+python -m flask set-account-role YOUR_USERNAME admin
+```
+
+You can also set `INITIAL_ADMIN_EMAILS` to a comma-separated allowlist before registering a new account.
+
+## OpenAI
+
+Add these values to `server\.env`:
+
+```env
+OPENAI_API_KEY=your_api_key
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_HABIT_DRAFT_MODEL=gpt-4o-mini
+OPENAI_SCHEDULER_MODEL=gpt-4o-mini
+OPENAI_STUDENT_IMPORT_MODEL=gpt-4o-mini
+```
+
+The API key is used only by the Flask server and must never be added to the client environment.
+
+### Structured AI Contracts
+
+Every OpenAI feature uses a named strict JSON Schema contract through `server\utils\openai_responses.py`. The schema is sent to the Responses API with strict mode enabled, the system prompt explicitly forbids prose or additional fields, and the returned JSON is validated again on the server before application code can use it.
+
+Current contracts cover Copilot answers, student goal plans, habit drafts, daily schedules, and CSV column mapping. API responses include the contract name and version for predictable client handling.
+
+Copilot configuration is account-role aware:
+
+- **Administrators:** strategic, direct operations support with FAQs for schools, account provisioning, student imports, logins, risk, and reporting.
+- **Teachers:** calm, practical colleague-style support with FAQs for classes, registers, homework, behaviour, and student follow-up.
+- **Students:** positive, age-appropriate coaching with FAQs for habits, schedules, small next steps, and recovery after setbacks.
+
+The server derives the role from the authenticated account, filters suggested actions to pages that role can access, and never trusts a role supplied by the client.
+
+## Bulk Student CSV Import
+
+Administrators can upload a CSV from the dashboard, review every generated account, edit the proposed details, and then import all students into one school. The exact template headers are:
+
+```csv
+first_name,last_name,year_group,tutor_group
+Amina,Khan,Year 10,10AK
+```
+
+Exact-template files are handled locally. Other header layouts use OpenAI to identify the matching columns. Every proposed student receives a unique username, an `@innerperformance.co.uk` email, and a six-digit temporary password. Download the generated login CSV immediately after import because passwords are stored only as hashes.
+
+The admin dashboard also includes a school-specific student directory. Administrators can download a roster at any time or generate a fresh login CSV. Generating a fresh login CSV resets every listed student to a new six-digit password so readable passwords never need to be stored.
+
+## Validation
+
+```cmd
+cd /d C:\Users\rohan\Documents\react\rituo-v1\server
+venv\Scripts\activate.bat
+python -m unittest discover -s tests -v
+
+cd /d C:\Users\rohan\Documents\react\rituo-v1\client
+npm run build
+```

@@ -1,25 +1,10 @@
 import React, { useState, useMemo } from 'react';
+import { isHabitScheduledForDay } from '../utils/habitScheduleUtils';
 
 const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
-  
-  // Helper to get day name from date
-  const getDayName = (date) => {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return days[date.getDay()];
-  };
 
-  // Helper to check if a habit is scheduled for a specific day
-  const isHabitScheduledForDay = (habit, date) => {
-    // If no scheduleDays specified, treat as everyday (backward compatibility)
-    if (!habit.scheduleDays || habit.scheduleDays.length === 0) {
-      return true;
-    }
-    const dayName = getDayName(date);
-    return habit.scheduleDays.includes(dayName);
-  };
-  
   // Generate all dates in the challenge period
   const challengeDates = useMemo(() => {
     if (!startDate || !endDate) return [];

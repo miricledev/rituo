@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useTask } from '../contexts/TaskContext';
 import ipLogo from '../assets/ip-logo.jpg';
 import Inbox from './Inbox';
 
 const Navbar = () => {
   const { currentUser, logout } = useAuth();
-  const { tasks } = useTask();
   const location = useLocation();
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -54,8 +52,11 @@ const Navbar = () => {
 
   // Navigation items
   const navItems = [
-    { title: 'Groups', path: '/groups' }
-  ];
+    { title: 'Dashboard', path: '/dashboard', show: true },
+    { title: 'Schools', path: '/groups' },
+    { title: 'Teacher Desk', path: '/teacher-desk', show: ['admin', 'teacher'].includes(currentUser?.accountRole) },
+    { title: 'Legacy', path: '/legacy', show: currentUser?.hasLegacyAccess }
+  ].filter((item) => item.show !== false);
 
   return (
     <nav className="fixed top-0 left-0 right-0 bg-white dark:bg-secondary-800 shadow-md z-40 transition-colors duration-200">
@@ -64,7 +65,7 @@ const Navbar = () => {
           {/* Logo and navigation links */}
           <div className="flex">
             <div className="flex-shrink-0 flex items-center">
-              <Link to="/groups" className="flex items-center font-display text-lg sm:text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200 gap-2">
+              <Link to="/dashboard" className="flex items-center font-display text-lg sm:text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200 gap-2">
                 <img src={ipLogo} alt="Inner Performance Logo" className="h-10 w-10 sm:h-12 sm:w-12 object-cover rounded-full border-2 border-primary-600 dark:border-primary-400" />
                 <span className="hidden sm:block">Inner Performance</span>
               </Link>
@@ -116,7 +117,10 @@ const Navbar = () => {
                   onClick={toggleMenu}
                   className="flex items-center gap-2 text-sm font-medium focus:outline-none hover:scale-105 transition-transform duration-200"
                 >
-                  <span className="hidden md:block text-secondary-800 dark:text-secondary-200">{currentUser?.username}</span>
+                  <span className="hidden md:block text-secondary-800 dark:text-secondary-200">
+                    {currentUser?.username}
+                    <span className="ml-2 rounded-full bg-primary-100 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary-700 dark:bg-primary-900 dark:text-primary-200">{currentUser?.accountRole || 'student'}</span>
+                  </span>
                   <div className="h-8 w-8 rounded-full bg-primary-500 dark:bg-primary-400 flex items-center justify-center text-white transform hover:scale-110 transition-transform duration-200">
                     {currentUser?.username?.charAt(0).toUpperCase()}
                   </div>
