@@ -150,8 +150,8 @@ export default function AppCopilot() {
       </button>
 
       {open ? (
-        <div className="fixed bottom-24 right-5 z-40 w-[min(92vw,440px)] rounded-3xl border border-white/10 bg-[#0b1022]/95 p-4 text-white shadow-2xl shadow-slate-950/50 backdrop-blur-xl">
-          <div className="flex items-start justify-between gap-3">
+        <div className="fixed bottom-20 right-3 z-40 flex max-h-[calc(100dvh-6rem)] w-[min(92vw,440px)] flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#0b1022]/95 p-4 text-white shadow-2xl shadow-slate-950/50 backdrop-blur-xl sm:bottom-24 sm:right-5">
+          <div className="flex shrink-0 items-start justify-between gap-3">
             <div>
               <div className={`text-xs font-semibold uppercase tracking-[0.22em] ${style.accent}`}>{assistantConfig.audienceLabel}</div>
               <div className="mt-1 text-lg font-bold">{assistantConfig.assistantName}</div>
@@ -167,76 +167,78 @@ export default function AppCopilot() {
             </button>
           </div>
 
-          <div className="mt-4 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Frequently asked</div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {(assistantConfig.starterPrompts || fallbackConfig.starterPrompts).map((starter) => (
-              <button
-                key={starter}
-                type="button"
-                onClick={() => submitPrompt(starter)}
-                disabled={loading}
-                className={`rounded-full border px-3 py-2 text-xs font-medium transition hover:brightness-125 disabled:opacity-60 ${style.chip}`}
-              >
-                {starter}
-              </button>
-            ))}
-          </div>
+          <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Frequently asked</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(assistantConfig.starterPrompts || fallbackConfig.starterPrompts).map((starter) => (
+                <button
+                  key={starter}
+                  type="button"
+                  onClick={() => submitPrompt(starter)}
+                  disabled={loading}
+                  className={`rounded-full border px-3 py-2 text-xs font-medium transition hover:brightness-125 disabled:opacity-60 ${style.chip}`}
+                >
+                  {starter}
+                </button>
+              ))}
+            </div>
 
-          <div className="mt-4 max-h-[46vh] space-y-3 overflow-y-auto pr-1">
-            {!messages.length ? (
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm leading-6 text-slate-400">
-                Responses use your account role, current route, and permitted school context. Suggested actions are filtered to pages your role can access.
-              </div>
-            ) : null}
+            <div className="mt-4 space-y-3">
+              {!messages.length ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm leading-6 text-slate-400">
+                  Responses use your account role, current route, and permitted school context. Suggested actions are filtered to pages your role can access.
+                </div>
+              ) : null}
 
-            {messages.map((message, index) => (
-              <div
-                key={`${message.role}-${index}`}
-                className={message.role === 'user'
-                  ? `ml-8 rounded-2xl bg-gradient-to-r ${style.trigger} px-4 py-3 text-sm font-medium text-slate-950`
-                  : 'mr-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200'}
-              >
-                {message.role === 'user' ? (
-                  message.text
-                ) : (
-                  <div className="space-y-3">
-                    <div className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${style.accent}`}>
-                      {message.payload?.focusArea || 'Rituo Copilot'}
+              {messages.map((message, index) => (
+                <div
+                  key={`${message.role}-${index}`}
+                  className={message.role === 'user'
+                    ? `ml-8 rounded-2xl bg-gradient-to-r ${style.trigger} px-4 py-3 text-sm font-medium text-slate-950`
+                    : 'mr-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200'}
+                >
+                  {message.role === 'user' ? (
+                    message.text
+                  ) : (
+                    <div className="space-y-3">
+                      <div className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${style.accent}`}>
+                        {message.payload?.focusArea || 'Rituo Copilot'}
+                      </div>
+                      <div>{message.payload?.answer}</div>
+                      {(message.payload?.nextActions || []).map((action, actionIndex) => (
+                        <div key={`${action.title}-${actionIndex}`} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
+                          <div className="font-semibold text-white">{action.title}</div>
+                          {action.why ? <div className="mt-1 text-xs text-slate-400">{action.why}</div> : null}
+                          {action.link?.route ? (
+                            <button
+                              type="button"
+                              onClick={() => navigate(action.link.route)}
+                              className={`mt-3 rounded-full bg-gradient-to-r ${style.trigger} px-3 py-1.5 text-xs font-bold text-slate-950`}
+                            >
+                              {action.link.label || 'Open'}
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                      {(message.payload?.quickReplies || []).length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {message.payload.quickReplies.map((reply) => (
+                            <button
+                              key={reply}
+                              type="button"
+                              onClick={() => submitPrompt(reply)}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-medium ${style.chip}`}
+                            >
+                              {reply}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
-                    <div>{message.payload?.answer}</div>
-                    {(message.payload?.nextActions || []).map((action, actionIndex) => (
-                      <div key={`${action.title}-${actionIndex}`} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
-                        <div className="font-semibold text-white">{action.title}</div>
-                        {action.why ? <div className="mt-1 text-xs text-slate-400">{action.why}</div> : null}
-                        {action.link?.route ? (
-                          <button
-                            type="button"
-                            onClick={() => navigate(action.link.route)}
-                            className={`mt-3 rounded-full bg-gradient-to-r ${style.trigger} px-3 py-1.5 text-xs font-bold text-slate-950`}
-                          >
-                            {action.link.label || 'Open'}
-                          </button>
-                        ) : null}
-                      </div>
-                    ))}
-                    {(message.payload?.quickReplies || []).length ? (
-                      <div className="flex flex-wrap gap-2">
-                        {message.payload.quickReplies.map((reply) => (
-                          <button
-                            key={reply}
-                            type="button"
-                            onClick={() => submitPrompt(reply)}
-                            className={`rounded-full border px-3 py-1.5 text-xs font-medium ${style.chip}`}
-                          >
-                            {reply}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
 
           <form
@@ -244,7 +246,7 @@ export default function AppCopilot() {
               event.preventDefault();
               submitPrompt(prompt);
             }}
-            className="mt-4 space-y-3"
+            className="mt-4 shrink-0 space-y-3 border-t border-white/10 pt-4"
           >
             <textarea
               value={prompt}
