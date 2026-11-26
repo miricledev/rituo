@@ -232,6 +232,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-300">{isFootballWorkspace ? 'IP Football Rewards' : isStaffWorkspace ? 'IP Staff Avatar Economy' : 'IP Rewards'}</p>
               <div className="mt-1 flex flex-wrap items-center gap-2"><h3 className="truncate text-lg font-black text-slate-950 dark:text-white">{selectedTitle?.name || 'Steady Starter'}</h3><span className="rounded-full border border-amber-200 bg-white/85 px-2.5 py-1 text-amber-800 dark:border-amber-300/20 dark:bg-white/5 dark:text-amber-200"><IpBuck amount={wallet.balance || 0} compact /></span></div>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{selectedTheme?.name || 'IP Classic'} · {economy.purchases?.length || 0} shop items owned</p>
+              {readOnlyPreview && economy.pendingPreviewEarnings > 0 ? <p className="mt-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Includes {economy.pendingPreviewEarnings} pending IP Bucks for this school; credited when the student opens their wallet.</p> : null}
             </div>
           </div>
           {!standalone ? <button type="button" onClick={() => setOpen((previous) => !previous)} disabled={loading} className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:opacity-50 dark:bg-white dark:text-slate-950 sm:w-auto">

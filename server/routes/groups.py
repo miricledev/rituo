@@ -8631,9 +8631,26 @@ def _normalize_ip_avatar(raw_avatar, owned_item_ids, catalog=None):
 
 
 def _build_ip_economy(group, student_id, settings, habit_momentum, read_only=False):
+    pending_preview_earnings = 0
     if read_only:
         wallet = StudentIpWallet.query.filter_by(student_id=student_id).first()
         credited = []
+        recorded = {
+            row.reference_key: int(row.amount or 0)
+            for row in StudentIpTransaction.query.filter_by(wallet_id=wallet.id, kind='habit_streak').all()
+        } if wallet else {}
+        today_value = datetime.now(_student_timezone(group, student_id, settings)[1]).date()
+        for challenge in GroupChallenge.query.filter_by(group_id=group.id).all():
+            member_habit = next(
+                (entry for entry in (challenge.member_habits or []) if str(_member_habit_user_id(entry)) == str(student_id)),
+                None,
+            )
+            if not member_habit:
+                continue
+            challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+            stats_date = min(today_value, challenge_end) if challenge_end else today_value
+            for award in _habit_streak_awards_for_challenge(challenge, member_habit, student_id, stats_date, group=group):
+                pending_preview_earnings += max(0, int(award['amount']) - recorded.get(award['referenceKey'], 0))
     else:
         wallet, credited = _sync_student_ip_bucks(group, student_id)
     purchases = StudentIpPurchase.query.filter_by(wallet_id=wallet.id).order_by(StudentIpPurchase.purchased_at.desc()).all() if wallet else []
@@ -8649,7 +8666,11 @@ def _build_ip_economy(group, student_id, settings, habit_momentum, read_only=Fal
     } for item in catalog]
     activity = StudentIpTransaction.query.filter_by(wallet_id=wallet.id).order_by(StudentIpTransaction.created_at.desc()).limit(16).all() if wallet else []
     return {
-        'wallet': wallet.to_dict() if wallet else {'balance': 0, 'lifetimeEarned': 0, 'lifetimeSpent': 0},
+        'wallet': {
+            **(wallet.to_dict() if wallet else {'balance': 0, 'lifetimeEarned': 0, 'lifetimeSpent': 0}),
+            'balance': int(wallet.balance or 0) + pending_preview_earnings if wallet else pending_preview_earnings,
+        },
+        'pendingPreviewEarnings': pending_preview_earnings,
         'newEarnings': sum(item['amount'] for item in credited),
         'avatar': avatar,
         'avatarChoices': IP_AVATAR_FREE_CHOICES,

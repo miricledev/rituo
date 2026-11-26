@@ -1,4 +1,5 @@
 import unittest
+from datetime import timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -37,10 +38,12 @@ class StudentPreviewTests(unittest.TestCase):
         build_rewards.assert_called_once_with(group, 8, None, read_only=True)
 
     def test_read_only_economy_does_not_create_or_credit_wallet(self):
-        group = SimpleNamespace(group_type='school')
+        group = SimpleNamespace(id=3, group_type='school')
         wallet_model = SimpleNamespace(query=Mock())
         wallet_model.query.filter_by.return_value.first.return_value = None
-        with patch.object(groups, 'StudentIpWallet', wallet_model), patch.object(groups, '_sync_student_ip_bucks') as sync_wallet:
+        challenge_model = SimpleNamespace(query=Mock())
+        challenge_model.query.filter_by.return_value.all.return_value = []
+        with patch.object(groups, 'StudentIpWallet', wallet_model), patch.object(groups, 'GroupChallenge', challenge_model), patch.object(groups, '_student_timezone', return_value=('UTC', timezone.utc)), patch.object(groups, '_sync_student_ip_bucks') as sync_wallet:
             economy = groups._build_ip_economy(group, 8, None, [], read_only=True)
         sync_wallet.assert_not_called()
         self.assertEqual(economy['wallet']['balance'], 0)

@@ -1861,7 +1861,8 @@ const DailyHabitPlanner = ({
 
         <div className="grid gap-3 sm:gap-5 xl:grid-cols-[310px_minmax(0,1fr)]">
           <aside className="order-2 space-y-3 sm:space-y-4 xl:order-1">
-            {canEdit ? (
+            <fieldset disabled={readOnlyPreview} className="min-w-0 space-y-3 sm:space-y-4">
+            {canEdit || readOnlyPreview ? (
               <div className="rounded-2xl border border-yellow-300 bg-gradient-to-br from-yellow-50 to-amber-50 p-4 dark:border-yellow-300/20 dark:from-yellow-400/10 dark:to-amber-400/5">
                 <p className="text-xs font-black uppercase tracking-[0.2em] text-amber-700 dark:text-yellow-200">Sleep boundaries</p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">These times apply to every day. Sleep stays yellow and AI plans inside your waking hours.</p>
@@ -1903,7 +1904,7 @@ const DailyHabitPlanner = ({
               </div>
             ) : null}
 
-            {canEdit && !isFootballWorkspace && !isStaffWorkspace ? (
+            {(canEdit || readOnlyPreview) && !isFootballWorkspace && !isStaffWorkspace ? (
               <div className="rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50 p-4 dark:border-blue-400/20 dark:from-blue-500/10 dark:to-cyan-500/5">
                 <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700 dark:text-blue-200">School travel</p>
                 <p className="mt-2 text-sm leading-5 text-slate-600 dark:text-slate-300">Tell the planner your normal one-way journey. Travel blocks will protect the time before and after school.</p>
@@ -1922,7 +1923,7 @@ const DailyHabitPlanner = ({
               </div>
             ) : null}
 
-            {canEdit ? (
+            {canEdit || readOnlyPreview ? (
               <div className="rounded-2xl border border-teal-200 bg-gradient-to-br from-teal-50 to-cyan-50 p-4 dark:border-teal-400/20 dark:from-teal-500/10 dark:to-cyan-500/5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -2015,7 +2016,7 @@ const DailyHabitPlanner = ({
               </div>
             ) : null}
 
-            {canEdit ? (
+            {canEdit || readOnlyPreview ? (
               <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-cyan-50 p-4 dark:border-violet-400/20 dark:from-violet-500/10 dark:to-cyan-500/5">
                 <p className="text-xs font-black uppercase tracking-[0.2em] text-violet-600 dark:text-violet-300">AI auto-plan</p>
                 <p className="mt-2 text-sm leading-5 text-slate-600 dark:text-slate-300">Choose exactly which days AI may reorganise. Every habit remains on its assigned weekday.</p>
@@ -2124,7 +2125,7 @@ const DailyHabitPlanner = ({
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-white/[0.035] sm:p-4">
               <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Manual planning</p>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Add a one-off appointment, trip, meal, or commitment to the selected date only.</p>
-              {canEdit ? (
+              {canEdit || readOnlyPreview ? (
                 <button type="button" onClick={() => addManualBlock()} disabled={!selectedDateEditable} className="mt-3 w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-400 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/15 dark:bg-white/[0.05] dark:text-white">
                   + Add commitment
                 </button>
@@ -2202,6 +2203,7 @@ const DailyHabitPlanner = ({
                 ) : null}
               </div>
             ) : null}
+            </fieldset>
           </aside>
 
           <div className="order-1 min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950/50 xl:order-2">
