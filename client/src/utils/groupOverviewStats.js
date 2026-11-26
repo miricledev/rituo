@@ -1,34 +1,23 @@
-import { calculateNumericProgress } from './habitProgressUtils';
-import { isHabitScheduledForDay } from './habitScheduleUtils';
+import { calculateHabitProgress } from './habitProgressUtils';
+import { formatDateLocal as formatLocalDate, isHabitScheduledForDay } from './habitScheduleUtils';
 
 const matchesDate = (entryDate, dateStr, formatDateLocal) => {
   if (!entryDate) return false;
 
+  if (entryDate.slice(0, 10) === dateStr) return true;
   const progressDate = new Date(entryDate);
-  const targetDate = new Date(dateStr);
-
-  return (
-    progressDate.toDateString() === targetDate.toDateString()
-    || entryDate.slice(0, 10) === dateStr
-    || formatDateLocal(progressDate) === dateStr
-  );
+  return Number.isFinite(progressDate.getTime()) && formatDateLocal(progressDate) === dateStr;
 };
 
 export const calculateUserTodayTotal = (memberHabit) => {
   if (!memberHabit?.habits?.length) return 0;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = formatLocalDate(new Date());
   let userTotal = 0;
 
   memberHabit.habits.forEach((habit) => {
     const progress = (habit.progress || []).find((entry) => entry.date && entry.date.slice(0, 10) === today);
-    if (!progress?.completed) return;
-
-    if (habit.habitType === 'numeric') {
-      userTotal += calculateNumericProgress(habit, progress);
-    } else {
-      userTotal += 100;
-    }
+    userTotal += calculateHabitProgress(habit, progress);
   });
 
   return userTotal;
@@ -37,19 +26,15 @@ export const calculateUserTodayTotal = (memberHabit) => {
 export const calculateMemberCompletionRate = (memberHabit) => {
   if (!memberHabit?.habits?.length) return 0;
 
-  const today = new Date().toISOString().slice(0, 10);
-  const total = memberHabit.habits.reduce((acc, habit) => {
+  const todayDate = new Date();
+  const today = formatLocalDate(todayDate);
+  const scheduledHabits = memberHabit.habits.filter((habit) => isHabitScheduledForDay(habit, todayDate));
+  const total = scheduledHabits.reduce((acc, habit) => {
     const progressEntry = (habit.progress || []).find((entry) => entry.date && entry.date.slice(0, 10) === today);
-    if (!progressEntry?.completed) return acc;
-
-    if (habit.habitType === 'numeric') {
-      return acc + calculateNumericProgress(habit, progressEntry);
-    }
-
-    return acc + 100;
+    return acc + calculateHabitProgress(habit, progressEntry);
   }, 0);
 
-  return total / memberHabit.habits.length;
+  return scheduledHabits.length ? total / scheduledHabits.length : 0;
 };
 
 export const calculateScheduledAverageForDate = (habits, dateStr, getDayName, formatDateLocal) => {
@@ -68,15 +53,7 @@ export const calculateScheduledAverageForDate = (habits, dateStr, getDayName, fo
     const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
     const progress = habitProgress.find((entry) => matchesDate(entry.date, dateStr, formatDateLocal));
 
-    if (!progress) {
-      return;
-    }
-
-    if (habit.habitType === 'numeric') {
-      userTotal += calculateNumericProgress(habit, progress);
-    } else {
-      userTotal += progress.completed ? 100 : 0;
-    }
+    userTotal += calculateHabitProgress(habit, progress);
   });
 
   return scheduledCount > 0 ? userTotal / scheduledCount : null;
@@ -86,19 +63,13 @@ export const calculateTodayScheduledProgress = (memberHabit, getDayName) => {
   if (!memberHabit?.habits?.length) return 0;
 
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = formatLocalDate(today);
   const dayName = getDayName(today);
   const scheduledHabits = memberHabit.habits.filter((habit) => isHabitScheduledForDay(habit, dayName));
 
   return scheduledHabits.reduce((acc, habit) => {
     const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
     const progressEntry = habitProgress.find((entry) => entry.date && entry.date.slice(0, 10) === todayStr);
-    if (!progressEntry) return acc;
-
-    if (habit.habitType === 'numeric') {
-      return acc + calculateNumericProgress(habit, progressEntry);
-    }
-
-    return acc + (progressEntry.completed ? 100 : 0);
+    return acc + calculateHabitProgress(habit, progressEntry);
   }, 0);
 };

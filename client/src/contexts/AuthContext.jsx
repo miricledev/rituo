@@ -1,7 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import chatService from '../services/chat';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+let sessionRefreshPromise = null;
+const isJwtAuthenticationFailure = (error) => (
+  error.response?.status === 401
+  && Boolean(error.response?.data?.msg)
+);
 
 // Configure axios defaults
 axios.defaults.baseURL = API_URL;
@@ -12,7 +18,7 @@ axios.defaults.withCredentials = true;
 axios.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
-    if (token) {
+    if (token && !config.skipAccessToken) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
@@ -25,9 +31,39 @@ axios.interceptors.request.use(
 // Add response interceptor to handle token expiration
 axios.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
+  async (error) => {
+    const originalRequest = error.config || {};
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (
+      isJwtAuthenticationFailure(error)
+      && refreshToken
+      && !originalRequest._sessionRetry
+      && !String(originalRequest.url || '').includes('/auth/refresh')
+    ) {
+      originalRequest._sessionRetry = true;
+      try {
+        if (!sessionRefreshPromise) {
+          sessionRefreshPromise = axios.post('/auth/refresh', {}, {
+            skipAccessToken: true,
+            headers: { Authorization: `Bearer ${refreshToken}` }
+          }).then((response) => response.data.access_token)
+            .finally(() => {
+              sessionRefreshPromise = null;
+            });
+        }
+        const accessToken = await sessionRefreshPromise;
+        localStorage.setItem('token', accessToken);
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+        return axios(originalRequest);
+      } catch (_refreshError) {
+        localStorage.removeItem('refreshToken');
+      }
+    }
+    if (isJwtAuthenticationFailure(error)) {
+      chatService.disconnect();
       localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -53,7 +89,7 @@ export function AuthProvider({ children }) {
     postLoginTimer.current = window.setTimeout(() => {
       setPostLoginStage('affirmations');
       postLoginTimer.current = null;
-    }, 3500);
+    }, 5000);
   };
 
   // Check if user is already logged in on mount
@@ -121,8 +157,9 @@ export function AuthProvider({ children }) {
         password
       });
       
-      const { access_token } = response.data;
+      const { access_token, refresh_token } = response.data;
       localStorage.setItem('token', access_token);
+      if (refresh_token) localStorage.setItem('refreshToken', refresh_token);
       
       setCurrentUser(response.data.user);
       beginPostLogin();
@@ -142,8 +179,9 @@ export function AuthProvider({ children }) {
         password
       });
       
-      const { access_token } = response.data;
+      const { access_token, refresh_token } = response.data;
       localStorage.setItem('token', access_token);
+      if (refresh_token) localStorage.setItem('refreshToken', refresh_token);
       
       setCurrentUser(response.data.user);
       beginPostLogin();
@@ -160,7 +198,9 @@ export function AuthProvider({ children }) {
       window.clearTimeout(postLoginTimer.current);
       postLoginTimer.current = null;
     }
+    chatService.disconnect();
     localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
     setPostLoginStage(null);
     setCurrentUser(null);
   };

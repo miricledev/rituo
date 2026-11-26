@@ -12,6 +12,9 @@ import LeaderboardPanel from './LeaderboardPanel';
 import ColorChartPanel from './ColorChartPanel';
 import HabitPresetModal from './HabitPresetModal';
 import SchoolAdminWorkspace from './SchoolAdminWorkspace';
+import StudentRewardsPage from './StudentRewardsPage';
+import StudentToolsHub from './student-tools/StudentToolsHub';
+import FootballClientManagement from './FootballClientManagement';
 
 function formatChannelActivityTime(timestamp) {
   if (!timestamp) return 'No activity yet';
@@ -40,6 +43,7 @@ function GroupDetailWorkspace(props) {
   const [showAttentionOnly, setShowAttentionOnly] = useState(false);
   const {
     activeTab,
+    setActiveTab,
     groupId,
     isLeader,
     isCoach,
@@ -83,6 +87,7 @@ function GroupDetailWorkspace(props) {
     hasHabitsAdded,
     memberHabits,
     lockedHabits,
+    isEditingHabits,
     expandAllMembersInModal,
     collapseAllMembersInModal,
     collapsedMembersInModal,
@@ -145,6 +150,11 @@ function GroupDetailWorkspace(props) {
     showDeleteGroupStep,
     handleDeleteGroup
   } = props;
+  const groupType = group?.groupType || 'school';
+  const isFootballClient = groupType === 'football' && !isLeader;
+  const canUseClientRewards = user?.accountRole === 'student' && (
+    (groupType === 'school' && !isLeader) || isFootballClient
+  );
   const schoolWideUnreadCount = chatChannel?.schoolWideUnreadCount || 0;
   const accessibleClasses = chatChannel?.accessibleClasses || [];
   const sortedAccessibleClasses = [...accessibleClasses].sort((left, right) => {
@@ -186,27 +196,27 @@ function GroupDetailWorkspace(props) {
       {activeTab === 'chat' && (
         <div className="space-y-4">
           {(group?.groupType || 'school') === 'school' && (
-            <section className="rounded-2xl border border-gray-200 bg-white/80 p-4 shadow-card backdrop-blur dark:border-secondary-700 dark:bg-secondary-800/80">
+            <section className="rounded-[2rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.045] sm:p-6">
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-primary-600 dark:text-primary-300">
+                    <p className="text-xs font-bold uppercase tracking-[0.3em] text-violet-600 dark:text-cyan-300">
                       Community channel
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-3">
-                      <h3 className="text-xl font-bold text-secondary-900 dark:text-white">
+                      <h3 className="text-2xl font-black tracking-tight text-slate-950 dark:text-white">
                         {selectedChannelLabel}
                       </h3>
-                      <span className="rounded-full bg-secondary-100 px-3 py-1 text-xs font-semibold text-secondary-700 dark:bg-secondary-700 dark:text-secondary-200">
+                      <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600 dark:border-white/10 dark:bg-white/[0.06] dark:text-slate-300">
                         {totalChannelUnreadCount > 0 ? `${totalChannelUnreadCount} unread across channels` : 'All channels caught up'}
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-400">
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
                       {selectedChatClassId
-                        ? 'Class-specific discussion and homework activity live together here.'
+                        ? 'Class-specific discussion and teaching activity live together here.'
                         : 'Whole-school conversation, announcements, and cross-school discussion. Staff-to-student messaging stays in the shared channel for school groups.'}
                     </p>
-                    <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50/80 px-3 py-3 dark:border-secondary-700 dark:bg-secondary-900/50">
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 dark:border-white/10 dark:bg-black/10">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">
                         Latest activity
                       </p>
@@ -223,7 +233,7 @@ function GroupDetailWorkspace(props) {
                     <button
                       type="button"
                       onClick={() => setSelectedChatClassId(null)}
-                      className="inline-flex items-center justify-center rounded-full border border-gray-200 px-3 py-2 text-sm font-semibold text-secondary-700 transition-colors hover:border-primary-300 hover:text-primary-700 dark:border-secondary-700 dark:text-secondary-200 dark:hover:border-primary-700 dark:hover:text-primary-300"
+                      className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white/70 px-3.5 py-2 text-sm font-bold text-violet-700 transition-colors hover:border-violet-300 dark:border-white/10 dark:bg-white/[0.05] dark:text-cyan-300 dark:hover:border-white/20"
                     >
                       Back to school-wide
                     </button>
@@ -240,7 +250,7 @@ function GroupDetailWorkspace(props) {
                       const nextValue = event.target.value;
                       setSelectedChatClassId(nextValue === 'school-wide' ? null : Number(nextValue));
                     }}
-                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm font-medium text-secondary-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-secondary-700 dark:bg-secondary-900 dark:text-white"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-900 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-500/10 dark:border-white/10 dark:bg-[#0b1325] dark:text-white"
                   >
                     <option value="school-wide">
                       School-wide{schoolWideUnreadCount > 0 ? ` (${schoolWideUnreadCount})` : ''}
@@ -264,7 +274,7 @@ function GroupDetailWorkspace(props) {
                         value={channelSearchQuery}
                         onChange={(event) => setChannelSearchQuery(event.target.value)}
                         placeholder="Search channels"
-                        className="rounded-full border border-gray-200 bg-white px-3 py-2 text-sm text-secondary-900 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-secondary-700 dark:bg-secondary-900 dark:text-white"
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-500/10 dark:border-white/10 dark:bg-[#0b1325] dark:text-white"
                       />
                       <button
                         type="button"
@@ -335,7 +345,7 @@ function GroupDetailWorkspace(props) {
                     </p>
                   )}
                   <div className="mt-3 grid grid-cols-1 gap-2 xl:grid-cols-3">
-                    <div className="rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-3 dark:border-secondary-700 dark:bg-secondary-900/40">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-white/10 dark:bg-black/10">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">
                         Needs attention
                       </p>
@@ -364,7 +374,7 @@ function GroupDetailWorkspace(props) {
                         <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">No class channels with unread activity.</p>
                       )}
                     </div>
-                    <div className="rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-3 dark:border-secondary-700 dark:bg-secondary-900/40">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-white/10 dark:bg-black/10">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">
                         Recent channels
                       </p>
@@ -393,7 +403,7 @@ function GroupDetailWorkspace(props) {
                         <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">No recent class activity yet.</p>
                       )}
                     </div>
-                    <div className="rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-3 dark:border-secondary-700 dark:bg-secondary-900/40">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-white/10 dark:bg-black/10">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">
                         School-wide latest
                       </p>
@@ -406,7 +416,7 @@ function GroupDetailWorkspace(props) {
                     </div>
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
-                    <div className="rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-3 dark:border-secondary-700 dark:bg-secondary-900/40">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-white/10 dark:bg-black/10">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">
                         Most active class
                       </p>
@@ -433,7 +443,7 @@ function GroupDetailWorkspace(props) {
                         <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">No class channels available.</p>
                       )}
                     </div>
-                    <div className="rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-3 dark:border-secondary-700 dark:bg-secondary-900/40">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-white/10 dark:bg-black/10">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">
                         Channel order
                       </p>
@@ -455,6 +465,7 @@ function GroupDetailWorkspace(props) {
             groupId={group.groupId || groupId}
             groupName={group.name}
             isSchoolGroup={(group?.groupType || 'school') === 'school'}
+            chatTitle={(group?.groupType || 'school') === 'football' ? 'Coach Chat' : undefined}
             selectedClassId={selectedChatClassId}
             onSelectClassId={setSelectedChatClassId}
             showChannelPicker={false}
@@ -484,6 +495,23 @@ function GroupDetailWorkspace(props) {
         <LeaderboardPanel leaderboardData={leaderboardData} isLeader={isLeader} />
       )}
 
+      {activeTab === 'rewards' && canUseClientRewards && (
+        <StudentRewardsPage
+          groupId={groupId}
+          studentId={props.mySchoolProfile?.student?.id ?? myMemberHabit?.member?.id ?? myMemberHabit?.member ?? user?.id}
+          refreshKey={myMemberHabit}
+          workspaceType={groupType}
+          onOpenFeature={(toolId) => {
+            sessionStorage.setItem('ip:selected-tool', toolId);
+            setActiveTab('tools');
+          }}
+        />
+      )}
+
+      {activeTab === 'tools' && canUseClientRewards && (
+        <StudentToolsHub groupId={groupId} workspaceType={groupType} onOpenShop={() => setActiveTab('rewards')} />
+      )}
+
       <CourseTabSection
         activeTab={activeTab}
         isLeader={isLeader}
@@ -507,31 +535,37 @@ function GroupDetailWorkspace(props) {
           group={group}
           user={user}
           renderColorChart={renderColorChart}
+          workspaceType={groupType}
         />
       )}
 
-      <SchoolImpactSection
-        activeTab={activeTab}
-        isLeader={isLeader}
-        isCoach={isCoach}
-        user={user}
-        group={group}
-        groupId={groupId}
-        schoolProfiles={schoolProfiles}
-        leagueTable={leagueTable}
-        schoolProfilesLoading={schoolProfilesLoading}
-        fetchSchoolProfiles={fetchSchoolProfiles}
-        fetchGroupDetails={fetchGroupDetails}
-        renderLazyPanel={renderLazyPanel}
-        SchoolProfilePanel={SchoolProfilePanel}
-        forcedSchoolSection={forcedSchoolSection}
-        onSchoolSectionChange={onSchoolSectionChange}
-      />
+      {groupType === 'school' ? (
+        <SchoolImpactSection
+          activeTab={activeTab}
+          isLeader={isLeader}
+          isCoach={isCoach}
+          user={user}
+          group={group}
+          groupId={groupId}
+          schoolProfiles={schoolProfiles}
+          leagueTable={leagueTable}
+          schoolProfilesLoading={schoolProfilesLoading}
+          fetchSchoolProfiles={fetchSchoolProfiles}
+          fetchGroupDetails={fetchGroupDetails}
+          renderLazyPanel={renderLazyPanel}
+          SchoolProfilePanel={SchoolProfilePanel}
+          forcedSchoolSection={forcedSchoolSection}
+          onSchoolSectionChange={onSchoolSectionChange}
+        />
+      ) : null}
 
       <HabitCalendarSection
         activeTab={activeTab}
         isLeader={isLeader}
+        groupId={groupId}
         group={group}
+        user={user}
+        mySchoolProfile={props.mySchoolProfile}
         myMemberHabit={myMemberHabit}
         renderLazyPanel={renderLazyPanel}
         HabitCalendar={HabitCalendar}
@@ -553,11 +587,28 @@ function GroupDetailWorkspace(props) {
         />
       )}
 
+      {activeTab === 'admin' && isLeader && groupType === 'football' ? (
+        <FootballClientManagement
+          group={group}
+          memberToKick={props.memberToKick}
+          setMemberToKick={props.setMemberToKick}
+          showKickMemberConfirm={props.showKickMemberConfirm}
+          setShowKickMemberConfirm={props.setShowKickMemberConfirm}
+          onKickMember={props.handleKickMember}
+          showPageToast={showPageToast}
+          deleteGroupConfirmText={deleteGroupConfirmText}
+          setDeleteGroupConfirmText={setDeleteGroupConfirmText}
+          setShowDeleteGroupStep={setShowDeleteGroupStep}
+          showDeleteGroupStep={showDeleteGroupStep}
+          onDeleteGroup={handleDeleteGroup}
+        />
+      ) : null}
+
       <ChallengeEditorModal
         show={showCreateChallengeModal}
         editChallengeHabitsMode={editChallengeHabitsMode}
         hasHabitsAdded={hasHabitsAdded}
-        isEditingHabits={editingHabits}
+        isEditingHabits={isEditingHabits}
         memberHabits={memberHabits}
         lockedHabits={lockedHabits}
         expandAllMembersInModal={expandAllMembersInModal}
@@ -582,6 +633,7 @@ function GroupDetailWorkspace(props) {
         challengeGetMissingMembers={challengeGetMissingMembers}
         handleCancel={handleCancel}
         lockHabitsAndShowOverview={lockHabitsAndShowOverview}
+        fetchSchoolProfiles={fetchSchoolProfiles}
       />
 
       <GroupDetailOverlays
@@ -608,7 +660,7 @@ function GroupDetailWorkspace(props) {
       />
 
       {activeTab === 'archives' && (
-        <ArchivePanel archivesLoading={archivesLoading} archives={archives} />
+        <ArchivePanel archivesLoading={archivesLoading} archives={archives} workspaceType={groupType} />
       )}
 
       <HabitPresetsPanel

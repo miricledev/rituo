@@ -5,51 +5,109 @@ class ChatService {
     this.socket = null;
     this.isConnected = false;
     this.messageHandlers = new Map();
-    // Get API base URL from environment
+    this.connectionPromise = null;
+    this.connectionToken = null;
+    this.activeGroupChats = new Map();
+    this.activeDirectMessages = new Map();
     this.apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
   }
 
-  // Connect to WebSocket server
   connect() {
-    if (this.socket && this.isConnected) return;
+    const token = localStorage.getItem('token');
+    if (!token) {
+      this.triggerHandler('connection_state', { connected: false, status: 'unauthorized' });
+      return Promise.resolve(false);
+    }
 
-    // Get WebSocket URL from environment or fallback to localhost
+    if (this.socket && this.connectionToken !== token) {
+      this.disconnect();
+    }
+
     const wsUrl = import.meta.env.VITE_WS_URL || 
                   (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000');
 
-    this.socket = io(wsUrl, {
-      transports: ['websocket', 'polling'],
-      withCredentials: true
-    });
+    if (!this.socket) {
+      this.connectionToken = token;
+      this.socket = io(wsUrl, {
+        transports: ['websocket', 'polling'],
+        withCredentials: true,
+        autoConnect: false,
+        auth: { token },
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 700,
+        reconnectionDelayMax: 5000,
+        timeout: 10000
+      });
+      this.setupMessageHandlers();
+    } else {
+      this.socket.auth = { token };
+    }
 
-    this.socket.on('connect', () => {
+    if (this.socket.connected) {
       this.isConnected = true;
+      return Promise.resolve(true);
+    }
+
+    if (this.connectionPromise) return this.connectionPromise;
+
+    this.triggerHandler('connection_state', { connected: false, status: 'connecting' });
+    this.connectionPromise = new Promise((resolve) => {
+      let settled = false;
+      const finish = (connected) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        this.socket?.off('connect', handleConnect);
+        this.socket?.off('connect_error', handleConnectError);
+        this.connectionPromise = null;
+        resolve(connected);
+      };
+      const handleConnect = () => finish(true);
+      const handleConnectError = () => finish(false);
+      const timeoutId = setTimeout(() => finish(false), 12000);
+      this.socket.once('connect', handleConnect);
+      this.socket.once('connect_error', handleConnectError);
+      this.socket.connect();
     });
 
-    this.socket.on('disconnect', () => {
-      this.isConnected = false;
-    });
-
-    this.socket.on('error', (error) => {
-      console.error('Chat server error:', error);
-    });
-
-    // Set up message handlers
-    this.setupMessageHandlers();
+    return this.connectionPromise;
   }
 
-  // Disconnect from WebSocket server
   disconnect() {
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
       this.isConnected = false;
+      this.connectionPromise = null;
+      this.connectionToken = null;
+      this.activeGroupChats.clear();
+      this.activeDirectMessages.clear();
     }
   }
 
-  // Set up event handlers for incoming messages
   setupMessageHandlers() {
-    // Group chat events
+    this.socket.on('connect', () => {
+      this.isConnected = true;
+      this.triggerHandler('connection_state', { connected: true, status: 'connected' });
+      this.activeGroupChats.forEach((payload) => this.socket.emit('join_group_chat', payload));
+      this.activeDirectMessages.forEach((payload) => this.socket.emit('join_dm', payload));
+    });
+
+    this.socket.on('disconnect', (reason) => {
+      this.isConnected = false;
+      this.triggerHandler('connection_state', { connected: false, status: 'reconnecting', reason });
+    });
+
+    this.socket.on('connect_error', (error) => {
+      this.isConnected = false;
+      this.triggerHandler('connection_state', {
+        connected: false,
+        status: 'offline',
+        message: error?.message || 'Chat connection failed'
+      });
+    });
+
     this.socket.on('joined_group_chat', (data) => {
       this.triggerHandler('joined_group_chat', data);
     });
@@ -62,7 +120,18 @@ class ChatService {
       this.triggerHandler('receive_group_message', message);
     });
 
-    // DM events
+    this.socket.on('group_presence', (data) => {
+      this.triggerHandler('group_presence', data);
+    });
+
+    this.socket.on('group_typing', (data) => {
+      this.triggerHandler('group_typing', data);
+    });
+
+    this.socket.on('group_messages_read', (data) => {
+      this.triggerHandler('group_messages_read', data);
+    });
+
     this.socket.on('joined_dm', (data) => {
       this.triggerHandler('joined_dm', data);
     });
@@ -75,63 +144,97 @@ class ChatService {
       this.triggerHandler('receive_dm', message);
     });
 
-    // Error handling
     this.socket.on('error', (error) => {
       console.error('Chat error:', error);
       this.triggerHandler('error', error);
     });
   }
 
-  // Join group chat
   joinGroupChat(groupId, userId, classId = null) {
-    if (!this.socket || !this.isConnected) {
-      console.error('Socket not connected');
-      return;
+    const key = this.getGroupChatKey(groupId, classId);
+    const payload = { group_id: groupId, class_id: classId };
+    this.activeGroupChats.set(key, payload);
+    if (this.socket?.connected) {
+      this.socket.emit('join_group_chat', payload);
+    } else {
+      this.connect();
     }
-    this.socket.emit('join_group_chat', { group_id: groupId, user_id: userId, class_id: classId });
   }
 
-  // Leave group chat
   leaveGroupChat(groupId, classId = null) {
-    if (!this.socket || !this.isConnected) return;
-    this.socket.emit('leave_group_chat', { group_id: groupId, class_id: classId });
+    this.activeGroupChats.delete(this.getGroupChatKey(groupId, classId));
+    if (this.socket?.connected) {
+      this.socket.emit('leave_group_chat', { group_id: groupId, class_id: classId });
+    }
   }
 
-  // Send group chat message
-  sendGroupMessage(groupId, userId, content, classId = null) {
-    if (!this.socket || !this.isConnected) {
-      console.error('Socket not connected');
-      return;
+  async sendGroupMessage(groupId, userId, content, classId = null) {
+    const connected = this.socket?.connected || await this.connect();
+    if (!connected || !this.socket) {
+      return { ok: false, error: 'Chat is offline. Reconnecting now.' };
     }
-    this.socket.emit('send_group_message', {
-      group_id: groupId,
-      user_id: userId,
-      content: content,
-      class_id: classId
+
+    return new Promise((resolve) => {
+      this.socket.timeout(10000).emit('send_group_message', {
+        group_id: groupId,
+        content,
+        class_id: classId
+      }, (error, response) => {
+        if (error) {
+          resolve({ ok: false, error: 'Message timed out. Please try again.' });
+          return;
+        }
+        resolve(response || { ok: true });
+      });
     });
   }
 
-  // Join DM
+  setGroupTyping(groupId, classId = null, isTyping = false) {
+    if (!this.socket?.connected) return;
+    this.socket.emit('group_typing', {
+      group_id: groupId,
+      class_id: classId,
+      is_typing: Boolean(isTyping)
+    });
+  }
+
+  async markGroupMessagesRead(groupId, classId = null, messageIds = []) {
+    const connected = this.socket?.connected || await this.connect();
+    if (!connected || !this.socket) return { ok: false };
+
+    return new Promise((resolve) => {
+      this.socket.timeout(8000).emit('mark_group_messages_read', {
+        group_id: groupId,
+        class_id: classId,
+        message_ids: messageIds
+      }, (error, response) => resolve(error ? { ok: false } : (response || { ok: true })));
+    });
+  }
+
   joinDM(groupId, userId, targetUserId) {
-    if (!this.socket || !this.isConnected) {
-      console.error('Socket not connected');
-      return;
-    }
-    this.socket.emit('join_dm', {
+    const key = `${groupId}:${targetUserId}`;
+    const payload = {
       group_id: groupId,
       user_id: userId,
       target_user_id: targetUserId
-    });
+    };
+    this.activeDirectMessages.set(key, payload);
+    if (this.socket?.connected) {
+      this.socket.emit('join_dm', payload);
+    } else {
+      this.connect();
+    }
   }
 
-  // Leave DM
   leaveDM(groupId, userId, targetUserId) {
-    if (!this.socket || !this.isConnected) return;
-    this.socket.emit('leave_dm', {
-      group_id: groupId,
-      user_id: userId,
-      target_user_id: targetUserId
-    });
+    this.activeDirectMessages.delete(`${groupId}:${targetUserId}`);
+    if (this.socket?.connected) {
+      this.socket.emit('leave_dm', {
+        group_id: groupId,
+        user_id: userId,
+        target_user_id: targetUserId
+      });
+    }
   }
 
   // Send DM
@@ -148,7 +251,17 @@ class ChatService {
     });
   }
 
-  // Register event handlers
+  getGroupChatKey(groupId, classId = null) {
+    return `${groupId}:${classId ?? 'group'}`;
+  }
+
+  getConnectionState() {
+    return {
+      connected: Boolean(this.socket?.connected),
+      status: this.socket?.connected ? 'connected' : (this.socket ? 'connecting' : 'offline')
+    };
+  }
+
   on(event, handler) {
     if (!this.messageHandlers.has(event)) {
       this.messageHandlers.set(event, []);
@@ -156,7 +269,6 @@ class ChatService {
     this.messageHandlers.get(event).push(handler);
   }
 
-  // Remove event handlers
   off(event, handler) {
     if (this.messageHandlers.has(event)) {
       const handlers = this.messageHandlers.get(event);
@@ -167,7 +279,6 @@ class ChatService {
     }
   }
 
-  // Trigger event handlers
   triggerHandler(event, data) {
     if (this.messageHandlers.has(event)) {
       this.messageHandlers.get(event).forEach(handler => {

@@ -1,27 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
-import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
-} from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { FiArchive, FiCalendar, FiCheckCircle, FiInfo, FiTarget, FiZap } from 'react-icons/fi';
 
-const COLORS = ['#0ea5e9', '#22c55e', '#f59e42', '#ef4444', '#a78bfa', '#f472b6'];
+const percent = (value) => `${Math.round(Number(value || 0))}%`;
 
 const Archives = () => {
   const [archives, setArchives] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchArchives = async () => {
       try {
         setLoading(true);
-        const token = localStorage.getItem('token');
-        const res = await axios.get(`${import.meta.env.VITE_API_URL}/analytics/archives`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setArchives(res.data.archives || []);
-      } catch (err) {
+        setError('');
+        const response = await axios.get('/analytics/archives');
+        setArchives(response.data.archives || []);
+      } catch (requestError) {
         setArchives([]);
+        setError(requestError.response?.data?.error || 'Legacy archives could not be loaded.');
       } finally {
         setLoading(false);
       }
@@ -30,140 +29,67 @@ const Archives = () => {
   }, []);
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center min-h-[40vh]">
-        <div className="w-10 h-10 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  if (!archives.length) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] bg-white dark:bg-secondary-800 rounded-lg shadow-card p-8 mt-8">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-16 h-16 mb-4 text-primary-400">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m6 4.5A9 9 0 11.75 12 9 9 0 0121 18.5z" />
-        </svg>
-        <h2 className="text-2xl font-bold text-secondary-900 dark:text-white mb-2">No Completed Challenges Yet</h2>
-        <p className="text-secondary-600 dark:text-secondary-300 mb-4">Complete a 30-day challenge to see your achievements and analytics here!</p>
-        <Link to="/dashboard" className="btn btn-primary px-6 py-2">Go to Dashboard</Link>
-      </div>
-    );
+    return <div className="min-h-[70vh] bg-[#070b18] px-4 py-16 text-center text-white"><div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-cyan-300 border-t-transparent" /><p className="mt-4 text-sm font-bold text-slate-500">Loading archived challenges...</p></div>;
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 min-h-screen bg-primary-50 dark:bg-secondary-900 transition-colors duration-200">
-      <h1 className="text-3xl font-bold text-secondary-900 dark:text-white mb-8">Archives: Completed 30-Day Challenges</h1>
-      <div className="space-y-12">
-        {archives.map((archive, idx) => (
-          <div key={archive.cycle_id || idx} className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-6">
-            <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-2xl font-semibold text-primary-600 dark:text-primary-400">{archive.title || `Challenge #${idx + 1}`}</h2>
-                <p className="text-secondary-600 dark:text-secondary-300 mt-1">{archive.cycle_start_date} - {archive.cycle_end_date}</p>
-              </div>
-              <div className="mt-4 md:mt-0">
-                <span className="inline-block bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 px-3 py-1 rounded-full text-xs font-semibold">Completed</span>
-              </div>
-            </div>
-            {/* Overview Stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-              <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4 text-center">
-                <div className="text-2xl font-bold text-primary-600 dark:text-primary-400">{archive.days_completed}</div>
-                <div className="text-sm text-secondary-600 dark:text-secondary-300">Days Completed</div>
-              </div>
-              <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4 text-center">
-                <div className="text-2xl font-bold text-primary-600 dark:text-primary-400">{archive.completion_rate.toFixed(1)}%</div>
-                <div className="text-sm text-secondary-600 dark:text-secondary-300">Completion Rate</div>
-              </div>
-              <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4 text-center">
-                <div className="text-2xl font-bold text-primary-600 dark:text-primary-400">{archive.current_streak}</div>
-                <div className="text-sm text-secondary-600 dark:text-secondary-300">Longest Streak</div>
-              </div>
-              <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4 text-center">
-                <div className="text-2xl font-bold text-primary-600 dark:text-primary-400">{archive.tasks.length}</div>
-                <div className="text-sm text-secondary-600 dark:text-secondary-300">Tasks</div>
-              </div>
-            </div>
-            {/* Charts Section */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-              {/* Bar Chart: Task Completion */}
-              <div className="bg-white dark:bg-secondary-900 rounded-lg p-4 shadow">
-                <h3 className="text-lg font-semibold mb-2 text-secondary-900 dark:text-white">Task Completion</h3>
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={archive.tasks}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="title" tick={{ fontSize: 12 }} />
-                    <YAxis domain={[0, 100]} tickFormatter={tick => `${tick.toFixed(1)}%`} />
-                    <Tooltip formatter={v => `${Number(v).toFixed(1)}%`} />
-                    <Bar dataKey="completion_rate" fill="#0ea5e9" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              {/* Pie Chart: Task Distribution */}
-              <div className="bg-white dark:bg-secondary-900 rounded-lg p-4 shadow">
-                <h3 className="text-lg font-semibold mb-2 text-secondary-900 dark:text-white">Task Distribution</h3>
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie data={archive.tasks} dataKey="completion_rate" nameKey="title" cx="50%" cy="50%" outerRadius={70} label={({ completion_rate }) => `${Number(completion_rate).toFixed(1)}%`}>
-                      {archive.tasks.map((entry, i) => (
-                        <Cell key={`cell-${i}`} fill={COLORS[i % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={v => `${Number(v).toFixed(1)}%`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              {/* Line Chart: Daily Completion */}
-              <div className="bg-white dark:bg-secondary-900 rounded-lg p-4 shadow md:col-span-2">
-                <h3 className="text-lg font-semibold mb-2 text-secondary-900 dark:text-white">Daily Completion History</h3>
-                <ResponsiveContainer width="100%" height={220}>
-                  <LineChart data={archive.daily_data}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                    <YAxis domain={[0, 100]} tickFormatter={tick => `${tick.toFixed(1)}%`} />
-                    <Tooltip formatter={v => `${Number(v).toFixed(1)}%`} />
-                    <Line 
-                      type="monotone" 
-                      dataKey="is_complete" 
-                      stroke="#22c55e" 
-                      strokeWidth={2} 
-                      dot={{ r: 4 }}
-                      name="Completion Rate"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              {/* Radar Chart: Task Strengths */}
-              <div className="bg-white dark:bg-secondary-900 rounded-lg p-4 shadow md:col-span-2">
-                <h3 className="text-lg font-semibold mb-2 text-secondary-900 dark:text-white">Task Strengths</h3>
-                <ResponsiveContainer width="100%" height={220}>
-                  <RadarChart data={archive.tasks}>
-                    <PolarGrid />
-                    <PolarAngleAxis dataKey="title" />
-                    <PolarRadiusAxis angle={30} domain={[0, 100]} tickFormatter={tick => `${tick.toFixed(1)}%`} />
-                    <Radar name="Completion Rate" dataKey="completion_rate" stroke="#a78bfa" fill="#a78bfa" fillOpacity={0.6} />
-                    <Legend />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-            {/* Task List */}
-            <div className="mt-6">
-              <h4 className="text-lg font-semibold mb-2 text-secondary-900 dark:text-white">Tasks</h4>
-              <ul className="divide-y divide-gray-200 dark:divide-secondary-700">
-                {archive.tasks.map((task, i) => (
-                  <li key={i} className="py-2 flex items-center justify-between">
-                    <span className="font-medium text-secondary-800 dark:text-white">{task.title}</span>
-                    <span className="text-sm px-2 py-1 rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">{Number(task.completion_rate).toFixed(1)}%</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+    <main className="relative min-h-screen overflow-hidden bg-[#070b18] text-white">
+      <div className="pointer-events-none absolute inset-0"><div className="absolute -left-20 top-16 h-80 w-80 rounded-full bg-violet-600/20 blur-3xl" /><div className="absolute right-0 top-0 h-96 w-96 rounded-full bg-cyan-500/10 blur-3xl" /></div>
+      <div className="relative mx-auto max-w-7xl px-3 py-5 sm:px-6 sm:py-9 lg:px-8">
+        <header className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.05] p-5 shadow-2xl backdrop-blur-xl sm:p-8">
+          <div className="flex items-start gap-4">
+            <div className="rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 p-3 text-xl"><FiArchive /></div>
+            <div><p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300">Legacy analytics</p><h1 className="mt-1 text-3xl font-black tracking-tight sm:text-4xl">Personal challenge archives</h1><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400">Historical personal tasks use their original binary complete/not-complete model. School challenge analytics use the newer scheduled, recurring and proportional model inside each school.</p></div>
           </div>
-        ))}
+        </header>
+
+        {error ? <div className="mt-5 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-sm font-bold text-rose-100">{error}</div> : null}
+
+        <div className="mt-5 space-y-5">
+          {archives.length ? archives.map((archive, index) => (
+            <article key={archive.cycle_id || index} className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.045] shadow-2xl shadow-black/15">
+              <div className="p-4 sm:p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div><span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.15em] text-violet-200">Completed legacy cycle</span><h2 className="mt-3 text-xl font-black sm:text-2xl">{archive.title || `Challenge ${index + 1}`}</h2><p className="mt-1 text-xs text-slate-500">{archive.cycle_start_date} - {archive.cycle_end_date}</p></div>
+                  <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-5 py-4"><p className="text-3xl font-black text-cyan-200">{percent(archive.completion_rate)}</p><p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em] text-cyan-100/60">Binary completion rate</p></div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                  <Stat icon={FiCalendar} label="Perfect days" value={archive.days_completed || 0} tone="text-emerald-200" />
+                  <Stat icon={FiTarget} label="Average completion" value={percent(archive.completion_rate)} tone="text-cyan-200" />
+                  <Stat icon={FiZap} label="Longest perfect streak" value={archive.current_streak || 0} tone="text-amber-200" />
+                  <Stat icon={FiCheckCircle} label="Legacy tasks" value={archive.tasks?.length || 0} tone="text-violet-200" />
+                </div>
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-2">
+                  <ChartCard title="Task completion" detail="Each bar is an independent task percentage.">
+                    <BarChart data={archive.tasks || []} margin={{ top: 5, right: 10, left: -18, bottom: 12 }}><CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.3} /><XAxis dataKey="title" tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} interval={0} angle={-12} textAnchor="end" height={45} /><YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => [percent(value), 'Completion']} contentStyle={tooltipStyle} /><Bar dataKey="completion_rate" fill="#8b5cf6" radius={[7, 7, 0, 0]} /></BarChart>
+                  </ChartCard>
+                  <ChartCard title="Daily completion" detail="Percentage of legacy tasks marked complete on each day.">
+                    <AreaChart data={archive.daily_data || []} margin={{ top: 5, right: 10, left: -18, bottom: 0 }}><defs><linearGradient id={`legacyArchive-${index}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22d3ee" stopOpacity={0.35} /><stop offset="100%" stopColor="#22d3ee" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.3} vertical={false} /><XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} minTickGap={25} /><YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => [percent(value), 'Completion']} contentStyle={tooltipStyle} /><Area type="monotone" dataKey="is_complete" stroke="#22d3ee" strokeWidth={3} fill={`url(#legacyArchive-${index})`} /></AreaChart>
+                  </ChartCard>
+                </div>
+
+                <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {(archive.tasks || []).map((task, taskIndex) => <div key={`${task.title}-${taskIndex}`} className="rounded-xl border border-white/10 bg-black/15 p-3"><div className="flex items-center justify-between gap-3"><p className="truncate text-sm font-black">{task.title}</p><p className="font-black text-cyan-200">{percent(task.completion_rate)}</p></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400" style={{ width: percent(task.completion_rate) }} /></div></div>)}
+                </div>
+              </div>
+            </article>
+          )) : (
+            <div className="rounded-[2rem] border border-dashed border-white/10 bg-white/[0.035] p-12 text-center"><FiArchive className="mx-auto text-4xl text-slate-600" /><h2 className="mt-4 text-xl font-black">No completed personal challenges</h2><p className="mt-2 text-sm text-slate-500">Completed legacy challenge cycles appear here.</p><Link to="/dashboard" className="mt-6 inline-flex rounded-xl bg-white px-4 py-2.5 text-sm font-black text-slate-950">Return to dashboard</Link></div>
+          )}
+        </div>
+
+        <div className="mt-5 flex items-start gap-3 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.07] p-4 text-xs leading-5 text-slate-400"><FiInfo className="mt-0.5 shrink-0 text-cyan-200" /><p>This page intentionally preserves the original personal task calculations. For current school reporting, open a school student profile to see schedule-aware completion units, recurring occurrence coverage, attack/defence analysis and consistency detail.</p></div>
       </div>
-    </div>
+    </main>
   );
 };
 
-export default Archives; 
+const tooltipStyle = { background: '#0f172a', border: '1px solid rgba(255,255,255,.1)', borderRadius: 12 };
+
+const Stat = ({ icon: Icon, label, value, tone }) => <div className="rounded-2xl border border-white/10 bg-black/15 p-3.5"><Icon className={tone} /><p className={`mt-3 text-xl font-black ${tone}`}>{value}</p><p className="mt-1 text-[9px] font-black uppercase tracking-[0.13em] text-slate-600">{label}</p></div>;
+
+const ChartCard = ({ title, detail, children }) => <div className="rounded-2xl border border-white/10 bg-black/15 p-3 sm:p-5"><h3 className="text-sm font-black">{title}</h3><p className="mt-1 text-xs text-slate-500">{detail}</p><div className="mt-4 h-60"><ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer></div></div>;
+
+export default Archives;

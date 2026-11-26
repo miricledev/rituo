@@ -466,6 +466,12 @@ class GroupClassChatTests(unittest.TestCase):
             ), patch.object(
                 groups_routes, "can_view_school_operations", return_value=True
             ), patch.object(
+                groups_routes, "get_accessible_class_ids", return_value={101}
+            ), patch.object(
+                groups_routes,
+                "SchoolClass",
+                SimpleNamespace(query=_FakeAssignmentQuery(SimpleNamespace(id=101))),
+            ), patch.object(
                 groups_routes, "resolve_homework_student_ids", return_value=[31]
             ), patch.object(
                 groups_routes, "SchoolHomeworkAssignment", _FakeHomeworkAssignment

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
 from db.models import db, User
 import re
 import os
@@ -59,10 +59,12 @@ def register():
         
         # Generate access token
         access_token = create_access_token(identity=str(new_user.id))
+        refresh_token = create_refresh_token(identity=str(new_user.id))
         return jsonify({
             'message': 'User registered successfully',
             'user': new_user.to_dict(),
-            'access_token': access_token
+            'access_token': access_token,
+            'refresh_token': refresh_token
         }), 201
     except Exception as e:
         db.session.rollback()
@@ -95,11 +97,22 @@ def login():
     
     # Generate access token
     access_token = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
     return jsonify({
         'message': 'Login successful',
         'user': user.to_dict(),
-        'access_token': access_token
+        'access_token': access_token,
+        'refresh_token': refresh_token
     }), 200
+
+
+@auth_bp.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh_session():
+    user = User.query.get(int(get_jwt_identity()))
+    if not user or not user.is_active:
+        return jsonify({'message': 'Account is unavailable'}), 401
+    return jsonify({'access_token': create_access_token(identity=str(user.id))}), 200
 
 
 @auth_bp.route('/user', methods=['GET'])

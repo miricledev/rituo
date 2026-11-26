@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, get_jwt, verify_jwt_in_request
+from flask_jwt_extended import JWTManager, decode_token, get_jwt, verify_jwt_in_request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import timedelta, datetime, timezone
 import os
@@ -9,6 +9,7 @@ import threading
 import click
 from dotenv import load_dotenv
 import logging
+import json
 from logging.handlers import RotatingFileHandler
 from flask_migrate import Migrate
 
@@ -22,6 +23,7 @@ from routes.groups import (
     groups_bp,
     get_chat_channel_context,
     mark_messages_read_for_user,
+    school_group_dms_allowed,
 )
 
 # Import utils
@@ -67,6 +69,7 @@ app.logger.info('Rituo startup')
 # Configure app
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_HEADER_NAME"] = "Authorization"
 app.config["JWT_HEADER_TYPE"] = "Bearer"
@@ -229,13 +232,14 @@ def unauthorized_callback(error):
     }), 401
 
 # Create database tables if they don't exist
-with app.app_context():
-    try:
-        db.create_all()
-        app.logger.info('Database tables created successfully')
-    except Exception as e:
-        app.logger.error('Error creating database tables: %s', str(e))
-        raise
+if os.getenv('SKIP_DB_CREATE_ALL') != '1':
+    with app.app_context():
+        try:
+            db.create_all()
+            app.logger.info('Database tables created successfully')
+        except Exception as e:
+            app.logger.error('Error creating database tables: %s', str(e))
+            raise
 
 # Register blueprints without trailing slashes
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -245,57 +249,156 @@ app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
 app.register_blueprint(payments_bp, url_prefix='/api/payments')
 app.register_blueprint(groups_bp, url_prefix='/api/groups')
 
-# WebSocket event handlers
+chat_socket_users = {}
+chat_socket_rooms = {}
+chat_room_members = {}
+chat_presence_lock = threading.Lock()
+
+
+def get_socket_user():
+    socket_user = chat_socket_users.get(request.sid)
+    if not socket_user:
+        return None
+    return User.query.get(socket_user['id'])
+
+
+def get_chat_room_name(group, class_id=None):
+    return (
+        f'class_chat_{group.group_id}_{class_id}'
+        if class_id is not None
+        else f'group_chat_{group.group_id}'
+    )
+
+
+def get_room_presence(room):
+    with chat_presence_lock:
+        members = chat_room_members.get(room, {})
+        users = [
+            {
+                'userId': member['userId'],
+                'username': member['username'],
+                'connectionCount': len(member['sids'])
+            }
+            for member in members.values()
+        ]
+    users.sort(key=lambda item: item['username'].lower())
+    return {'room': room, 'users': users, 'onlineCount': len(users)}
+
+
+def add_socket_to_chat_room(room, user):
+    with chat_presence_lock:
+        chat_socket_rooms.setdefault(request.sid, set()).add(room)
+        room_members = chat_room_members.setdefault(room, {})
+        member = room_members.setdefault(user.id, {
+            'userId': user.id,
+            'username': user.username,
+            'sids': set()
+        })
+        member['username'] = user.username
+        member['sids'].add(request.sid)
+
+
+def remove_socket_from_chat_rooms(socket_id, target_room=None):
+    affected_rooms = []
+    with chat_presence_lock:
+        rooms = chat_socket_rooms.get(socket_id, set())
+        rooms_to_remove = {target_room} if target_room in rooms else (set(rooms) if target_room is None else set())
+        for room in rooms_to_remove:
+            members = chat_room_members.get(room, {})
+            for user_id, member in list(members.items()):
+                member['sids'].discard(socket_id)
+                if not member['sids']:
+                    members.pop(user_id, None)
+            if not members:
+                chat_room_members.pop(room, None)
+            affected_rooms.append(room)
+            rooms.discard(room)
+        if not rooms:
+            chat_socket_rooms.pop(socket_id, None)
+    return affected_rooms
+
+
+def broadcast_room_presence(room):
+    socketio.emit('group_presence', get_room_presence(room), room=room)
+
+
 @socketio.on('connect')
-def handle_connect():
-    app.logger.info('Client connected: %s', request.sid)
+def handle_connect(auth):
+    try:
+        token = (auth or {}).get('token', '').strip()
+        if token.lower().startswith('bearer '):
+            token = token[7:].strip()
+        identity = decode_token(token).get('sub') if token else None
+        user = User.query.get(int(identity)) if identity is not None else None
+        if not user or not getattr(user, 'is_active', True):
+            return False
+        chat_socket_users[request.sid] = {'id': user.id, 'username': user.username}
+        app.logger.info('Authenticated chat client connected: %s (user %s)', request.sid, user.id)
+        return True
+    except Exception as exc:
+        app.logger.warning('Rejected chat connection %s: %s', request.sid, str(exc))
+        return False
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    affected_rooms = remove_socket_from_chat_rooms(request.sid)
+    chat_socket_users.pop(request.sid, None)
+    for room in affected_rooms:
+        broadcast_room_presence(room)
     app.logger.info('Client disconnected: %s', request.sid)
 
 @socketio.on('join_group_chat')
 def handle_join_group_chat(data):
     try:
         group_id = data.get('group_id')
-        user_id = data.get('user_id')
         class_id = data.get('class_id')
+        user = get_socket_user()
+        if not user:
+            emit('error', {'message': 'Chat session is not authenticated'})
+            return {'ok': False, 'error': 'Chat session is not authenticated'}
         
         group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
         if not group:
             emit('error', {'message': 'Group not found'})
-            return
+            return {'ok': False, 'error': 'Group not found'}
 
-        context, error_response, _ = get_chat_channel_context(group, int(user_id), class_id)
+        context, error_response, _ = get_chat_channel_context(group, user.id, class_id)
         if error_response:
             payload = error_response.get_json(silent=True) or {}
             emit('error', {'message': payload.get('error', 'Not authorized to join group chat')})
-            return
+            return {'ok': False, 'error': payload.get('error', 'Not authorized to join group chat')}
 
-        room = (
-            f'class_chat_{group.group_id}_{context["class_id"]}'
-            if context['class_id'] is not None
-            else f'group_chat_{group.group_id}'
-        )
+        room = get_chat_room_name(group, context['class_id'])
         join_room(room)
+        add_socket_to_chat_room(room, user)
         emit('joined_group_chat', {
             'group_id': group.group_id,
             'room': room,
             'channel': context['channel']
         })
-        app.logger.info('User %s joined group chat %s (room: %s)', user_id, group.group_id, room)
+        broadcast_room_presence(room)
+        app.logger.info('User %s joined group chat %s (room: %s)', user.id, group.group_id, room)
 
         group_messages = Message.query.filter_by(
             group_id=group.id,
             recipient_id=None,
             class_id=context['class_id']
         ).all()
-        mark_messages_read_for_user(group_messages, int(user_id))
+        updated = mark_messages_read_for_user(group_messages, user.id)
         db.session.commit()
+        if updated:
+            emit('group_messages_read', {
+                'room': room,
+                'userId': user.id,
+                'username': user.username,
+                'messageIds': [message.id for message in group_messages]
+            }, room=room)
+        return {'ok': True, 'room': room}
         
     except Exception as e:
         app.logger.error('Error joining group chat: %s', str(e))
         emit('error', {'message': 'Failed to join group chat'})
+        return {'ok': False, 'error': 'Failed to join group chat'}
 
 @socketio.on('leave_group_chat')
 def handle_leave_group_chat(data):
@@ -304,7 +407,9 @@ def handle_leave_group_chat(data):
         class_id = data.get('class_id')
         room = f'class_chat_{group_id}_{class_id}' if class_id not in (None, '', 'null', 'undefined') else f'group_chat_{group_id}'
         leave_room(room)
+        remove_socket_from_chat_rooms(request.sid, room)
         emit('left_group_chat', {'group_id': group_id, 'class_id': class_id})
+        broadcast_room_presence(room)
         app.logger.info('User left group chat %s', group_id)
         
     except Exception as e:
@@ -314,89 +419,167 @@ def handle_leave_group_chat(data):
 def handle_send_group_message(data):
     try:
         group_id = data.get('group_id')
-        user_id = data.get('user_id')
         class_id = data.get('class_id')
         content = data.get('content', '').strip()
+        user = get_socket_user()
+
+        if not user:
+            emit('error', {'message': 'Chat session is not authenticated'})
+            return {'ok': False, 'error': 'Chat session is not authenticated'}
         
         if not content:
             emit('error', {'message': 'Message content required'})
-            return
+            return {'ok': False, 'error': 'Message content required'}
+        if len(content) > 2000:
+            emit('error', {'message': 'Messages can be at most 2,000 characters'})
+            return {'ok': False, 'error': 'Messages can be at most 2,000 characters'}
         
-        # Verify user is in the group
         group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
         if not group:
             emit('error', {'message': 'Group not found'})
-            return
-        
-        user = User.query.get(user_id)
-        if not user:
-            emit('error', {'message': 'User not found'})
-            return
+            return {'ok': False, 'error': 'Group not found'}
 
-        context, error_response, _ = get_chat_channel_context(group, int(user_id), class_id)
+        context, error_response, _ = get_chat_channel_context(group, user.id, class_id)
         if error_response:
             payload = error_response.get_json(silent=True) or {}
             emit('error', {'message': payload.get('error', 'Not authorized to send message')})
-            return
+            return {'ok': False, 'error': payload.get('error', 'Not authorized to send message')}
 
-        msg = Message(group_id=group.id, sender_id=user_id, class_id=context['class_id'], content=content)
+        room = get_chat_room_name(group, context['class_id'])
+        if room not in chat_socket_rooms.get(request.sid, set()):
+            emit('error', {'message': 'Join this chat before sending a message'})
+            return {'ok': False, 'error': 'Join this chat before sending a message'}
+
+        msg = Message(
+            group_id=group.id,
+            sender_id=user.id,
+            class_id=context['class_id'],
+            content=content,
+            read_by=json.dumps([user.id])
+        )
         db.session.add(msg)
         db.session.commit()
 
-        room = (
-            f'class_chat_{group.group_id}_{context["class_id"]}'
-            if context['class_id'] is not None
-            else f'group_chat_{group.group_id}'
-        )
         emit('receive_group_message', {
             **msg.to_dict(),
             'channel': context['channel']
         }, room=room)
         
-        app.logger.info('Group message sent by user %s in group %s', user_id, group_id)
+        app.logger.info('Group message sent by user %s in group %s', user.id, group_id)
+        return {'ok': True, 'message': msg.to_dict()}
         
     except Exception as e:
         app.logger.error('Error sending group message: %s', str(e))
         emit('error', {'message': 'Failed to send message'})
+        return {'ok': False, 'error': 'Failed to send message'}
+
+
+@socketio.on('group_typing')
+def handle_group_typing(data):
+    try:
+        user = get_socket_user()
+        group_id = data.get('group_id')
+        class_id = data.get('class_id')
+        group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
+        if not user or not group:
+            return {'ok': False}
+        context, error_response, _ = get_chat_channel_context(group, user.id, class_id)
+        if error_response:
+            return {'ok': False}
+        room = get_chat_room_name(group, context['class_id'])
+        if room not in chat_socket_rooms.get(request.sid, set()):
+            return {'ok': False}
+        emit('group_typing', {
+            'room': room,
+            'userId': user.id,
+            'username': user.username,
+            'isTyping': bool(data.get('is_typing'))
+        }, room=room, skip_sid=request.sid)
+        return {'ok': True}
+    except Exception as exc:
+        app.logger.error('Error broadcasting typing state: %s', str(exc))
+        return {'ok': False}
+
+
+@socketio.on('mark_group_messages_read')
+def handle_mark_group_messages_read(data):
+    try:
+        user = get_socket_user()
+        group_id = data.get('group_id')
+        class_id = data.get('class_id')
+        group = Group.query.filter_by(group_id=group_id).first() if not str(group_id).isdigit() else Group.query.get(group_id)
+        if not user or not group:
+            return {'ok': False}
+        context, error_response, _ = get_chat_channel_context(group, user.id, class_id)
+        if error_response:
+            return {'ok': False}
+        room = get_chat_room_name(group, context['class_id'])
+        if room not in chat_socket_rooms.get(request.sid, set()):
+            return {'ok': False}
+
+        query = Message.query.filter_by(
+            group_id=group.id,
+            recipient_id=None,
+            class_id=context['class_id']
+        )
+        requested_ids = []
+        for raw_message_id in data.get('message_ids') or []:
+            try:
+                requested_ids.append(int(raw_message_id))
+            except (TypeError, ValueError):
+                continue
+        if requested_ids:
+            query = query.filter(Message.id.in_(requested_ids[:500]))
+        messages = query.all()
+        updated = mark_messages_read_for_user(messages, user.id)
+        if updated:
+            db.session.commit()
+            emit('group_messages_read', {
+                'room': room,
+                'userId': user.id,
+                'username': user.username,
+                'messageIds': [message.id for message in messages]
+            }, room=room)
+        return {'ok': True, 'updated': updated}
+    except Exception as exc:
+        app.logger.error('Error marking live chat messages read: %s', str(exc))
+        return {'ok': False}
 
 @socketio.on('join_dm')
 def handle_join_dm(data):
     try:
         group_id = data.get('group_id')
-        user_id = data.get('user_id')
-        target_user_id = data.get('target_user_id')
+        user = get_socket_user()
+        target_user_id = int(data.get('target_user_id'))
+        if not user:
+            emit('error', {'message': 'Chat session is not authenticated'})
+            return {'ok': False}
+        user_id = user.id
         
-        # Verify permissions
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             emit('error', {'message': 'Group not found'})
-            return
+            return {'ok': False}
+        if not school_group_dms_allowed(group):
+            emit('error', {'message': 'Direct messages are disabled for school groups'})
+            return {'ok': False}
         
-        # Check if current user is the leader
         is_leader = user_id == group.leader_id
-        # Check if current user is the member trying to DM the leader
         is_member_dming_leader = target_user_id == group.leader_id and user_id in [m.id for m in group.members]
         
-        # Only leader or the member trying to DM the leader can join
         if not is_leader and not is_member_dming_leader:
             emit('error', {'message': 'Not authorized to join DM'})
-            return
+            return {'ok': False}
         
-        # Only allow DMs between leader and member
-        if target_user_id == group.leader_id:
-            # This is a member trying to DM the leader - this is allowed
-            pass
-        elif target_user_id not in [m.id for m in group.members]:
+        if target_user_id != group.leader_id and target_user_id not in [m.id for m in group.members]:
             emit('error', {'message': 'User not in group'})
-            return
+            return {'ok': False}
         
         room = f'dm_{group.group_id}_{min(user_id, target_user_id)}_{max(user_id, target_user_id)}'
         join_room(room)
         emit('joined_dm', {'group_id': group.group_id, 'target_user_id': target_user_id, 'room': room})
         app.logger.info('User %s joined DM with user %s in group %s', user_id, target_user_id, group.group_id)
         
-        # Mark DM messages as read for this user
-        import json
         dm_messages = Message.query.filter_by(
             group_id=group.id,
             sender_id=target_user_id,
@@ -408,76 +591,83 @@ def handle_join_dm(data):
                 read_by.append(user_id)
                 msg.read_by = json.dumps(read_by)
         db.session.commit()
+        return {'ok': True, 'room': room}
         
     except Exception as e:
         app.logger.error('Error joining DM: %s', str(e))
         emit('error', {'message': 'Failed to join DM'})
+        return {'ok': False}
 
 @socketio.on('leave_dm')
 def handle_leave_dm(data):
     try:
         group_id = data.get('group_id')
-        user_id = data.get('user_id')
-        target_user_id = data.get('target_user_id')
+        user = get_socket_user()
+        target_user_id = int(data.get('target_user_id'))
+        if not user:
+            return {'ok': False}
+        user_id = user.id
         
         room = f'dm_{group_id}_{min(user_id, target_user_id)}_{max(user_id, target_user_id)}'
         leave_room(room)
         emit('left_dm', {'group_id': group_id, 'target_user_id': target_user_id})
         app.logger.info('User left DM with user %s in group %s', target_user_id, group_id)
+        return {'ok': True}
         
     except Exception as e:
         app.logger.error('Error leaving DM: %s', str(e))
+        return {'ok': False}
 
 @socketio.on('send_dm')
 def handle_send_dm(data):
     try:
         group_id = data.get('group_id')
-        user_id = data.get('user_id')
-        target_user_id = data.get('target_user_id')
+        user = get_socket_user()
+        target_user_id = int(data.get('target_user_id'))
         content = data.get('content', '').strip()
+        if not user:
+            emit('error', {'message': 'Chat session is not authenticated'})
+            return {'ok': False}
+        user_id = user.id
         
         if not content:
             emit('error', {'message': 'Message content required'})
-            return
+            return {'ok': False}
+        if len(content) > 2000:
+            emit('error', {'message': 'Messages can be at most 2,000 characters'})
+            return {'ok': False}
         
-        # Verify permissions
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             emit('error', {'message': 'Group not found'})
-            return
+            return {'ok': False}
+        if not school_group_dms_allowed(group):
+            emit('error', {'message': 'Direct messages are disabled for school groups'})
+            return {'ok': False}
         
-        # Check if current user is the leader
         is_leader = user_id == group.leader_id
-        # Check if current user is the member trying to DM the leader
         is_member_dming_leader = target_user_id == group.leader_id and user_id in [m.id for m in group.members]
         
-        # Only leader or the member trying to DM the leader can send
         if not is_leader and not is_member_dming_leader:
             emit('error', {'message': 'Not authorized to send DM'})
-            return
+            return {'ok': False}
         
-        # Only allow DMs between leader and member
-        if target_user_id == group.leader_id:
-            # This is a member trying to DM the leader - this is allowed
-            pass
-        elif target_user_id not in [m.id for m in group.members]:
+        if target_user_id != group.leader_id and target_user_id not in [m.id for m in group.members]:
             emit('error', {'message': 'User not in group'})
-            return
+            return {'ok': False}
         
-        user = User.query.get(user_id)
-        if not user:
-            emit('error', {'message': 'User not found'})
-            return
-        
-        # Determine recipient
         recipient_id = target_user_id if user_id == group.leader_id else group.leader_id
         
-        # Save message to database
-        msg = Message(group_id=group.id, sender_id=user_id, recipient_id=recipient_id, content=content)
+        msg = Message(
+            group_id=group.id,
+            sender_id=user_id,
+            recipient_id=recipient_id,
+            content=content,
+            read_by=json.dumps([user_id])
+        )
         db.session.add(msg)
         db.session.commit()
         
-        # Send to DM room
         room = f'dm_{group.group_id}_{min(user_id, target_user_id)}_{max(user_id, target_user_id)}'
         emit('receive_dm', {
             'id': msg.id,
@@ -489,10 +679,12 @@ def handle_send_dm(data):
         }, room=room)
         
         app.logger.info('DM sent by user %s to user %s in group %s', user_id, target_user_id, group.group_id)
+        return {'ok': True}
         
     except Exception as e:
         app.logger.error('Error sending DM: %s', str(e))
         emit('error', {'message': 'Failed to send DM'})
+        return {'ok': False}
 
 # Daily task reset at midnight UTC (stdlib only – no APScheduler/pkg_resources)
 def _seconds_until_midnight_utc():

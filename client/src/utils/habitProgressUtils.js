@@ -1,10 +1,54 @@
+import { formatDateLocal, isHabitScheduledForDay } from './habitScheduleUtils';
+
+const clampPercentage = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+
 export const calculateNumericProgress = (habit, progressEntry) => {
   if (!progressEntry || progressEntry.numericValue === undefined) return 0;
-  const min = habit.minValue || 0;
-  const max = habit.maxValue || 10;
-  const value = progressEntry.numericValue;
+  const min = Number(habit.minValue ?? 0);
+  const max = Number(habit.maxValue ?? 10);
+  const value = Number(progressEntry.numericValue);
   if (max === min) return value >= max ? 100 : 0;
-  return Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+  return clampPercentage(((value - min) / (max - min)) * 100);
+};
+
+export const getPeriodicProgress = (habit, progressEntry) => {
+  const target = Math.max(1, Number(progressEntry?.periodicTarget ?? habit?.periodicOccurrences) || 4);
+  const loggedOccurrences = Array.isArray(progressEntry?.periodicLoggedOccurrences)
+    ? new Set(progressEntry.periodicLoggedOccurrences.map(String)).size
+    : 0;
+  const recordedOccurrences = Math.max(0, Number(progressEntry?.periodicCompleted) || 0);
+  const hasGranularProgress = Boolean(progressEntry) && (
+    Object.prototype.hasOwnProperty.call(progressEntry, 'periodicCompleted')
+    || Object.prototype.hasOwnProperty.call(progressEntry, 'periodicLoggedOccurrences')
+    || Object.prototype.hasOwnProperty.call(progressEntry, 'periodicTarget')
+  );
+  const completed = progressEntry?.completed && !hasGranularProgress
+    ? target
+    : Math.min(target, Math.max(loggedOccurrences, recordedOccurrences));
+  return { completed, target, percentage: clampPercentage((completed / target) * 100) };
+};
+
+export const calculateHabitProgress = (habit, progressEntry) => {
+  if (!progressEntry) return 0;
+  if (habit?.habitType === 'periodic') return getPeriodicProgress(habit, progressEntry).percentage;
+  if (habit?.habitType === 'numeric') {
+    if (progressEntry.numericValue === undefined || progressEntry.numericValue === null) {
+      return progressEntry.completed ? 100 : 0;
+    }
+    return calculateNumericProgress(habit, progressEntry);
+  }
+  return progressEntry.completed ? 100 : 0;
+};
+
+export const getHabitProgressState = (habit, progressEntry) => {
+  const percentage = calculateHabitProgress(habit, progressEntry);
+  return {
+    percentage,
+    isComplete: percentage >= 100,
+    isPartial: percentage > 0 && percentage < 100,
+    hasProgress: percentage > 0,
+    periodic: habit?.habitType === 'periodic' ? getPeriodicProgress(habit, progressEntry) : null
+  };
 };
 
 export const getProgressColorClasses = (percentage) => {
@@ -42,18 +86,13 @@ export const calculateOverallCompletionRate = (memberHabits) => {
 
   memberHabits.forEach((memberHabit) => {
     memberHabit.habits.forEach((habit) => {
-      const today = new Date().toISOString().slice(0, 10);
+      const todayDate = new Date();
+      if (!isHabitScheduledForDay(habit, todayDate)) return;
+      const today = formatDateLocal(todayDate);
       const progressEntry = (habit.progress || []).find((entry) => entry.date && entry.date.slice(0, 10) === today);
 
       totalWeight += 100;
-
-      if (progressEntry) {
-        if (habit.habitType === 'numeric') {
-          totalProgress += calculateNumericProgress(habit, progressEntry);
-        } else {
-          totalProgress += progressEntry.completed ? 100 : 0;
-        }
-      }
+      totalProgress += calculateHabitProgress(habit, progressEntry);
     });
   });
 
@@ -63,7 +102,7 @@ export const calculateOverallCompletionRate = (memberHabits) => {
 export const calculateTodayCompletionRate = (memberHabit, isHabitAvailableToday) => {
   if (!memberHabit?.habits || memberHabit.habits.length === 0) return 0;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = formatDateLocal(new Date());
   let totalProgress = 0;
   let scheduledCount = 0;
 
@@ -76,13 +115,7 @@ export const calculateTodayCompletionRate = (memberHabit, isHabitAvailableToday)
     const habitProgress = Array.isArray(habit.progress) ? habit.progress : [];
     const progressEntry = habitProgress.find((entry) => entry.date && entry.date.slice(0, 10) === today);
 
-    if (progressEntry && progressEntry.completed) {
-      if (habit.habitType === 'numeric') {
-        totalProgress += calculateNumericProgress(habit, progressEntry);
-      } else {
-        totalProgress += 100;
-      }
-    }
+    totalProgress += calculateHabitProgress(habit, progressEntry);
   });
 
   return scheduledCount > 0 ? totalProgress / scheduledCount : 0;

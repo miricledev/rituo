@@ -1,418 +1,222 @@
-import React, { useState, useMemo } from 'react';
-import { isHabitScheduledForDay } from '../utils/habitScheduleUtils';
+import React, { useMemo, useState } from 'react';
+import { FiCalendar, FiChevronLeft, FiChevronRight, FiCheck, FiClock, FiInfo, FiRepeat, FiTarget, FiX } from 'react-icons/fi';
+import { formatDateLocal, isHabitScheduledForDay, parseDateLocal } from '../utils/habitScheduleUtils';
+import { getHabitProgressState } from '../utils/habitProgressUtils';
 
-const HabitCalendar = ({ habits, startDate, endDate, memberHabit }) => {
-  const [currentMonth, setCurrentMonth] = useState(new Date());
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const startOfMonth = (value) => new Date(value.getFullYear(), value.getMonth(), 1);
+const monthKey = (value) => (value.getFullYear() * 12) + value.getMonth();
+
+function scoreTone(score, future = false) {
+  if (future) return 'border-sky-300/15 bg-sky-300/10 text-sky-200';
+  if (score >= 100) return 'border-emerald-300/25 bg-emerald-300/15 text-emerald-200';
+  if (score >= 75) return 'border-cyan-300/25 bg-cyan-300/15 text-cyan-200';
+  if (score >= 50) return 'border-amber-300/25 bg-amber-300/15 text-amber-200';
+  if (score > 0) return 'border-orange-300/25 bg-orange-300/15 text-orange-200';
+  return 'border-rose-300/20 bg-rose-300/10 text-rose-200';
+}
+
+function scoreLabel(score, future = false) {
+  if (future) return 'Upcoming';
+  if (score >= 100) return 'Perfect';
+  if (score >= 75) return 'Strong';
+  if (score >= 50) return 'Partial';
+  if (score > 0) return 'Started';
+  return 'Missed';
+}
+
+const HabitCalendar = ({ habits = [], startDate, endDate, statistics }) => {
+  const studentToday = statistics?.challenge?.studentToday || formatDateLocal(new Date());
+  const today = useMemo(() => parseDateLocal(studentToday), [studentToday]);
+  const challengeStart = parseDateLocal(startDate);
+  const challengeEnd = parseDateLocal(endDate);
+  const initialMonth = parseDateLocal(statistics?.challenge?.dataThrough || formatDateLocal(today));
+  const [currentMonth, setCurrentMonth] = useState(startOfMonth(initialMonth));
   const [selectedDate, setSelectedDate] = useState(null);
 
-  // Generate all dates in the challenge period
-  const challengeDates = useMemo(() => {
-    if (!startDate || !endDate) return [];
-    const dates = [];
-    let d = new Date(startDate);
-    const end = new Date(endDate);
-    
-    while (d <= end) {
-      dates.push(new Date(d));
-      d.setDate(d.getDate() + 1);
-    }
-    return dates;
-  }, [startDate, endDate]);
+  const dailyMap = useMemo(() => new Map(
+    (statistics?.daily || []).map((row) => [row.date, row])
+  ), [statistics?.daily]);
+  const habitStatsMap = useMemo(() => new Map(
+    (statistics?.habits || []).map((habit) => [habit.index, habit])
+  ), [statistics?.habits]);
+  const summary = statistics?.summary || {};
 
-  // Get habit completion data for each date
-  const getHabitDataForDate = (date) => {
-    const dateStr = date.toISOString().slice(0, 10);
-    const habitData = {};
-    
-    habits.forEach((habit, idx) => {
-      const isScheduled = isHabitScheduledForDay(habit, date);
-      const progress = habit.progress || [];
-      const dayProgress = progress.find(p => p.date.startsWith(dateStr));
-      
-      if (dayProgress) {
-        habitData[idx] = {
-          completed: dayProgress.completed,
-          numericValue: dayProgress.numericValue,
-          textValue: dayProgress.textValue,
-          habitType: habit.habitType,
-          isScheduled: isScheduled
-        };
-      } else {
-        habitData[idx] = {
-          completed: false,
-          numericValue: null,
-          textValue: null,
-          habitType: habit.habitType,
-          isScheduled: isScheduled
-        };
-      }
-    });
-    
-    return habitData;
-  };
-
-  // Calculate consistency score for a date (percentage of habits completed)
-  const getConsistencyScore = (date) => {
-    const habitData = getHabitDataForDate(date);
-    // Only count habits that are scheduled for this day
-    const scheduledHabits = habits.filter((habit, idx) => isHabitScheduledForDay(habit, date));
-    const completedCount = Object.entries(habitData).filter(([idx, h]) => 
-      h.completed && isHabitScheduledForDay(habits[parseInt(idx)], date)
-    ).length;
-    return scheduledHabits.length > 0 ? (completedCount / scheduledHabits.length) * 100 : 0;
-  };
-
-  // Get calendar days for current month
-  const getCalendarDays = () => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const startDate = new Date(firstDay);
-    startDate.setDate(startDate.getDate() - firstDay.getDay());
-    
-    const days = [];
-    const today = new Date();
-    
-    for (let i = 0; i < 42; i++) {
-      const date = new Date(startDate);
-      date.setDate(startDate.getDate() + i);
-      
-      const isCurrentMonth = date.getMonth() === month;
-      const isToday = date.toDateString() === today.toDateString();
-      const isInChallenge = challengeDates.some(d => d.toDateString() === date.toDateString());
-      const consistencyScore = isInChallenge ? getConsistencyScore(date) : null;
-      
-      days.push({
+  const calendarDays = useMemo(() => {
+    const firstDay = startOfMonth(currentMonth);
+    const gridStart = new Date(firstDay);
+    gridStart.setDate(gridStart.getDate() - firstDay.getDay());
+    return Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + index);
+      const dateKey = formatDateLocal(date);
+      const inChallenge = date >= challengeStart && date <= challengeEnd;
+      const future = date > today;
+      const daily = dailyMap.get(dateKey) || null;
+      return {
         date,
-        isCurrentMonth,
-        isToday,
-        isInChallenge,
-        consistencyScore,
-        habitData: isInChallenge ? getHabitDataForDate(date) : {}
-      });
-    }
-    
-    return days;
-  };
-
-  const calendarDays = getCalendarDays();
-  const monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-
-  const navigateMonth = (direction) => {
-    setCurrentMonth(prev => {
-      const newMonth = new Date(prev);
-      newMonth.setMonth(prev.getMonth() + direction);
-      return newMonth;
+        dateKey,
+        inCurrentMonth: date.getMonth() === currentMonth.getMonth(),
+        inChallenge,
+        future,
+        pending: daily?.status === 'pending',
+        isToday: date.getTime() === today.getTime(),
+        score: daily?.completionRate ?? null,
+        daily,
+      };
     });
-  };
+  }, [challengeEnd, challengeStart, currentMonth, dailyMap, today]);
 
-  const goToToday = () => {
-    setCurrentMonth(new Date());
-  };
-
-  // Calculate overall statistics
-  const overallStats = useMemo(() => {
-    const challengeDays = challengeDates.filter(date => {
-      const dateStr = date.toISOString().slice(0, 10);
-      return dateStr >= startDate && dateStr <= endDate;
-    });
-
-    let totalDays = 0; // Only count days where at least one habit is scheduled
-    let perfectDays = 0;
-    let goodDays = 0; // 75% or more
-    let fairDays = 0; // 50% or more
-    let poorDays = 0; // 25% or more
-    let missedDays = 0;
-
-    challengeDays.forEach(date => {
-      const score = getConsistencyScore(date);
-      // Only count days where at least one habit is scheduled
-      const scheduledHabits = habits.filter(habit => isHabitScheduledForDay(habit, date));
-      if (scheduledHabits.length > 0) {
-        totalDays++;
-        if (score === 100) perfectDays++;
-        else if (score >= 75) goodDays++;
-        else if (score >= 50) fairDays++;
-        else if (score >= 25) poorDays++;
-        else missedDays++;
-      }
-    });
-
-    const averageConsistency = totalDays > 0 
-      ? challengeDays.reduce((sum, date) => {
-          const scheduledHabits = habits.filter(habit => isHabitScheduledForDay(habit, date));
-          return scheduledHabits.length > 0 ? sum + getConsistencyScore(date) : sum;
-        }, 0) / totalDays 
-      : 0;
-
+  const selectedDetails = useMemo(() => {
+    if (!selectedDate) return null;
+    const dateKey = formatDateLocal(selectedDate);
+    const future = selectedDate > today;
+    const dayStatistics = dailyMap.get(dateKey);
+    const rows = habits.map((habit, index) => {
+      if (!isHabitScheduledForDay(habit, selectedDate)) return null;
+      const canonical = habitStatsMap.get(index)?.dailyData?.find((row) => row.date === dateKey);
+      if (canonical) return { index, habit, ...canonical };
+      const progressEntry = (habit.progress || []).find((entry) => entry.date?.slice(0, 10) === dateKey);
+      const state = getHabitProgressState(habit, progressEntry);
+      return {
+        index,
+        habit,
+        date: dateKey,
+        isScheduled: true,
+        status: future ? 'upcoming' : state.isComplete ? 'complete' : state.isPartial ? 'partial' : 'missed',
+        progressPercent: future ? null : state.percentage,
+        periodicCompleted: state.periodic?.completed,
+        periodicTarget: state.periodic?.target,
+        numericValue: progressEntry?.numericValue,
+        textValue: progressEntry?.textValue,
+      };
+    }).filter(Boolean);
     return {
-      totalDays,
-      perfectDays,
-      goodDays,
-      fairDays,
-      poorDays,
-      missedDays,
-      averageConsistency
+      dateKey,
+      future,
+      pending: dayStatistics?.status === 'pending',
+      score: dayStatistics?.completionRate ?? (future ? null : 0),
+      rows,
     };
-  }, [challengeDates, startDate, endDate, habits]);
+  }, [dailyMap, habitStatsMap, habits, selectedDate, today]);
 
-  const getConsistencyColor = (score) => {
-    if (score === null) return 'bg-gray-100 dark:bg-gray-700';
-    if (score === 100) return 'bg-green-500';
-    if (score >= 75) return 'bg-green-400';
-    if (score >= 50) return 'bg-yellow-400';
-    if (score >= 25) return 'bg-orange-400';
-    if (score > 0) return 'bg-red-400';
-    return 'bg-red-500';
-  };
-
-  const getConsistencyText = (score) => {
-    if (score === null) return '';
-    if (score === 100) return 'Perfect';
-    if (score >= 75) return 'Great';
-    if (score >= 50) return 'Good';
-    if (score >= 25) return 'Fair';
-    if (score > 0) return 'Poor';
-    return 'None';
-  };
+  const canMovePrevious = monthKey(currentMonth) > monthKey(startOfMonth(challengeStart));
+  const canMoveNext = monthKey(currentMonth) < monthKey(startOfMonth(challengeEnd));
+  const changeMonth = (amount) => setCurrentMonth((previous) => new Date(previous.getFullYear(), previous.getMonth() + amount, 1));
 
   return (
-    <div className="bg-white dark:bg-secondary-800 rounded-lg shadow-card p-4 sm:p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h3 className="text-lg sm:text-xl font-semibold text-secondary-900 dark:text-white">
-          Habit Consistency Calendar
-        </h3>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => navigateMonth(-1)}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <button
-            onClick={goToToday}
-            className="px-3 py-1 text-sm bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded-lg hover:bg-primary-200 dark:hover:bg-primary-900/50 transition-colors"
-          >
-            Today
-          </button>
-          <button
-            onClick={() => navigateMonth(1)}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <h4 className="text-lg font-medium text-secondary-900 dark:text-white">
-          {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
-        </h4>
-      </div>
-
-      {/* Statistics Summary */}
-      <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-        <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Challenge Summary</h4>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+    <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.045] text-white shadow-2xl shadow-black/20">
+      <div className="border-b border-white/10 p-4 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{overallStats.perfectDays}</div>
-            <div className="text-xs text-gray-600 dark:text-gray-400">Perfect Days</div>
+            <div className="flex items-center gap-2 text-cyan-200"><FiCalendar /><p className="text-[10px] font-black uppercase tracking-[0.2em]">Consistency intelligence</p></div>
+            <h2 className="mt-2 text-2xl font-black tracking-tight sm:text-3xl">Scheduled-day calendar</h2>
+            <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-400 sm:text-sm">Colours use the true percentage earned that day. Partial recurring and numeric progress appears proportionally instead of being shown as a complete miss.</p>
           </div>
-          <div>
-            <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{overallStats.goodDays + overallStats.fairDays}</div>
-            <div className="text-xs text-gray-600 dark:text-gray-400">Good Days</div>
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">{overallStats.poorDays}</div>
-            <div className="text-xs text-gray-600 dark:text-gray-400">Poor Days</div>
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-red-600 dark:text-red-400">{overallStats.missedDays}</div>
-            <div className="text-xs text-gray-600 dark:text-gray-400">Missed Days</div>
-          </div>
-        </div>
-        <div className="mt-3 text-center">
-          <div className="text-lg font-semibold text-gray-800 dark:text-gray-200">
-            Average Consistency: {Math.round(overallStats.averageConsistency)}%
-          </div>
-        </div>
-      </div>
-
-      {/* Legend */}
-      <div className="mb-6">
-        <div className="flex flex-wrap gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-green-500"></div>
-            <span className="text-gray-600 dark:text-gray-400">Perfect (100%)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-green-400"></div>
-            <span className="text-gray-600 dark:text-gray-400">Great (75%+)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-yellow-400"></div>
-            <span className="text-gray-600 dark:text-gray-400">Good (50%+)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-orange-400"></div>
-            <span className="text-gray-600 dark:text-gray-400">Fair (25%+)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-red-400"></div>
-            <span className="text-gray-600 dark:text-gray-400">Poor (1%+)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-red-500"></div>
-            <span className="text-gray-600 dark:text-gray-400">None (0%)</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Calendar Grid */}
-      <div className="grid grid-cols-7 gap-1 mb-4">
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-          <div key={day} className="p-2 text-center text-sm font-medium text-gray-500 dark:text-gray-400">
-            {day}
-          </div>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-7 gap-1">
-        {calendarDays.map((day, index) => (
-          <div
-            key={index}
-            className={`
-              aspect-square p-1 rounded-lg border-2 transition-all duration-200 cursor-pointer
-              ${day.isCurrentMonth 
-                ? 'border-gray-200 dark:border-gray-600' 
-                : 'border-gray-100 dark:border-gray-700 opacity-50'
-              }
-              ${day.isToday ? 'ring-2 ring-primary-500' : ''}
-              ${day.isInChallenge ? 'hover:shadow-md' : ''}
-              ${selectedDate && selectedDate.toDateString() === day.date.toDateString() ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' : ''}
-            `}
-            onClick={() => day.isInChallenge && setSelectedDate(day.date)}
-            title={day.isInChallenge ? `${day.date.toLocaleDateString()}: ${getConsistencyText(day.consistencyScore)} (${Math.round(day.consistencyScore || 0)}%)` : ''}
-          >
-            <div className="w-full h-full flex flex-col items-center justify-center">
-              <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {day.date.getDate()}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              ['Perfect', summary.perfectDays || 0, 'text-emerald-200'],
+              ['Partial', summary.partialDays || 0, 'text-amber-200'],
+              ['Missed', summary.missedDays || 0, 'text-rose-200'],
+              ['Average', `${Math.round(summary.completionRate || 0)}%`, 'text-cyan-200'],
+            ].map(([label, value, tone]) => (
+              <div key={label} className="rounded-xl border border-white/10 bg-black/15 px-3 py-2.5 text-center">
+                <p className={`text-xl font-black ${tone}`}>{value}</p>
+                <p className="mt-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</p>
               </div>
-              {day.isInChallenge && (
-                <div className={`w-3 h-3 rounded-full ${getConsistencyColor(day.consistencyScore)}`}></div>
-              )}
-            </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
 
-      {/* Selected Date Details */}
-      {selectedDate && (
-        <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-lg font-semibold text-secondary-900 dark:text-white">
-              {selectedDate.toLocaleDateString('en-US', { 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
+      <div className="p-3 sm:p-6">
+        <div className="flex items-center justify-between gap-3">
+          <button type="button" onClick={() => changeMonth(-1)} disabled={!canMovePrevious} className="rounded-xl border border-white/10 bg-white/5 p-2.5 text-slate-300 transition hover:border-cyan-300/30 disabled:cursor-not-allowed disabled:opacity-25"><FiChevronLeft /></button>
+          <div className="text-center"><p className="text-lg font-black sm:text-xl">{MONTHS[currentMonth.getMonth()]} {currentMonth.getFullYear()}</p><button type="button" onClick={() => setCurrentMonth(startOfMonth(initialMonth))} className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-cyan-300">Latest data</button></div>
+          <button type="button" onClick={() => changeMonth(1)} disabled={!canMoveNext} className="rounded-xl border border-white/10 bg-white/5 p-2.5 text-slate-300 transition hover:border-cyan-300/30 disabled:cursor-not-allowed disabled:opacity-25"><FiChevronRight /></button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-7 gap-1 sm:gap-2">
+          {WEEKDAYS.map((weekday) => <div key={weekday} className="py-2 text-center text-[9px] font-black uppercase tracking-wider text-slate-600 sm:text-[10px]">{weekday}</div>)}
+          {calendarDays.map((day) => {
+            const hasResult = day.inChallenge && !day.future;
+            const score = day.score ?? 0;
+            return (
+              <button
+                key={day.dateKey}
+                type="button"
+                onClick={() => day.inChallenge && setSelectedDate(day.date)}
+                disabled={!day.inChallenge}
+                className={`relative min-h-[4.5rem] rounded-xl border p-1.5 text-left transition sm:min-h-[6.25rem] sm:p-2.5 ${day.inChallenge ? `${scoreTone(score, day.future || day.pending)} hover:-translate-y-0.5 hover:shadow-lg` : 'border-white/[0.035] bg-black/10 text-slate-700'} ${day.inCurrentMonth ? '' : 'opacity-35'} ${day.isToday ? 'ring-2 ring-cyan-300/70 ring-offset-2 ring-offset-[#070b18]' : ''}`}
+              >
+                <span className="text-xs font-black sm:text-sm">{day.date.getDate()}</span>
+                {day.inChallenge ? (
+                  <div className="mt-2 sm:mt-4">
+                    <p className="text-sm font-black sm:text-xl">{day.future ? '—' : `${Math.round(score)}%`}</p>
+                    <p className="mt-0.5 hidden text-[9px] font-black uppercase tracking-wide opacity-70 sm:block">{day.pending ? 'Live pending' : scoreLabel(score, day.future)}</p>
+                    {hasResult && day.daily ? <p className="mt-1 hidden text-[9px] opacity-60 sm:block">{day.daily.fullCount} full · {day.daily.partialCount} partial</p> : null}
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2 text-[10px] font-bold text-slate-400">
+          {[[100, 'Perfect'], [75, '75%+'], [50, '50%+'], [25, '1–49%'], [0, '0%']].map(([score, label]) => <span key={label} className={`rounded-full border px-2.5 py-1 ${scoreTone(score)}`}>{label}</span>)}
+          <span className={`rounded-full border px-2.5 py-1 ${scoreTone(0, true)}`}>Upcoming</span>
+        </div>
+      </div>
+
+      {selectedDetails ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-6">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-[1.75rem] border border-white/10 bg-slate-900 shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-white/10 bg-slate-900/95 p-5 backdrop-blur-xl sm:p-6">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">Day detail</p>
+                <h3 className="mt-2 text-xl font-black sm:text-2xl">{parseDateLocal(selectedDetails.dateKey).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</h3>
+                <div className="mt-2 flex items-center gap-2"><span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${scoreTone(selectedDetails.score || 0, selectedDetails.future || selectedDetails.pending)}`}>{selectedDetails.future ? 'Upcoming' : selectedDetails.pending ? '0% · Live pending' : `${Math.round(selectedDetails.score || 0)}% · ${scoreLabel(selectedDetails.score || 0)}`}</span>{selectedDetails.dateKey === formatDateLocal(today) ? <span className="text-xs font-bold text-cyan-300">Live today</span> : null}</div>
+              </div>
+              <button type="button" onClick={() => setSelectedDate(null)} className="rounded-xl border border-white/10 bg-white/5 p-2.5 text-slate-300"><FiX /></button>
+            </div>
+
+            <div className="space-y-3 p-4 sm:p-6">
+              {selectedDetails.rows.map((row) => {
+                const score = row.progressPercent ?? 0;
+                const future = selectedDetails.future;
+                const pending = row.status === 'pending';
+                return (
+                  <article key={row.index} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap gap-1.5"><span className="rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-slate-400">{row.habit.habitType || 'boolean'}</span><span className="rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-slate-400">{row.habit.combatType || 'unclassified'}</span></div>
+                        <h4 className="mt-2 font-black text-white">{row.habit.name}</h4>
+                        {row.habit.description ? <p className="mt-1 text-xs leading-5 text-slate-400">{row.habit.description}</p> : null}
+                      </div>
+                      <div className={`shrink-0 rounded-xl border px-4 py-3 text-center ${scoreTone(score, future || pending)}`}>
+                        <p className="text-xl font-black">{future ? '—' : `${Math.round(score)}%`}</p>
+                        <p className="text-[9px] font-black uppercase tracking-wide opacity-70">{future ? 'Scheduled' : pending ? 'Live pending' : scoreLabel(score)}</p>
+                      </div>
+                    </div>
+                    {!future ? <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400" style={{ width: `${Math.min(100, score)}%` }} /></div> : null}
+                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400">
+                      {row.habit.habitType === 'periodic' ? <span className="inline-flex items-center gap-1.5 text-cyan-200"><FiRepeat /> {row.periodicCompleted || 0}/{row.periodicTarget || row.habit.periodicOccurrences || 4} occurrences</span> : null}
+                      {row.numericValue !== null && row.numericValue !== undefined ? <span>Value: {row.numericValue}</span> : null}
+                      {row.textValue ? <span>Response: {row.textValue}</span> : null}
+                      {future ? <span className="inline-flex items-center gap-1.5"><FiClock /> Awaiting scheduled date</span> : row.progressPercent >= 100 ? <span className="inline-flex items-center gap-1.5 text-emerald-200"><FiCheck /> Target reached</span> : null}
+                    </div>
+                  </article>
+                );
               })}
-            </h4>
-            <button
-              onClick={() => setSelectedDate(null)}
-              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          
-          <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Consistency:</span>
-              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                getConsistencyScore(selectedDate) === 100 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
-                getConsistencyScore(selectedDate) >= 75 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
-                getConsistencyScore(selectedDate) >= 50 ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
-                getConsistencyScore(selectedDate) >= 25 ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300' :
-                getConsistencyScore(selectedDate) > 0 ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
-                'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
-              }`}>
-                {getConsistencyText(getConsistencyScore(selectedDate))} ({Math.round(getConsistencyScore(selectedDate))}%)
-              </span>
+              {!selectedDetails.rows.length ? <div className="rounded-2xl border border-dashed border-white/10 p-10 text-center text-sm text-slate-500">No habits were scheduled for this day.</div> : null}
+              <div className="flex items-start gap-3 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.07] p-4 text-xs leading-5 text-slate-400"><FiInfo className="mt-0.5 shrink-0 text-cyan-200" /><p>Day consistency is the average of the percentages earned by habits scheduled on this date. Habits not scheduled on this date are excluded completely.</p></div>
             </div>
           </div>
-
-          <div className="space-y-3">
-            {habits.map((habit, idx) => {
-              const habitData = getHabitDataForDate(selectedDate)[idx];
-              return (
-                <div key={idx} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
-                  <div className="flex-1">
-                    <h5 className="font-medium text-secondary-900 dark:text-white">{habit.name}</h5>
-                    {habit.description && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{habit.description}</p>
-                    )}
-                    {habitData.completed && habitData.numericValue !== null && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Value: {habitData.numericValue}
-                      </p>
-                    )}
-                    {habitData.completed && habitData.textValue && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Note: {habitData.textValue}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex-shrink-0 ml-4">
-                    {!habitData.isScheduled ? (
-                      <div className="flex flex-col items-center gap-1 opacity-50">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-gray-400">
-                          <path fillRule="evenodd" d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" clipRule="evenodd" />
-                        </svg>
-                      </div>
-                    ) : (
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        habitData.completed 
-                          ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' 
-                          : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
-                      }`}>
-                        {habitData.completed ? (
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                        ) : (
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </div>
-      )}
-
-      {/* Mobile: Show habit details for selected date */}
-      <div className="mt-6 lg:hidden">
-        <div className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-          Tap a date to see habit details
-        </div>
-      </div>
-    </div>
+      ) : null}
+    </section>
   );
 };
 

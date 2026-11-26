@@ -35,6 +35,14 @@ const cardGradients = [
 const roleLabels = {
   'school-admin': 'School admin',
   headteacher: 'Headteacher',
+  'deputy-headteacher': 'Deputy headteacher',
+  'assistant-headteacher': 'Assistant headteacher',
+  slt: 'Senior leadership team',
+  'head-of-department': 'Head of department',
+  'head-of-year': 'Head of year',
+  'subject-teacher': 'Subject teacher',
+  'assistant-teacher': 'Assistant teacher',
+  senco: 'SENCO',
   teacher: 'Teacher',
   student: 'Student',
   coach: 'Coach',
@@ -43,21 +51,21 @@ const roleLabels = {
 
 const workspaceCopy = {
   admin: {
-    eyebrow: 'School network',
-    title: 'Lead every school from one place.',
-    description: 'Open a school workspace, provision its people, and keep every operational workflow connected.',
+    eyebrow: 'Performance network',
+    title: 'Lead every performance workspace from one place.',
+    description: 'Open a school, football client, or Coaches HQ workspace without mixing their people or workflows.',
     icon: FaShieldAlt
   },
   teacher: {
-    eyebrow: 'Assigned schools',
+    eyebrow: 'Assigned workspaces',
     title: 'Move straight into the work that matters.',
-    description: 'Your assigned schools bring classes, registers, behaviour, homework, and interventions together.',
+    description: 'Your assigned schools bring classes, registers, behaviour, and interventions together.',
     icon: FaGraduationCap
   },
   student: {
     eyebrow: 'My school',
     title: 'Your school, goals, and habits in one space.',
-    description: 'Open your school workspace to see the routines, support, and daily actions connected to you.',
+    description: 'Open your student workspace to see the routines, support, and daily actions connected to you.',
     icon: FaUserGraduate
   }
 };
@@ -149,6 +157,7 @@ const Groups = ({ legacyMode = false }) => {
     event.preventDefault();
     try {
       setSubmitting(true);
+      const createdType = newGroup.groupType;
       await axios.post('/groups/create', {
         ...newGroup,
         memberCount: Number(newGroup.memberCount)
@@ -157,14 +166,14 @@ const Groups = ({ legacyMode = false }) => {
       setNewGroup(emptyGroupForm);
       setToast({
         type: 'success',
-        title: 'School created',
-        message: 'Your new school workspace is ready.'
+        title: createdType === 'staff' ? 'Coaches HQ created' : createdType === 'football' ? 'Football workspace created' : 'School created',
+        message: 'Your new workspace is ready.'
       });
       await fetchGroups();
     } catch (error) {
       setToast({
         type: 'error',
-        title: 'School was not created',
+        title: 'Workspace was not created',
         message: error.response?.data?.error || error.message
       });
     } finally {
@@ -181,14 +190,14 @@ const Groups = ({ legacyMode = false }) => {
       setJoinGroup(emptyJoinForm);
       setToast({
         type: 'success',
-        title: 'Legacy school joined',
-        message: 'The workspace is now available in your legacy list.'
+        title: legacyMode ? 'Legacy school joined' : 'Coaches HQ joined',
+        message: legacyMode ? 'The workspace is now available in your legacy list.' : 'The staff accountability workspace is now available.'
       });
       await fetchGroups();
     } catch (error) {
       setToast({
         type: 'error',
-        title: 'School was not joined',
+        title: 'Workspace was not joined',
         message: error.response?.data?.error || error.message
       });
     } finally {
@@ -262,8 +271,8 @@ const Groups = ({ legacyMode = false }) => {
         <div className="relative mt-6">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${legacyMode ? 'bg-amber-400/10 text-amber-200' : 'bg-cyan-400/10 text-cyan-200'}`}>
-              {groupType === 'football' ? <FaFootballBall /> : <FaSchool />}
-              {groupType === 'football' ? 'Football group' : 'School'}
+              {groupType === 'football' ? <FaFootballBall /> : groupType === 'staff' ? <FaUsers /> : <FaSchool />}
+              {groupType === 'football' ? 'Football group' : groupType === 'staff' ? 'Coaches HQ' : 'School'}
             </span>
             <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
               {viewerRole}
@@ -272,14 +281,14 @@ const Groups = ({ legacyMode = false }) => {
           <h2 className="mt-4 truncate text-xl font-bold tracking-tight text-white">{group.name}</h2>
           <p className="mt-2 min-h-[40px] text-sm leading-5 text-slate-400">
             {isLeader
-              ? 'Manage people, performance, habits, and school operations.'
+              ? groupType === 'staff' ? 'Independent challenges, shared standards, and public accountability.' : 'Manage people, performance, habits, and operations.'
               : 'Open your assigned workspace and continue where you left off.'}
           </p>
         </div>
 
         <div className="relative mt-6 grid grid-cols-2 gap-3">
           <div className="rounded-xl border border-white/10 bg-slate-950/35 px-3 py-3">
-            <div className="flex items-center gap-2 text-xs text-slate-500"><FaUsers /> Students</div>
+            <div className="flex items-center gap-2 text-xs text-slate-500"><FaUsers /> {groupType === 'staff' ? 'Staff' : groupType === 'football' ? 'Clients' : 'Students'}</div>
             <div className="mt-2 text-lg font-bold">{group.members?.length || 0}</div>
           </div>
           <div className="rounded-xl border border-white/10 bg-slate-950/35 px-3 py-3">
@@ -366,7 +375,12 @@ const Groups = ({ legacyMode = false }) => {
               <div className="mt-7 flex flex-wrap gap-3">
                 {!legacyMode && role === 'admin' && (
                   <button onClick={() => setShowCreateModal(true)} className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950 transition hover:-translate-y-0.5 hover:bg-cyan-100">
-                    <FaPlus /> Create school
+                    <FaPlus /> Create workspace
+                  </button>
+                )}
+                {!legacyMode && ['admin', 'teacher'].includes(role) && (
+                  <button onClick={() => setShowJoinModal(true)} className="inline-flex items-center gap-2 rounded-xl border border-fuchsia-300/30 bg-fuchsia-400/10 px-5 py-3 text-sm font-bold text-fuchsia-100 transition hover:-translate-y-0.5 hover:bg-fuchsia-400/20">
+                    <FaSignInAlt /> Join Coaches HQ
                   </button>
                 )}
                 {legacyMode && (
@@ -379,8 +393,8 @@ const Groups = ({ legacyMode = false }) => {
 
             <div className="grid grid-cols-2 gap-3">
               {[
-                [allGroups.length, 'Schools', FaSchool],
-                [totalStudents, 'Students', FaUsers],
+                [allGroups.length, 'Workspaces', FaSchool],
+                [totalStudents, 'Members', FaUsers],
                 [groups.leading.length, legacyMode ? 'Leading' : 'Managing', FaCrown],
                 [roleLabels[allGroups[0]?.viewerSchoolRole] || role, 'Your role', FaShieldAlt]
               ].map(([value, label, Icon]) => (
@@ -400,7 +414,7 @@ const Groups = ({ legacyMode = false }) => {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search schools, workspace ID, or role"
+              placeholder="Search workspaces, ID, or role"
               className="w-full bg-transparent text-sm outline-none placeholder:text-slate-600"
             />
           </label>
@@ -418,15 +432,15 @@ const Groups = ({ legacyMode = false }) => {
         ) : (
           <>
             <WorkspaceSection
-              title={legacyMode ? 'Schools I lead' : 'Schools I administer'}
-              description={legacyMode ? 'Owner-created workspaces where you retain legacy leader controls.' : 'Schools where you can manage people, structure, and performance.'}
+              title={legacyMode ? 'Schools I lead' : 'Workspaces I lead'}
+              description={legacyMode ? 'Owner-created workspaces where you retain legacy leader controls.' : 'Schools, client spaces, and staff accountability groups you manage.'}
               icon={FaCrown}
               items={visibleLeading}
               isLeader
             />
             <WorkspaceSection
-              title={legacyMode ? 'Schools I joined' : 'Assigned schools'}
-              description={legacyMode ? 'Older workspaces where you participate as a member.' : 'Schools assigned to your account by an administrator.'}
+              title={legacyMode ? 'Schools I joined' : 'Assigned and joined workspaces'}
+              description={legacyMode ? 'Older workspaces where you participate as a member.' : 'Schools assigned to your account and Coaches HQ groups you joined.'}
               icon={FaUsers}
               items={visibleMemberOf}
               startIndex={100}
@@ -434,6 +448,7 @@ const Groups = ({ legacyMode = false }) => {
 
             {!visibleLeading.length && !visibleMemberOf.length && (
               <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-8 rounded-[2rem] border border-dashed border-white/15 bg-white/[0.035] px-6 py-16 text-center">
+                {!normalizedQuery ? <img src="/images/empty-states/no-school.webp" alt="An empty Inner Performance school workspace ready to be configured" className="mx-auto mb-6 h-44 w-full max-w-md rounded-[1.5rem] object-cover shadow-2xl shadow-indigo-950/30" /> : null}
                 <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-2xl ${legacyMode ? 'bg-amber-400/10 text-amber-300' : 'bg-cyan-400/10 text-cyan-300'}`}>
                   {normalizedQuery ? <FaSearch className="text-2xl" /> : <FaSchool className="text-2xl" />}
                 </div>
@@ -449,7 +464,7 @@ const Groups = ({ legacyMode = false }) => {
                 </p>
                 {!normalizedQuery && !legacyMode && role === 'admin' && (
                   <button onClick={() => setShowCreateModal(true)} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950">
-                    <FaPlus /> Create your first school
+                    <FaPlus /> Create your first workspace
                   </button>
                 )}
               </motion.section>
@@ -477,28 +492,28 @@ const Groups = ({ legacyMode = false }) => {
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-300">New school workspace</p>
-                  <h2 className="mt-2 text-2xl font-bold">Create a managed school</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">You will become its school administrator and can provision accounts immediately.</p>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-300">New performance workspace</p>
+                  <h2 className="mt-2 text-2xl font-bold">Choose the right operating model</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">Schools, one-to-one football clients, and staff accountability remain completely separate.</p>
                 </div>
                 <button type="button" onClick={() => setShowCreateModal(false)} className="rounded-xl border border-white/10 p-3 text-slate-400 hover:bg-white/5 hover:text-white"><FaTimes /></button>
               </div>
 
               <div className="mt-6 space-y-4">
                 <label className="block">
-                  <span className="mb-2 block text-xs font-semibold text-slate-400">School name</span>
-                  <input value={newGroup.name} onChange={(event) => setNewGroup({ ...newGroup, name: event.target.value })} placeholder="Northbridge Academy" required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400" />
+                  <span className="mb-2 block text-xs font-semibold text-slate-400">Workspace name</span>
+                  <input value={newGroup.name} onChange={(event) => setNewGroup({ ...newGroup, name: event.target.value })} placeholder={newGroup.groupType === 'staff' ? 'IP Coaches Accountability HQ' : 'Northbridge Academy'} required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400" />
                 </label>
                 <label className="block">
                   <span className="mb-2 block text-xs font-semibold text-slate-400">Workspace password</span>
                   <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-slate-950/70 px-4 focus-within:border-cyan-400">
                     <FaKey className="text-slate-600" />
-                    <input type="password" value={newGroup.password} onChange={(event) => setNewGroup({ ...newGroup, password: event.target.value })} placeholder="Secure school password" required className="w-full bg-transparent py-3 outline-none" />
+                    <input type="password" value={newGroup.password} onChange={(event) => setNewGroup({ ...newGroup, password: event.target.value })} placeholder="Secure workspace password" required className="w-full bg-transparent py-3 outline-none" />
                   </div>
                 </label>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label>
-                    <span className="mb-2 block text-xs font-semibold text-slate-400">Expected students</span>
+                    <span className="mb-2 block text-xs font-semibold text-slate-400">Expected {newGroup.groupType === 'staff' ? 'staff' : newGroup.groupType === 'football' ? 'clients' : 'students'}</span>
                     <input type="number" min="1" max="100" value={newGroup.memberCount} onChange={(event) => setNewGroup({ ...newGroup, memberCount: event.target.value })} required className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400" />
                   </label>
                   <label>
@@ -506,6 +521,7 @@ const Groups = ({ legacyMode = false }) => {
                     <select value={newGroup.groupType} onChange={(event) => setNewGroup({ ...newGroup, groupType: event.target.value })} className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 outline-none focus:border-cyan-400">
                       <option value="school">School</option>
                       <option value="football">Football group</option>
+                      <option value="staff">Coaches / admins HQ</option>
                     </select>
                   </label>
                 </div>
@@ -514,14 +530,14 @@ const Groups = ({ legacyMode = false }) => {
               <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button type="button" onClick={() => setShowCreateModal(false)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold hover:bg-white/5">Cancel</button>
                 <button disabled={submitting} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950 disabled:opacity-50">
-                  <FaPlus /> {submitting ? 'Creating...' : 'Create school'}
+                  <FaPlus /> {submitting ? 'Creating...' : 'Create workspace'}
                 </button>
               </div>
             </motion.form>
           </motion.div>
         )}
 
-        {showJoinModal && legacyMode && (
+        {showJoinModal && (legacyMode || ['admin', 'teacher'].includes(role)) && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -535,13 +551,13 @@ const Groups = ({ legacyMode = false }) => {
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
               onMouseDown={(event) => event.stopPropagation()}
               onSubmit={handleJoinGroup}
-              className="w-full max-w-lg rounded-[2rem] border border-amber-300/20 bg-[#11101c] p-6 shadow-2xl sm:p-8"
+              className={`w-full max-w-lg rounded-[2rem] border bg-[#11101c] p-6 shadow-2xl sm:p-8 ${legacyMode ? 'border-amber-300/20' : 'border-fuchsia-300/20'}`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-amber-300">Legacy access</p>
-                  <h2 className="mt-2 text-2xl font-bold">Join an older workspace</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">Use the original workspace ID and password supplied by its owner.</p>
+                  <p className={`text-xs font-bold uppercase tracking-[0.24em] ${legacyMode ? 'text-amber-300' : 'text-fuchsia-300'}`}>{legacyMode ? 'Legacy access' : 'Staff accountability'}</p>
+                  <h2 className="mt-2 text-2xl font-bold">{legacyMode ? 'Join an older workspace' : 'Join a Coaches HQ'}</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">{legacyMode ? 'Use the original workspace ID and password supplied by its owner.' : 'Use the HQ ID and password supplied by its admin. Student accounts are never admitted.'}</p>
                 </div>
                 <button type="button" onClick={() => setShowJoinModal(false)} className="rounded-xl border border-white/10 p-3 text-slate-400 hover:bg-white/5 hover:text-white"><FaTimes /></button>
               </div>
@@ -559,7 +575,7 @@ const Groups = ({ legacyMode = false }) => {
 
               <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button type="button" onClick={() => setShowJoinModal(false)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold hover:bg-white/5">Cancel</button>
-                <button disabled={submitting} className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-amber-950 disabled:opacity-50">
+                <button disabled={submitting} className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold disabled:opacity-50 ${legacyMode ? 'bg-amber-300 text-amber-950' : 'bg-fuchsia-300 text-fuchsia-950'}`}>
                   <FaSignInAlt /> {submitting ? 'Joining...' : 'Join workspace'}
                 </button>
               </div>

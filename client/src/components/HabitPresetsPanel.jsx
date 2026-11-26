@@ -15,16 +15,17 @@ const HabitPresetsPanel = ({
   }
 
   return (
-    <div>
+    <section className="rounded-[2rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.045] sm:p-6">
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">Habit Presets</h2>
-            <p className="text-secondary-600 dark:text-secondary-400">Create and manage habit templates to quickly set up challenges</p>
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-violet-600 dark:text-cyan-300">Templates</p>
+            <h2 className="mb-2 mt-1 text-3xl font-black tracking-tight text-slate-950 dark:text-white">Habit Presets</h2>
+            <p className="text-slate-600 dark:text-slate-400">Create and manage habit templates to quickly set up challenges</p>
           </div>
           <button
             onClick={onCreatePreset}
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium transition-colors shadow-lg"
+            className="rounded-xl bg-gradient-to-r from-violet-600 to-cyan-500 px-6 py-3 font-bold text-white shadow-lg shadow-violet-500/20 transition hover:-translate-y-0.5"
           >
             + Create Preset
           </button>
@@ -32,7 +33,7 @@ const HabitPresetsPanel = ({
       </div>
 
       {habitPresets.length === 0 ? (
-        <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-12 text-center border border-gray-200 dark:border-secondary-700">
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-12 text-center dark:border-white/15 dark:bg-black/10">
           <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
           </svg>
@@ -40,7 +41,7 @@ const HabitPresetsPanel = ({
           <p className="text-secondary-500 dark:text-secondary-400 mb-6">Create your first habit preset to save time when setting up challenges</p>
           <button
             onClick={onCreatePreset}
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+            className="rounded-xl bg-gradient-to-r from-violet-600 to-cyan-500 px-6 py-3 font-bold text-white shadow-lg shadow-violet-500/20"
           >
             Create Your First Preset
           </button>
@@ -48,7 +49,7 @@ const HabitPresetsPanel = ({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {habitPresets.map((preset) => (
-            <div key={preset.id} className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700 hover:shadow-2xl transition-shadow">
+            <div key={preset.id} className="rounded-2xl border border-slate-200 bg-white/75 p-6 transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-xl dark:border-white/10 dark:bg-white/[0.035] dark:hover:border-white/20">
               <div className="flex items-start justify-between mb-4">
                 <h3 className="text-xl font-semibold text-secondary-900 dark:text-white">{preset.name}</h3>
                 <div className="flex gap-2">
@@ -105,10 +106,10 @@ const HabitPresetsPanel = ({
               <button
                 onClick={() => onLoadPreset(preset.id)}
                 disabled={!!group?.activeChallenge}
-                className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
+                className={`w-full rounded-xl px-4 py-2.5 font-bold transition-all ${
                   group?.activeChallenge
-                    ? 'bg-gray-400 dark:bg-gray-600 text-gray-700 dark:text-gray-300 cursor-not-allowed'
-                    : 'bg-primary-600 hover:bg-primary-700 text-white'
+                    ? 'cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-white/10 dark:text-slate-400'
+                    : 'bg-gradient-to-r from-violet-600 to-cyan-500 text-white shadow-lg shadow-violet-500/15 hover:-translate-y-0.5'
                 }`}
               >
                 {group?.activeChallenge ? 'Challenge Active' : 'Load Preset'}
@@ -117,7 +118,7 @@ const HabitPresetsPanel = ({
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 };
 

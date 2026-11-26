@@ -13,11 +13,20 @@ const ChallengeMemberHabitsPanel = ({
   editChallengeHabitsMode,
   lockedChallengeMemberIds,
   toggleMemberCollapseInModal,
-  setMemberHabits
+  setMemberHabits,
+  schoolProfileMap,
+  selectedRetryMemberIds = [],
+  onToggleRetryMember,
+  onRetryMember,
+  canRetryAi,
+  retryingHabits,
+  workspaceType = 'school'
 }) => {
+  const isFootballWorkspace = workspaceType === 'football';
+  const memberLabel = isFootballWorkspace ? 'client' : 'student';
   const habitsToShow = isEditingHabits ? memberHabits : lockedHabits;
   const totalHabits = Object.values(habitsToShow).flat().length;
-  const hasHabits = Object.keys(habitsToShow).length > 0;
+  const studentMembers = (groupMembers || []).filter((member) => !member.accountRole || member.accountRole === 'student');
 
   const removeHabit = (memberId, habitIndex) => {
     const nextMemberHabits = { ...memberHabits };
@@ -25,6 +34,14 @@ const ChallengeMemberHabitsPanel = ({
     if (nextMemberHabits[memberId].length === 0) {
       delete nextMemberHabits[memberId];
     }
+    setMemberHabits(nextMemberHabits);
+  };
+
+  const updateHabit = (memberId, habitIndex, patch) => {
+    const nextMemberHabits = { ...memberHabits };
+    nextMemberHabits[memberId] = (nextMemberHabits[memberId] || []).map((habit, index) => (
+      index === habitIndex ? { ...habit, ...patch } : habit
+    ));
     setMemberHabits(nextMemberHabits);
   };
 
@@ -65,7 +82,93 @@ const ChallengeMemberHabitsPanel = ({
         </div>
       </div>
 
-      {!hasHabits ? (
+      <details className="mb-4 overflow-hidden rounded-2xl border border-violet-200 bg-violet-50/70 dark:border-violet-400/20 dark:bg-violet-500/5">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-violet-800 dark:text-violet-200">
+          Open quick review table
+        </summary>
+        <div className="overflow-x-auto border-t border-violet-200 dark:border-violet-400/20">
+          <table className="min-w-[920px] w-full text-left text-xs">
+            <thead className="bg-white/70 text-[10px] uppercase tracking-wider text-slate-500 dark:bg-slate-950/50">
+              <tr>
+                <th className="px-3 py-2">{isFootballWorkspace ? 'Client' : 'Student'}</th>
+                <th className="px-3 py-2">Habit</th>
+                <th className="px-3 py-2">Minutes</th>
+                <th className="px-3 py-2">Purpose</th>
+                <th className="px-3 py-2">Goal link</th>
+                <th className="px-3 py-2">Schedule</th>
+                <th className="px-3 py-2">AI</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-violet-100 dark:divide-white/5">
+              {studentMembers.flatMap((member) => {
+                const memberId = String(member.id);
+                const habits = habitsToShow[memberId] || [];
+                const isLocked = editChallengeHabitsMode && lockedChallengeMemberIds.has(memberId);
+                if (!habits.length) {
+                  return [(
+                    <tr key={`${memberId}-missing`} className="bg-rose-50/60 dark:bg-rose-500/5">
+                      <td className="px-3 py-3 font-bold text-slate-900 dark:text-white">{member.username}</td>
+                      <td colSpan="5" className="px-3 py-3 font-semibold text-rose-600 dark:text-rose-300">No habit assigned</td>
+                      <td className="px-3 py-3">
+                        <button type="button" disabled={!canRetryAi || retryingHabits} onClick={() => onRetryMember?.(member.id)} className="rounded-lg border border-violet-200 px-2 py-1 font-bold text-violet-700 disabled:opacity-40 dark:border-violet-400/20 dark:text-violet-200">
+                          Retry
+                        </button>
+                      </td>
+                    </tr>
+                  )];
+                }
+                return habits.map((habit, habitIndex) => (
+                  <tr key={`${memberId}-${habitIndex}`} className="bg-white/55 dark:bg-slate-950/20">
+                    <td className="px-3 py-3 font-bold text-slate-900 dark:text-white">{member.username}</td>
+                    <td className="px-3 py-3">
+                      {isEditingHabits && !isLocked ? (
+                        <input value={habit.name || ''} onChange={(event) => updateHabit(memberId, habitIndex, { name: event.target.value })} className="w-52 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-white/10 dark:bg-slate-900 dark:text-white" />
+                      ) : (
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">{habit.name}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      {isEditingHabits && !isLocked ? (
+                        <input type="number" min="1" max="240" value={habit.durationMinutes || 30} onChange={(event) => updateHabit(memberId, habitIndex, { durationMinutes: Number(event.target.value) || 1 })} className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 dark:border-white/10 dark:bg-slate-900 dark:text-white" />
+                      ) : (
+                        habit.durationMinutes || 30
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      {isEditingHabits && !isLocked ? (
+                        <select value={habit.combatType || 'attack'} onChange={(event) => updateHabit(memberId, habitIndex, { combatType: event.target.value })} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 dark:border-white/10 dark:bg-slate-900 dark:text-white">
+                          <option value="attack">Attack</option>
+                          <option value="defence">Defence</option>
+                        </select>
+                      ) : (
+                        <span className="capitalize">{habit.combatType}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      {isEditingHabits && !isLocked ? (
+                        <select value={habit.linkedGoalId || ''} onChange={(event) => updateHabit(memberId, habitIndex, { linkedGoalId: event.target.value || null })} className="w-44 rounded-lg border border-slate-200 bg-white px-2 py-1.5 dark:border-white/10 dark:bg-slate-900 dark:text-white">
+                          <option value="">No linked goal</option>
+                          {(schoolProfileMap?.[memberId]?.goals || []).map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+                        </select>
+                      ) : (
+                        (schoolProfileMap?.[memberId]?.goals || []).find((goal) => String(goal.id) === String(habit.linkedGoalId))?.title || 'Not linked'
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-slate-500 dark:text-slate-400">{habit.scheduleDays?.length || 0} days</td>
+                    <td className="px-3 py-3">
+                      <button type="button" disabled={!canRetryAi || retryingHabits} onClick={() => onRetryMember?.(member.id)} className="rounded-lg border border-violet-200 px-2 py-1 font-bold text-violet-700 disabled:opacity-40 dark:border-violet-400/20 dark:text-violet-200">
+                        Retry {memberLabel}
+                      </button>
+                    </td>
+                  </tr>
+                ));
+              })}
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      {!studentMembers.length ? (
         <div className="text-center py-12">
           <div className="text-6xl mb-4">👥</div>
           <p className="text-gray-500 dark:text-gray-400 mb-2">
@@ -77,8 +180,9 @@ const ChallengeMemberHabitsPanel = ({
         </div>
       ) : (
         <div className="space-y-4">
-          {Object.entries(habitsToShow).map(([memberId, habits]) => {
-            const member = groupMembers?.find((groupMember) => String(groupMember.id) === String(memberId));
+          {studentMembers.map((member) => {
+            const memberId = String(member.id);
+            const habits = habitsToShow[memberId] || [];
             const isCollapsed = collapsedMembersInModal[memberId];
             const isLocked = editChallengeHabitsMode && lockedChallengeMemberIds.has(String(memberId));
 
@@ -118,6 +222,29 @@ const ChallengeMemberHabitsPanel = ({
                     </h4>
                     <p className="text-xs text-gray-500 dark:text-gray-400">{habits.length} habit{habits.length !== 1 ? 's' : ''}</p>
                   </div>
+                  {canRetryAi && (
+                    <input
+                      type="checkbox"
+                      checked={selectedRetryMemberIds.includes(member.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() => onToggleRetryMember?.(member.id)}
+                      className="h-4 w-4 accent-violet-600"
+                      title="Select for AI regeneration"
+                    />
+                  )}
+                  {canRetryAi && (
+                    <button
+                      type="button"
+                      disabled={retryingHabits}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRetryMember?.(member.id);
+                      }}
+                      className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-bold text-violet-700 disabled:opacity-40 dark:border-violet-400/20 dark:text-violet-200"
+                    >
+                      Retry AI
+                    </button>
+                  )}
                   {!isEditingHabits && (
                     <div className="flex-shrink-0">
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
@@ -139,6 +266,11 @@ const ChallengeMemberHabitsPanel = ({
 
                 <div className={`px-4 pb-4 transition-all duration-300 ease-in-out overflow-hidden ${isEditingHabits && !isLocked && isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[1000px] opacity-100'}`}>
                   <div className="space-y-2">
+                    {!habits.length && (
+                      <div className="rounded-xl border border-dashed border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700 dark:border-rose-400/20 dark:bg-rose-500/10 dark:text-rose-200">
+                        No habits assigned. Select this {memberLabel} and retry AI, or add a habit manually.
+                      </div>
+                    )}
                     {habits.map((habit, habitIndex) => (
                       <div key={habitIndex} className="bg-white dark:bg-gray-800 rounded p-3 border border-gray-200 dark:border-gray-600">
                         <div className="flex items-start justify-between">
@@ -147,9 +279,46 @@ const ChallengeMemberHabitsPanel = ({
                             {habit.description && (
                               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">{habit.description}</p>
                             )}
+                            {isEditingHabits && !isLocked && (
+                              <div className="mt-3 grid gap-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-950/55 sm:grid-cols-2">
+                                <input
+                                  value={habit.name || ''}
+                                  onChange={(event) => updateHabit(memberId, habitIndex, { name: event.target.value })}
+                                  placeholder="Habit name"
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                                />
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="240"
+                                  value={habit.durationMinutes || 30}
+                                  onChange={(event) => updateHabit(memberId, habitIndex, { durationMinutes: Number(event.target.value) || 1 })}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                                  title="Estimated minutes"
+                                />
+                                <select
+                                  value={habit.combatType || 'attack'}
+                                  onChange={(event) => updateHabit(memberId, habitIndex, { combatType: event.target.value })}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                                >
+                                  <option value="attack">Attack</option>
+                                  <option value="defence">Defence</option>
+                                </select>
+                                <select
+                                  value={habit.linkedGoalId || ''}
+                                  onChange={(event) => updateHabit(memberId, habitIndex, { linkedGoalId: event.target.value || null })}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-white/10 dark:bg-slate-900 dark:text-white"
+                                >
+                                  <option value="">No linked goal</option>
+                                  {(schoolProfileMap?.[memberId]?.goals || []).map((goal) => (
+                                    <option key={goal.id} value={goal.id}>{goal.title}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                             <div className="flex items-center gap-2 mt-2 flex-wrap">
                               <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs">
-                                {habit.habitType === 'boolean' ? 'Checkbox' : habit.habitType === 'numeric' ? 'Numeric' : 'Text'}
+                                {habit.habitType === 'boolean' ? 'Checkbox' : habit.habitType === 'numeric' ? 'Numeric' : habit.habitType === 'periodic' ? 'Periodic' : 'Text'}
                               </span>
                               {habit.habitType === 'numeric' && (
                                 <span className="text-xs text-gray-500 dark:text-gray-400">{habit.minValue} - {habit.maxValue}</span>
@@ -168,6 +337,16 @@ const ChallengeMemberHabitsPanel = ({
                                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round" />
                                   </svg>
                                   Defence
+                                </span>
+                              )}
+                              {habit.habitType === 'periodic' && (
+                                <span className="rounded bg-cyan-100 px-2 py-1 text-xs text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-200">
+                                  {habit.periodicOccurrences || 4} times · every {habit.periodicIntervalHours || 4}h{habit.allowOverlap ? ' · may overlap' : ''}
+                                </span>
+                              )}
+                              {habit.linkedGoalId && (
+                                <span className="rounded bg-violet-100 px-2 py-1 text-xs text-violet-800 dark:bg-violet-900/30 dark:text-violet-200">
+                                  Goal: {(schoolProfileMap?.[String(memberId)]?.goals || []).find((goal) => String(goal.id) === String(habit.linkedGoalId))?.title || 'Linked goal'}
                                 </span>
                               )}
                               <div className="mt-2 text-xs font-medium text-violet-600 dark:text-violet-300">

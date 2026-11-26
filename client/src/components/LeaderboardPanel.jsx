@@ -2,21 +2,21 @@ import React from 'react';
 
 const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
   return (
-    <div>
+    <section className="rounded-[2rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.045] sm:p-6">
       <div className="mb-8">
         <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">🏆 Habit Streaks Leaderboard</h2>
-        <p className="text-secondary-600 dark:text-secondary-400 mb-4">Compete for the top spot! Ranking combines your best streak (60%) and total completions (40%).</p>
+        <p className="mb-4 text-slate-600 dark:text-slate-400">Ranking combines the strongest current full-completion streak (60%) and today&apos;s scheduled progress (40%). Recurring progress contributes proportionally.</p>
 
-        <div className="bg-gradient-to-r from-primary-50 to-secondary-50 dark:from-primary-900/20 dark:to-secondary-900/20 rounded-xl p-4 border border-primary-200 dark:border-primary-800">
+        <div className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-cyan-50 p-4 dark:border-violet-400/20 dark:from-violet-500/10 dark:to-cyan-400/5">
           <h3 className="font-semibold text-secondary-900 dark:text-white mb-2">📊 How Ranking Works:</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div>
-              <span className="font-medium text-primary-600 dark:text-primary-400">60% - Best Streak:</span>
-              <span className="text-secondary-600 dark:text-secondary-400 ml-2">Your longest consecutive day streak</span>
+              <span className="font-medium text-primary-600 dark:text-primary-400">60% - Current Streak:</span>
+              <span className="text-secondary-600 dark:text-secondary-400 ml-2">Your strongest current 100% scheduled-occurrence streak</span>
             </div>
             <div>
-              <span className="font-medium text-primary-600 dark:text-primary-400">40% - Total Completions:</span>
-              <span className="text-secondary-600 dark:text-secondary-400 ml-2">Sum of all your habit completions</span>
+              <span className="font-medium text-primary-600 dark:text-primary-400">40% - Today:</span>
+              <span className="text-secondary-600 dark:text-secondary-400 ml-2">Progress across habits scheduled today</span>
             </div>
           </div>
         </div>
@@ -26,7 +26,7 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
         {leaderboardData.map((entry, index) => (
           <div
             key={entry.member.id}
-            className={`relative bg-white dark:bg-secondary-800 rounded-2xl shadow-lg border-2 transition-all duration-300 hover:shadow-2xl hover:scale-[1.01] ${
+            className={`relative rounded-2xl border-2 bg-white/80 shadow-lg transition-all duration-300 hover:-translate-y-0.5 hover:shadow-2xl dark:bg-white/[0.035] ${
               entry.isCurrentUser ? 'ring-4 ring-primary-500/30 border-primary-500' :
               index === 0 ? 'border-yellow-400 dark:border-yellow-500 shadow-yellow-200/20' :
               index === 1 ? 'border-gray-300 dark:border-gray-600 shadow-gray-200/20' :
@@ -69,10 +69,10 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
                       </div>
                       <div className="flex items-center gap-4 mt-1">
                         <span className="text-sm text-secondary-600 dark:text-secondary-400">
-                          {entry.completedToday}/{entry.totalHabits} today
+                          {entry.completedToday}/{entry.totalHabits} completion units today
                         </span>
                         <span className="text-sm text-secondary-600 dark:text-secondary-400">
-                          {entry.totalCompleted} total completions
+                          {entry.totalCompleted} completion units total
                         </span>
                       </div>
                     </div>
@@ -89,7 +89,7 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
                         {entry.maxStreak}
                       </div>
                       <div className="text-sm font-medium text-secondary-600 dark:text-secondary-400 uppercase tracking-wide">
-                        Day{entry.maxStreak !== 1 ? 's' : ''} Streak
+                        Scheduled occasion{entry.maxStreak !== 1 ? 's' : ''} streak
                       </div>
                     </div>
                   </div>
@@ -106,12 +106,12 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
               </div>
 
               {(isLeader || entry.isCurrentUser) && entry.habitStreaks.length > 0 && (
-                <div className="mt-6 pt-4 border-t border-gray-200 dark:border-secondary-700">
+                <div className="mt-6 border-t border-slate-200 pt-4 dark:border-white/10">
                   <h4 className="text-sm font-semibold text-secondary-700 dark:text-secondary-300 mb-3 uppercase tracking-wide">
                     {entry.isCurrentUser ? 'Your Habit Details:' : 'Habit Breakdown:'}
                   </h4>
 
-                  <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                  <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-white/10 dark:bg-black/10">
                     <h5 className="text-sm font-semibold text-secondary-700 dark:text-secondary-300 mb-2 uppercase tracking-wide">
                       Score Breakdown:
                     </h5>
@@ -130,9 +130,9 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
                       </div>
                       <div className="text-center">
                         <div className="text-lg font-bold text-blue-600 dark:text-blue-400">
-                          {Math.round((entry.totalCompleted / (entry.totalHabits * 30)) * 100 * 0.4)}
+                          {entry.totalHabits ? Math.round((entry.completedToday / entry.totalHabits) * 100 * 0.4) : 0}
                         </div>
-                        <div className="text-xs text-secondary-500 dark:text-secondary-400">Completion Points (40%)</div>
+                        <div className="text-xs text-secondary-500 dark:text-secondary-400">Today Points (40%)</div>
                       </div>
                     </div>
                   </div>
@@ -164,7 +164,7 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
                             {habit.streak}
                           </div>
                           <div className="text-xs text-secondary-500 dark:text-secondary-400">
-                            days
+                            scheduled occasions
                           </div>
                         </div>
                       </div>
@@ -176,7 +176,7 @@ const LeaderboardPanel = ({ leaderboardData, isLeader }) => {
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 };
 

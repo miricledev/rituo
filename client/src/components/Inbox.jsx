@@ -1,56 +1,107 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  FiBell,
+  FiCheck,
+  FiChevronRight,
+  FiInbox,
+  FiMessageCircle,
+  FiRefreshCw,
+  FiSearch,
+  FiShield,
+  FiUsers,
+  FiX
+} from 'react-icons/fi';
 import chatService from '../services/chat.js';
+import { HOMEWORK_ENABLED } from '../config/features';
 
 const filterOptions = [
-  { value: 'all', label: 'All' },
-  { value: 'system', label: 'System' },
-  { value: 'group', label: 'Group' },
-  { value: 'dm', label: 'DM' }
+  { value: 'all', label: 'All', icon: FiInbox },
+  { value: 'system', label: 'System', icon: FiShield },
+  { value: 'group', label: 'Groups', icon: FiUsers },
+  { value: 'dm', label: 'Messages', icon: FiMessageCircle }
 ];
+
+const isHomeworkMessage = (message) => {
+  const content = (message.content || '').toLowerCase();
+  return (
+    content.startsWith('homework set:') ||
+    content.includes('submitted homework:') ||
+    content.startsWith('homework reviewed:') ||
+    content.startsWith('homework reminder sent:')
+  );
+};
 
 const getInboxTone = (message) => {
   const content = (message.content || '').toLowerCase();
   if (message.category === 'system') {
     return {
-      pill: 'bg-amber-500 text-white',
-      text: 'text-amber-200',
-      accent: 'border-l-amber-400'
+      pill: 'border-amber-300/20 bg-amber-300/10 text-amber-200',
+      icon: 'bg-amber-400/15 text-amber-200 ring-amber-300/20',
+      glow: 'from-amber-400/15 to-transparent'
     };
   }
   if (content.startsWith('homework set:')) {
     return {
-      pill: 'bg-blue-500 text-white',
-      text: 'text-blue-200',
-      accent: 'border-l-blue-400'
+      pill: 'border-blue-300/20 bg-blue-300/10 text-blue-200',
+      icon: 'bg-blue-400/15 text-blue-200 ring-blue-300/20',
+      glow: 'from-blue-400/15 to-transparent'
     };
   }
   if (content.includes('submitted homework:')) {
     return {
-      pill: 'bg-emerald-500 text-white',
-      text: 'text-emerald-200',
-      accent: 'border-l-emerald-400'
+      pill: 'border-emerald-300/20 bg-emerald-300/10 text-emerald-200',
+      icon: 'bg-emerald-400/15 text-emerald-200 ring-emerald-300/20',
+      glow: 'from-emerald-400/15 to-transparent'
     };
   }
   if (content.startsWith('homework reviewed:')) {
     return {
-      pill: 'bg-violet-500 text-white',
-      text: 'text-violet-200',
-      accent: 'border-l-violet-400'
+      pill: 'border-violet-300/20 bg-violet-300/10 text-violet-200',
+      icon: 'bg-violet-400/15 text-violet-200 ring-violet-300/20',
+      glow: 'from-violet-400/15 to-transparent'
     };
   }
   if (content.startsWith('homework reminder sent:')) {
     return {
-      pill: 'bg-amber-500 text-white',
-      text: 'text-amber-200',
-      accent: 'border-l-amber-400'
+      pill: 'border-amber-300/20 bg-amber-300/10 text-amber-200',
+      icon: 'bg-amber-400/15 text-amber-200 ring-amber-300/20',
+      glow: 'from-amber-400/15 to-transparent'
+    };
+  }
+  if (message.category === 'group') {
+    return {
+      pill: 'border-cyan-300/20 bg-cyan-300/10 text-cyan-200',
+      icon: 'bg-cyan-400/15 text-cyan-200 ring-cyan-300/20',
+      glow: 'from-cyan-400/15 to-transparent'
     };
   }
   return {
-    pill: message.category === 'group' ? 'bg-blue-500 text-white' : 'bg-purple-500 text-white',
-    text: 'text-gray-300',
-    accent: 'border-l-transparent'
+    pill: 'border-fuchsia-300/20 bg-fuchsia-300/10 text-fuchsia-200',
+    icon: 'bg-fuchsia-400/15 text-fuchsia-200 ring-fuchsia-300/20',
+    glow: 'from-fuchsia-400/15 to-transparent'
   };
+};
+
+const getCategoryDetails = (message) => {
+  if (message.category === 'system') return { label: 'System', icon: FiShield };
+  if (message.category === 'group') return { label: 'Group', icon: FiUsers };
+  return { label: 'Message', icon: FiMessageCircle };
+};
+
+const formatTime = (timestamp) => {
+  const messageDate = new Date(timestamp);
+  if (Number.isNaN(messageDate.getTime())) return '';
+  const now = new Date();
+  const differenceMs = Math.max(0, now - messageDate);
+  const differenceHours = differenceMs / (1000 * 60 * 60);
+  if (differenceHours < 1) {
+    return `${Math.max(1, Math.floor(differenceMs / (1000 * 60)))}m ago`;
+  }
+  if (differenceHours < 24) {
+    return `${Math.floor(differenceHours)}h ago`;
+  }
+  return messageDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 };
 
 const Inbox = () => {
@@ -59,30 +110,36 @@ const Inbox = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
   const [scopeFilter, setScopeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [batchUpdating, setBatchUpdating] = useState(false);
   const navigate = useNavigate();
 
-  const fetchInbox = async () => {
+  const fetchInbox = async ({ showLoading = false } = {}) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
+      setLoadError('');
       const [inboxResponse, count] = await Promise.all([
         chatService.getInbox(),
         chatService.getUnreadCount()
       ]);
-      const messages = inboxResponse?.messages || [];
+      const messages = (inboxResponse?.messages || []).filter(
+        (message) => HOMEWORK_ENABLED || !isHomeworkMessage(message)
+      );
       setInboxMessages(messages);
-      setCounts(inboxResponse?.counts || {
+      setCounts({
         all: messages.length,
         system: messages.filter((item) => item.category === 'system').length,
         group: messages.filter((item) => item.category === 'group').length,
         dm: messages.filter((item) => item.category === 'dm').length
       });
-      setUnreadCount(count);
+      setUnreadCount(HOMEWORK_ENABLED ? count : messages.filter((message) => message.unread).length);
+    } catch (_error) {
+      setLoadError('Notifications could not be refreshed. Check your connection and try again.');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -99,18 +156,10 @@ const Inbox = () => {
   const filteredMessages = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
     return inboxMessages.filter((message) => {
-      if (activeFilter !== 'all' && message.category !== activeFilter) {
-        return false;
-      }
-      if (scopeFilter === 'class-only' && !message.class_id) {
-        return false;
-      }
-      if (scopeFilter !== 'all' && scopeFilter !== 'class-only' && String(message.class_id || '') !== scopeFilter) {
-        return false;
-      }
-      if (!normalizedQuery) {
-        return true;
-      }
+      if (activeFilter !== 'all' && message.category !== activeFilter) return false;
+      if (scopeFilter === 'class-only' && !message.class_id) return false;
+      if (scopeFilter !== 'all' && scopeFilter !== 'class-only' && String(message.class_id || '') !== scopeFilter) return false;
+      if (!normalizedQuery) return true;
       const haystack = [
         message.sender_username,
         message.group_name,
@@ -134,24 +183,6 @@ const Inbox = () => {
     }
   };
 
-  const formatTime = (timestamp) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffInHours = (now - date) / (1000 * 60 * 60);
-    if (diffInHours < 1) {
-      return `${Math.max(1, Math.floor((now - date) / (1000 * 60)))}m ago`;
-    }
-    if (diffInHours < 24) {
-      return `${Math.floor(diffInHours)}h ago`;
-    }
-    return date.toLocaleDateString();
-  };
-
-  const truncateContent = (content, maxLength = 72) => {
-    if ((content || '').length <= maxLength) return content;
-    return `${content.substring(0, maxLength)}...`;
-  };
-
   const handleMarkVisibleRead = async () => {
     if (!visibleUnreadMessages.length) return;
     try {
@@ -163,8 +194,13 @@ const Inbox = () => {
     }
   };
 
+  const openInbox = () => {
+    setIsOpen(true);
+    fetchInbox({ showLoading: inboxMessages.length === 0 });
+  };
+
   useEffect(() => {
-    fetchInbox();
+    fetchInbox({ showLoading: true });
     window.refreshInboxUnreadCount = fetchInbox;
     const interval = setInterval(fetchInbox, 30000);
     return () => {
@@ -173,156 +209,238 @@ const Inbox = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
   return (
     <div className="relative">
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-gray-300 hover:text-white transition-colors"
-        aria-label="Open notifications"
+        type="button"
+        onClick={isOpen ? () => setIsOpen(false) : openInbox}
+        className="group relative flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 shadow-sm transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-cyan-300/60"
+        aria-label={unreadCount > 0 ? `Open notifications, ${unreadCount} unread` : 'Open notifications'}
+        aria-expanded={isOpen}
+        aria-controls="notification-centre"
       >
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-        </svg>
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 min-w-[20px] px-1 flex items-center justify-center font-bold">
+        <FiBell className="h-5 w-5 transition-transform group-hover:-rotate-6" />
+        {unreadCount > 0 ? (
+          <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full border-2 border-slate-950 bg-gradient-to-r from-rose-500 to-orange-400 px-1 text-[10px] font-black leading-none text-white shadow-lg shadow-rose-500/20">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
-        )}
+        ) : null}
       </button>
 
-      {isOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-20 z-50" onClick={() => setIsOpen(false)}>
-          <div className="w-[28rem] max-w-[calc(100vw-2rem)] bg-gray-800 border border-gray-700 rounded-lg shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 border-b border-gray-700 flex justify-between items-start gap-3">
-              <div>
-                <h3 className="text-lg font-semibold text-white">Notification center</h3>
-                <p className="text-sm text-gray-400">{unreadCount > 0 ? `${unreadCount} unread notifications` : 'All caught up'}</p>
-              </div>
-              <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-white transition-colors p-1" aria-label="Close notifications">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+      {isOpen ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-stretch justify-center overflow-hidden bg-slate-950/80 backdrop-blur-md sm:p-5 lg:justify-end lg:p-6"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsOpen(false);
+          }}
+        >
+          <section
+            id="notification-centre"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notification-centre-title"
+            className="relative flex h-full max-h-full w-full flex-col overflow-hidden bg-[#07101f] text-white shadow-2xl shadow-black/50 sm:max-w-2xl sm:rounded-[2rem] sm:border sm:border-white/10 lg:max-w-[38rem]"
+          >
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-52 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.16),transparent_48%),radial-gradient(circle_at_top_right,rgba(168,85,247,0.16),transparent_45%)]" />
 
-            <div className="px-4 py-3 border-b border-gray-700 flex flex-wrap gap-2">
-              {filterOptions.map((option) => (
+            <header className="relative z-30 shrink-0 border-b border-white/10 bg-[#07101f]/95 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-5 sm:pt-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-violet-500 text-slate-950 shadow-lg shadow-cyan-500/20 sm:h-14 sm:w-14">
+                    <FiBell className="h-6 w-6" />
+                    {unreadCount > 0 ? <span className="absolute -right-1 -top-1 h-3.5 w-3.5 rounded-full border-2 border-[#07101f] bg-rose-400" /> : null}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300/80">IP command feed</p>
+                    <h2 id="notification-centre-title" className="truncate text-xl font-black tracking-tight sm:text-2xl">Notification centre</h2>
+                    <p className="mt-0.5 text-xs text-slate-400 sm:text-sm">
+                      {unreadCount > 0 ? `${unreadCount} update${unreadCount === 1 ? '' : 's'} waiting for you` : 'You are fully caught up'}
+                    </p>
+                  </div>
+                </div>
                 <button
-                  key={option.value}
                   type="button"
-                  onClick={() => setActiveFilter(option.value)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${activeFilter === option.value ? 'bg-primary-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                  onClick={() => setIsOpen(false)}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-cyan-300/60"
+                  aria-label="Close notifications"
                 >
-                  {option.label} ({counts[option.value] ?? 0})
+                  <FiX className="h-5 w-5" />
                 </button>
-              ))}
-            </div>
-
-            <div className="px-4 py-3 border-b border-gray-700 space-y-3">
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search inbox"
-                  className="flex-1 rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-                <select
-                  value={scopeFilter}
-                  onChange={(event) => setScopeFilter(event.target.value)}
-                  className="rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="all">All scopes</option>
-                  <option value="class-only">Class chat only</option>
-                  {availableClassScopes.map((scope) => (
-                    <option key={scope.id} value={scope.id}>
-                      {scope.name}
-                    </option>
-                  ))}
-                </select>
               </div>
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-gray-400">
-                  {filteredMessages.length} visible
-                  {visibleUnreadMessages.length > 0 ? ` • ${visibleUnreadMessages.length} unread in view` : ''}
+            </header>
+
+            <div className="relative shrink-0 border-b border-white/10 bg-slate-950/20 px-4 py-3 sm:px-6 sm:py-4">
+              <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-4 sm:overflow-visible sm:px-0">
+                {filterOptions.map((option) => {
+                  const FilterIcon = option.icon;
+                  const selected = activeFilter === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setActiveFilter(option.value)}
+                      className={`flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-black transition focus:outline-none focus:ring-2 focus:ring-cyan-300/60 sm:w-full ${selected ? 'border-cyan-300/30 bg-cyan-300/15 text-cyan-100 shadow-inner shadow-cyan-300/5' : 'border-white/10 bg-white/[0.035] text-slate-400 hover:bg-white/10 hover:text-white'}`}
+                      aria-pressed={selected}
+                    >
+                      <FilterIcon className="h-3.5 w-3.5" />
+                      <span>{option.label}</span>
+                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${selected ? 'bg-cyan-200/15 text-cyan-100' : 'bg-white/5 text-slate-500'}`}>{counts[option.value] ?? 0}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
+                <label className="relative block">
+                  <span className="sr-only">Search notifications</span>
+                  <FiSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search notifications"
+                    className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/60 py-2 pl-10 pr-10 text-sm text-white outline-none placeholder:text-slate-600 focus:border-cyan-300/40 focus:ring-2 focus:ring-cyan-300/15"
+                  />
+                  {searchQuery ? (
+                    <button type="button" onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 hover:bg-white/10 hover:text-white" aria-label="Clear notification search">
+                      <FiX className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </label>
+                <label>
+                  <span className="sr-only">Filter notifications by class</span>
+                  <select
+                    value={scopeFilter}
+                    onChange={(event) => setScopeFilter(event.target.value)}
+                    className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 text-sm font-semibold text-slate-200 outline-none focus:border-cyan-300/40 focus:ring-2 focus:ring-cyan-300/15"
+                  >
+                    <option value="all">All workspaces</option>
+                    <option value="class-only">Class updates only</option>
+                    {availableClassScopes.map((scope) => (
+                      <option key={scope.id} value={scope.id}>{scope.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-[11px] font-bold text-slate-500 sm:text-xs">
+                  {filteredMessages.length} shown{visibleUnreadMessages.length > 0 ? ` \u00b7 ${visibleUnreadMessages.length} unread` : ''}
                 </p>
                 <button
                   type="button"
                   onClick={handleMarkVisibleRead}
                   disabled={!visibleUnreadMessages.length || batchUpdating}
-                  className="rounded-full border border-gray-600 px-3 py-1 text-xs font-semibold text-gray-200 transition-colors hover:border-primary-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 text-[11px] font-black text-slate-200 transition hover:border-emerald-300/30 hover:bg-emerald-300/10 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-35 sm:text-xs"
                 >
-                  {batchUpdating ? 'Marking...' : 'Mark Visible Read'}
+                  {batchUpdating ? <FiRefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FiCheck className="h-3.5 w-3.5" />}
+                  <span>{batchUpdating ? 'Marking…' : 'Mark visible read'}</span>
                 </button>
               </div>
             </div>
 
-            <div className="max-h-[28rem] overflow-y-auto">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-5 sm:py-4">
+              {loadError ? (
+                <div className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-rose-300/15 bg-rose-400/10 p-3 text-sm text-rose-100">
+                  <p className="leading-5">{loadError}</p>
+                  <button type="button" onClick={() => fetchInbox({ showLoading: inboxMessages.length === 0 })} className="shrink-0 rounded-lg border border-rose-200/20 px-2.5 py-1.5 text-xs font-black hover:bg-rose-200/10">Retry</button>
+                </div>
+              ) : null}
+
               {loading ? (
-                <div className="p-6 text-center text-gray-400">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mx-auto"></div>
-                  <p className="mt-2">Loading notifications...</p>
+                <div className="flex min-h-64 flex-col items-center justify-center text-center text-slate-400">
+                  <div className="relative h-12 w-12">
+                    <div className="absolute inset-0 rounded-full border-2 border-white/10" />
+                    <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-cyan-300" />
+                    <FiBell className="absolute inset-0 m-auto h-5 w-5 text-cyan-200" />
+                  </div>
+                  <p className="mt-4 text-sm font-bold">Checking your command feed…</p>
                 </div>
               ) : filteredMessages.length === 0 ? (
-                <div className="p-6 text-center text-gray-400">
-                  <p>No notifications in this view.</p>
+                <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-3xl border border-white/10 bg-white/5 text-slate-500">
+                    <FiInbox className="h-7 w-7" />
+                  </div>
+                  <h3 className="mt-4 text-lg font-black text-white">Nothing in this view</h3>
+                  <p className="mt-1 max-w-xs text-sm leading-6 text-slate-500">Try another filter or search. New updates will appear here automatically.</p>
                 </div>
               ) : (
-                filteredMessages.map((message) => (
-                  (() => {
+                <div className="space-y-2.5">
+                  {filteredMessages.map((message) => {
                     const tone = getInboxTone(message);
+                    const category = getCategoryDetails(message);
+                    const CategoryIcon = category.icon;
+                    const sender = message.sender_username || (message.category === 'system' ? 'Inner Performance' : 'Unknown sender');
                     const channelLabel = message.class_name
-                      ? `${message.group_name} • ${message.class_name}`
-                      : message.group_name;
+                      ? `${message.group_name || 'Workspace'} \u00b7 ${message.class_name}`
+                      : message.group_name || 'Inner Performance';
                     return (
                       <button
                         key={message.id}
                         type="button"
                         onClick={() => handleMessageClick(message)}
-                        className={`w-full border-b border-l-4 border-gray-700 p-4 text-left transition-colors hover:bg-gray-700 ${tone.accent}`}
+                        className={`group relative w-full overflow-hidden rounded-2xl border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-cyan-300/60 sm:p-4 ${message.unread ? 'border-white/15 bg-white/[0.075] shadow-lg shadow-black/10 hover:border-cyan-300/25 hover:bg-white/10' : 'border-white/[0.07] bg-white/[0.025] opacity-80 hover:opacity-100'}`}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="mb-1 flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium text-white">
-                                {message.sender_username || (message.category === 'system' ? 'System' : 'Unknown')}
-                              </span>
-                              <span className={`rounded-full px-2 py-1 text-[11px] ${tone.pill}`}>
-                                {message.category === 'system' ? 'System' : message.category === 'group' ? 'Group' : 'DM'}
-                              </span>
-                              {message.class_name && (
-                                <span className="rounded-full bg-gray-700 px-2 py-1 text-[11px] text-gray-200">
-                                  {message.class_name}
-                                </span>
-                              )}
-                              <span className="text-xs text-gray-400">in {channelLabel}</span>
-                            </div>
-                            <p className={`text-sm ${tone.text}`}>{truncateContent(message.content)}</p>
-                            <p className="mt-1 text-xs text-gray-500">{formatTime(message.created_at)}</p>
+                        <div className={`pointer-events-none absolute inset-0 bg-gradient-to-r ${tone.glow} opacity-0 transition-opacity group-hover:opacity-100`} />
+                        <div className="relative flex items-start gap-3">
+                          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 sm:h-11 sm:w-11 ${tone.icon}`}>
+                            <CategoryIcon className="h-[18px] w-[18px]" />
                           </div>
-                          {message.unread ? <div className="mt-1 h-2 w-2 rounded-full bg-red-500"></div> : null}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                  <span className={`truncate text-sm ${message.unread ? 'font-black text-white' : 'font-bold text-slate-300'}`}>{sender}</span>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider sm:text-[10px] ${tone.pill}`}>{category.label}</span>
+                                </div>
+                                <p className="mt-0.5 truncate text-[10px] font-bold uppercase tracking-wider text-slate-600 sm:text-[11px]">{channelLabel}</p>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <span className="text-[10px] font-bold text-slate-600 sm:text-xs">{formatTime(message.created_at)}</span>
+                                {message.unread ? <span className="h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_12px_rgba(103,232,249,0.75)]" /> : null}
+                              </div>
+                            </div>
+                            <p className={`mt-2 line-clamp-3 text-sm leading-5 sm:line-clamp-2 ${message.unread ? 'text-slate-200' : 'text-slate-500'}`}>{message.content}</p>
+                          </div>
+                          <FiChevronRight className="mt-4 hidden h-4 w-4 shrink-0 text-slate-700 transition group-hover:translate-x-0.5 group-hover:text-cyan-300 sm:block" />
                         </div>
                       </button>
                     );
-                  })()
-                ))
+                  })}
+                </div>
               )}
             </div>
 
-            <div className="p-4 border-t border-gray-700">
+            <footer className="shrink-0 border-t border-white/10 bg-slate-950/55 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-6 sm:pb-4">
               <button
+                type="button"
                 onClick={() => {
                   setIsOpen(false);
                   navigate('/groups');
                 }}
-                className="w-full text-center text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-violet-500 px-4 text-sm font-black text-slate-950 shadow-lg shadow-cyan-500/10 transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-slate-950"
               >
-                Go to groups
+                Open my workspaces
+                <FiChevronRight className="h-4 w-4" />
               </button>
-            </div>
-          </div>
+            </footer>
+          </section>
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

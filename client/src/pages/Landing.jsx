@@ -1,358 +1,606 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
+import { motion, useReducedMotion } from 'framer-motion';
+import {
+  FaArrowRight,
+  FaBrain,
+  FaCalendarAlt,
+  FaChartLine,
+  FaCheck,
+  FaClipboardCheck,
+  FaGraduationCap,
+  FaKey,
+  FaLock,
+  FaMagic,
+  FaSchool,
+  FaShieldAlt,
+  FaStar,
+  FaUserGraduate,
+  FaUsers
+} from 'react-icons/fa';
+import { HiOutlineAcademicCap } from 'react-icons/hi2';
+import ipLogo from '../assets/ip-logo.jpg';
 
-const Landing = () => {
-  const [text, setText] = useState('');
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [loopNum, setLoopNum] = useState(0);
-  const [typingSpeed, setTypingSpeed] = useState(150);
+const reveal = {
+  hidden: { opacity: 0, y: 24 },
+  visible: { opacity: 1, y: 0 }
+};
 
-  const texts = [
-    'Build Lasting Habits',
-    'Track Your Progress',
-    'Stay Committed',
-    'Achieve Your Goals'
-  ];
+const featureCards = [
+  {
+    icon: FaChartLine,
+    eyebrow: 'Whole-school visibility',
+    title: 'See progress before it becomes a problem',
+    description: 'Bring habits, attendance signals, goals, interventions, challenges, and student progress into one connected school view.',
+    accent: 'from-violet-500/25 to-violet-500/5',
+    iconClass: 'bg-violet-400/15 text-violet-200'
+  },
+  {
+    icon: FaClipboardCheck,
+    eyebrow: 'Daily student action',
+    title: 'Turn support plans into clear next steps',
+    description: 'Students see focused daily habits, understand why each action matters, and build evidence through consistent completion.',
+    accent: 'from-cyan-400/20 to-cyan-400/5',
+    iconClass: 'bg-cyan-400/15 text-cyan-200'
+  },
+  {
+    icon: FaBrain,
+    eyebrow: 'AI-assisted workflows',
+    title: 'Reduce administration, not professional judgement',
+    description: 'Use structured AI tools to draft habits, clean student imports, answer role-aware questions, and help students plan their time.',
+    accent: 'from-amber-400/20 to-amber-400/5',
+    iconClass: 'bg-amber-400/15 text-amber-200'
+  }
+];
 
-  useEffect(() => {
-    const handleTyping = () => {
-      const current = loopNum % texts.length;
-      const fullText = texts[current];
+const roleCards = [
+  {
+    icon: FaShieldAlt,
+    role: 'School leaders & admins',
+    headline: 'Control the school workspace',
+    items: ['Provision accounts at scale', 'Manage staff and student access', 'Review school-wide progress', 'Export reports and login packs'],
+    color: 'violet'
+  },
+  {
+    icon: HiOutlineAcademicCap,
+    role: 'Teachers',
+    headline: 'Act on what matters today',
+    items: ['View assigned students', 'Track attendance and habits', 'Run class workflows', 'Support goals and interventions'],
+    color: 'cyan'
+  },
+  {
+    icon: FaUserGraduate,
+    role: 'Students',
+    headline: 'Know what to do next',
+    items: ['Complete daily habits', 'Plan time with AI support', 'See goals and progress', 'Build positive routines'],
+    color: 'amber'
+  }
+];
 
-      setText(
-        isDeleting
-          ? fullText.substring(0, text.length - 1)
-          : fullText.substring(0, text.length + 1)
-      );
+const aiTools = [
+  { icon: FaMagic, title: 'Habit drafting', text: 'Turn an administrator’s plain-language brief into structured, reviewable student habits.' },
+  { icon: FaUsers, title: 'Intelligent CSV intake', text: 'Interpret inconsistent school data, map useful fields, and prepare accounts for review before import.' },
+  { icon: FaCalendarAlt, title: 'Student planning', text: 'Help students organise school time, commitments, and estimated habit durations into a practical day.' },
+  { icon: FaBrain, title: 'Role-aware support', text: 'Give admins, teachers, and students different guidance, suggested questions, and an appropriate tone.' }
+];
 
-      setTypingSpeed(isDeleting ? 30 : 150);
+const workflow = [
+  { number: '01', title: 'Create the school', text: 'An authorised administrator opens a private workspace and configures the school.' },
+  { number: '02', title: 'Bring people in', text: 'Add individual accounts or securely review an AI-assisted bulk student import.' },
+  { number: '03', title: 'Set meaningful actions', text: 'Create goals, habits, challenges, courses, and school support workflows.' },
+  { number: '04', title: 'See and respond', text: 'Use live evidence to celebrate progress and focus support where it is needed.' }
+];
 
-      if (!isDeleting && text === fullText) {
-        setTimeout(() => setIsDeleting(true), 500);
-      } else if (isDeleting && text === '') {
-        setIsDeleting(false);
-        setLoopNum(loopNum + 1);
-      }
-    };
+const MetricCard = ({ label, value, detail, tone }) => (
+  <div className="rounded-2xl border border-white/10 bg-white/[0.055] p-4 backdrop-blur">
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{label}</span>
+      <span className={`h-2 w-2 rounded-full ${tone}`} />
+    </div>
+    <p className="mt-3 text-2xl font-black text-white">{value}</p>
+    <p className="mt-1 text-xs text-slate-500">{detail}</p>
+  </div>
+);
 
-    const timer = setTimeout(handleTyping, typingSpeed);
-    return () => clearTimeout(timer);
-  }, [text, isDeleting, loopNum, typingSpeed, texts]);
+const ProductPreview = ({ reduceMotion }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 30, rotateX: 5 }}
+    animate={{ opacity: 1, y: 0, rotateX: 0 }}
+    transition={{ duration: reduceMotion ? 0 : 0.9, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
+    className="relative mx-auto w-full max-w-[680px]"
+  >
+    <motion.div
+      animate={reduceMotion ? {} : { y: [0, -8, 0] }}
+      transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
+      className="relative overflow-hidden rounded-[2rem] border border-white/15 bg-[#091126]/95 p-3 shadow-[0_35px_110px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:p-4"
+    >
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+      <img src="/images/landing/private-school-platform.webp" alt="Inner Performance private school platform connecting students, teachers and school leaders" className="relative w-full rounded-[1.4rem] object-cover" />
+      <div className="hidden">
+      <div className="flex items-center justify-between border-b border-white/10 px-2 pb-3">
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-rose-400/70" />
+          <span className="h-2.5 w-2.5 rounded-full bg-amber-300/70" />
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/70" />
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">
+          School workspace
+        </span>
+      </div>
 
-  return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 dark:from-secondary-900 dark:to-secondary-800 transition-colors duration-200">
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 bg-white dark:bg-secondary-800 bg-opacity-90 dark:bg-opacity-90 backdrop-blur-sm shadow-sm transition-colors duration-200 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <a href="#" className="font-display text-xl font-bold text-primary-600 dark:text-primary-400 hover:scale-105 transition-transform duration-200">
-                Inner Performance
-              </a>
+      <div className="grid gap-3 pt-3 md:grid-cols-[150px_1fr]">
+        <aside className="hidden rounded-2xl border border-white/10 bg-black/15 p-3 md:block">
+          <div className="mb-5 flex items-center gap-2">
+            <img src={ipLogo} alt="" className="h-8 w-8 rounded-lg object-cover" />
+            <div>
+              <p className="text-[9px] font-black text-white">INNER PERFORMANCE</p>
+              <p className="text-[8px] text-slate-500">School platform</p>
             </div>
-            <div className="flex items-center space-x-4">
-              <Link to="/login" className="btn btn-primary transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Log In
-              </Link>
+          </div>
+          {['Dashboard', 'Students', 'Teaching', 'Reports'].map((item, index) => (
+            <div key={item} className={`mb-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold ${index === 0 ? 'bg-gradient-to-r from-violet-500/20 to-cyan-400/10 text-white' : 'text-slate-500'}`}>
+              {item}
+            </div>
+          ))}
+        </aside>
+
+        <div className="min-w-0 space-y-3">
+          <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-violet-500/10 to-cyan-400/5 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-cyan-300">Monday overview</p>
+                <h3 className="mt-1 text-lg font-black text-white">Good morning, Oakbridge</h3>
+                <p className="mt-1 text-[10px] text-slate-400">Focus support. Recognise progress. Keep every student moving.</p>
+              </div>
+              <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-[9px] font-bold text-emerald-300">
+                Live school day
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <MetricCard label="Students" value="486" detail="Active profiles" tone="bg-violet-400" />
+            <MetricCard label="Attendance" value="94%" detail="Today so far" tone="bg-cyan-400" />
+            <MetricCard label="Habits" value="82%" detail="Completion" tone="bg-emerald-400" />
+            <MetricCard label="Support" value="12" detail="Need attention" tone="bg-amber-300" />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-[1.25fr_.75fr]">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-white">Weekly momentum</p>
+                  <p className="mt-1 text-[9px] text-slate-500">Combined student progress</p>
+                </div>
+                <FaChartLine className="text-cyan-300" />
+              </div>
+              <div className="mt-5 flex h-24 items-end gap-2">
+                {[38, 55, 44, 72, 64, 86, 78].map((height, index) => (
+                  <motion.div
+                    key={index}
+                    initial={{ height: 0 }}
+                    animate={{ height: `${height}%` }}
+                    transition={{ duration: reduceMotion ? 0 : 0.7, delay: 0.7 + index * 0.08 }}
+                    className="flex-1 rounded-t-md bg-gradient-to-t from-violet-600 to-cyan-300"
+                  />
+                ))}
+              </div>
+              <div className="mt-2 flex justify-between text-[8px] uppercase text-slate-600">
+                <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-400/15 text-amber-200"><FaBrain /></span>
+                <div>
+                  <p className="text-xs font-bold text-white">AI support</p>
+                  <p className="text-[9px] text-slate-500">Role-aware guidance</p>
+                </div>
+              </div>
+              <div className="mt-4 space-y-2">
+                {['Draft habits from a brief', 'Review student import', 'Plan today’s schedule'].map((item, index) => (
+                  <motion.div
+                    key={item}
+                    initial={{ opacity: 0, x: 10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: reduceMotion ? 0 : 1.1 + index * 0.15 }}
+                    className="flex items-center gap-2 rounded-lg border border-white/5 bg-black/15 px-2.5 py-2 text-[9px] text-slate-300"
+                  >
+                    <FaStar className="text-amber-300" />
+                    {item}
+                  </motion.div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
+      </div>
+      </div>
+    </motion.div>
+
+    <motion.div
+      animate={reduceMotion ? {} : { y: [0, 7, 0], rotate: [0, 1, 0] }}
+      transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
+      className="absolute -bottom-8 -left-2 hidden w-52 rounded-2xl border border-white/15 bg-[#101a33]/95 p-3 shadow-2xl backdrop-blur-xl sm:block lg:-left-14"
+    >
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300"><FaCheck /></span>
+        <div>
+          <p className="text-[10px] font-bold text-white">Student recovered</p>
+          <p className="mt-0.5 text-[9px] text-slate-500">Daily actions completed</p>
+        </div>
+      </div>
+    </motion.div>
+  </motion.div>
+);
+
+const Landing = () => {
+  const reduceMotion = useReducedMotion();
+  const motionTransition = { duration: reduceMotion ? 0 : 0.65, ease: [0.22, 1, 0.36, 1] };
+
+  return (
+    <div className="min-h-screen overflow-hidden bg-[#040713] text-white selection:bg-amber-300 selection:text-slate-950">
+      <div className="pointer-events-none fixed inset-0">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(124,58,237,0.16),transparent_32%),radial-gradient(circle_at_82%_22%,rgba(34,211,238,0.12),transparent_28%),linear-gradient(to_bottom,#040713,#071022_48%,#040713)]" />
+        <motion.div animate={reduceMotion ? {} : { x: [0, 50, 0], y: [0, 30, 0] }} transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }} className="absolute -left-32 top-40 h-72 w-72 rounded-full bg-violet-600/10 blur-3xl" />
+        <motion.div animate={reduceMotion ? {} : { x: [0, -40, 0], y: [0, -20, 0] }} transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }} className="absolute -right-24 top-1/3 h-80 w-80 rounded-full bg-cyan-400/10 blur-3xl" />
+        <div className="absolute inset-0 opacity-[0.035] [background-image:linear-gradient(rgba(255,255,255,.8)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.8)_1px,transparent_1px)] [background-size:64px_64px]" />
+      </div>
+
+      <nav className="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-[#040713]/75 backdrop-blur-2xl">
+        <div className="mx-auto flex h-[72px] max-w-[1440px] items-center justify-between px-4 sm:px-6 lg:px-8">
+          <a href="#top" className="group flex items-center gap-3">
+            <span className="relative">
+              <span className="absolute -inset-1 rounded-2xl bg-amber-300/25 blur-md transition group-hover:bg-amber-300/40" />
+              <img src={ipLogo} alt="Inner Performance" className="relative h-11 w-11 rounded-xl border border-white/15 object-cover" />
+            </span>
+            <span>
+              <span className="block font-display text-sm font-black tracking-tight text-white sm:text-base">Inner Performance</span>
+              <span className="block text-[9px] font-bold uppercase tracking-[0.22em] text-amber-300">Private school platform</span>
+            </span>
+          </a>
+
+          <div className="hidden items-center gap-7 text-sm font-semibold text-slate-400 md:flex">
+            <a href="#platform" className="transition hover:text-white">Platform</a>
+            <a href="#roles" className="transition hover:text-white">For schools</a>
+            <a href="#ai" className="transition hover:text-white">AI tools</a>
+            <a href="#privacy" className="transition hover:text-white">Private access</a>
+          </div>
+
+          <Link to="/login" className="group inline-flex items-center gap-2 rounded-xl border border-amber-300/35 bg-amber-300 px-4 py-2.5 text-sm font-black text-slate-950 shadow-lg shadow-amber-300/10 transition hover:-translate-y-0.5 hover:bg-amber-200">
+            School sign in
+            <FaArrowRight className="text-xs transition-transform group-hover:translate-x-0.5" />
+          </Link>
+        </div>
       </nav>
-      <main className="flex-1 flex flex-col">
-        {/* Hero Section */}
-        <section className="min-h-screen pt-32 pb-24 px-4 flex items-center justify-center">
-          <div className="max-w-5xl mx-auto text-center">
-            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">
-              Transform Your Daily Routine
-            </h1>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 max-w-3xl mx-auto mb-4 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              <span className="text-primary-600 dark:text-primary-400 typewriter">{text}</span>
-            </p>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 max-w-3xl mx-auto mb-10 animate-fade-in" style={{ animationDelay: '0.3s' }}>
-              Inner Performance helps you create and maintain daily habits through a 30-day locked-in commitment system. Track your progress, visualize your success, and build discipline.
-            </p>
-            <div className="flex flex-col sm:flex-row justify-center gap-4 animate-fade-in" style={{ animationDelay: '0.4s' }}>
-              <Link to="/login" className="btn btn-primary text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Get Started
-              </Link>
-              <a href="#features" className="btn btn-outline text-lg px-8 py-3 transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Learn More
-              </a>
-            </div>
-            <div className="mt-8 animate-fade-in" style={{ animationDelay: '0.5s' }}>
-              <a 
-                href="https://miricledev.github.io/md-landing-page/" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="inline-flex items-center px-4 py-2 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 text-sm font-medium transition-all duration-300 hover:shadow-[0_0_15px_rgba(14,165,233,0.5)] dark:hover:shadow-[0_0_15px_rgba(56,189,248,0.5)] hover:scale-105"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                Developed by miricledev
-              </a>
+
+      <main id="top" className="relative">
+        <section className="relative flex min-h-screen items-center px-4 pb-24 pt-32 sm:px-6 lg:px-8 lg:pt-36">
+          <div className="mx-auto grid w-full max-w-[1440px] items-center gap-16 lg:grid-cols-[.92fr_1.08fr]">
+            <motion.div initial="hidden" animate="visible" variants={reveal} transition={motionTransition}>
+              <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.07] px-3.5 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-amber-200">
+                <FaLock />
+                Purpose-built private software for schools
+              </div>
+              <h1 className="mt-7 max-w-3xl font-display text-5xl font-black leading-[0.98] tracking-[-0.045em] text-white sm:text-6xl lg:text-7xl xl:text-[5.35rem]">
+                Help every student build the habits behind
+                <span className="block bg-gradient-to-r from-amber-200 via-amber-400 to-cyan-300 bg-clip-text text-transparent">
+                  better outcomes.
+                </span>
+              </h1>
+              <p className="mt-7 max-w-2xl text-base leading-7 text-slate-300 sm:text-lg sm:leading-8">
+                Inner Performance gives school leaders, teachers, and students one connected space for purposeful habits, goals, attendance, interventions, scheduling, progress, and AI-assisted support.
+              </p>
+
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                <Link to="/login" className="group inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-300 to-amber-400 px-6 py-3.5 text-sm font-black text-slate-950 shadow-xl shadow-amber-300/15 transition hover:-translate-y-0.5">
+                  Access your school
+                  <FaArrowRight className="transition-transform group-hover:translate-x-1" />
+                </Link>
+                <a href="#platform" className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/[0.045] px-6 py-3.5 text-sm font-bold text-white backdrop-blur transition hover:border-white/25 hover:bg-white/[0.08]">
+                  Explore the platform
+                </a>
+              </div>
+
+              <div className="mt-8 flex flex-wrap gap-x-6 gap-y-3 text-xs font-semibold text-slate-400">
+                <span className="flex items-center gap-2"><FaCheck className="text-emerald-300" /> Role-based school access</span>
+                <span className="flex items-center gap-2"><FaCheck className="text-emerald-300" /> Admin-controlled accounts</span>
+                <span className="flex items-center gap-2"><FaCheck className="text-emerald-300" /> Structured AI workflows</span>
+              </div>
+            </motion.div>
+
+            <ProductPreview reduceMotion={reduceMotion} />
+          </div>
+        </section>
+
+        <section className="relative border-y border-white/10 bg-white/[0.025]">
+          <div className="mx-auto grid max-w-[1440px] grid-cols-2 divide-x divide-white/10 px-4 sm:px-6 md:grid-cols-4 lg:px-8">
+            {[
+              ['One platform', 'School-wide coordination'],
+              ['Three roles', 'Admin · Teacher · Student'],
+              ['Daily evidence', 'Habits into progress'],
+              ['AI assisted', 'Human reviewed']
+            ].map(([value, label]) => (
+              <div key={value} className="px-4 py-7 text-center">
+                <p className="text-sm font-black text-white sm:text-base">{value}</p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-500">{label}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section id="platform" className="relative px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="mx-auto max-w-[1440px]">
+            <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.3 }} variants={reveal} transition={motionTransition} className="max-w-3xl">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-cyan-300">One connected operating layer</p>
+              <h2 className="mt-4 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
+                More than a habit tracker. A system for consistent school support.
+              </h2>
+              <p className="mt-5 text-base leading-7 text-slate-400 sm:text-lg">
+                Inner Performance connects the actions students take each day with the context staff need to guide, recognise, and intervene.
+              </p>
+            </motion.div>
+
+            <div className="mt-14 grid gap-5 lg:grid-cols-3">
+              {featureCards.map((feature, index) => {
+                const Icon = feature.icon;
+                return (
+                  <motion.article
+                    key={feature.title}
+                    initial="hidden"
+                    whileInView="visible"
+                    viewport={{ once: true, amount: 0.2 }}
+                    variants={reveal}
+                    transition={{ ...motionTransition, delay: reduceMotion ? 0 : index * 0.12 }}
+                    className={`group relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br ${feature.accent} p-7 transition hover:-translate-y-1 hover:border-white/20`}
+                  >
+                    <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-white/5 blur-3xl" />
+                    <span className={`relative flex h-12 w-12 items-center justify-center rounded-2xl ${feature.iconClass}`}>
+                      <Icon className="text-xl" />
+                    </span>
+                    <p className="relative mt-7 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">{feature.eyebrow}</p>
+                    <h3 className="relative mt-2 text-2xl font-black tracking-tight text-white">{feature.title}</h3>
+                    <p className="relative mt-4 text-sm leading-7 text-slate-400">{feature.description}</p>
+                  </motion.article>
+                );
+              })}
             </div>
           </div>
         </section>
 
-        {/* Fun Fact Box */}
-        <section className="py-12 bg-gradient-to-r from-primary-50 to-primary-100 dark:from-secondary-900 dark:to-secondary-800 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="bg-white dark:bg-secondary-800 rounded-2xl p-8 shadow-lg transform hover:scale-[1.02] transition-all duration-300">
-              <div className="flex items-start space-x-4">
-                <div className="flex-shrink-0">
-                  <div className="bg-primary-100 dark:bg-primary-900 rounded-full p-3">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary-600 dark:text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+        <section id="roles" className="relative border-y border-white/10 bg-[#071022]/75 px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="mx-auto max-w-[1440px]">
+            <div className="grid gap-12 lg:grid-cols-[.7fr_1.3fr] lg:items-start">
+              <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.3 }} variants={reveal} transition={motionTransition} className="lg:sticky lg:top-28">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-amber-300">Designed around responsibility</p>
+                <h2 className="mt-4 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
+                  The right workspace for every role.
+                </h2>
+                <p className="mt-5 text-base leading-7 text-slate-400">
+                  Accounts are provisioned for the job each person needs to do. Administrators control the school, teachers support students, and students focus on their own progress.
+                </p>
+                <div className="mt-7 inline-flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+                  <FaKey className="text-amber-300" />
+                  Private access is issued by the school.
+                </div>
+              </motion.div>
+
+              <div className="space-y-4">
+                {roleCards.map((role, index) => {
+                  const Icon = role.icon;
+                  const colorClasses = {
+                    violet: 'bg-violet-400/15 text-violet-200 border-violet-400/20',
+                    cyan: 'bg-cyan-400/15 text-cyan-200 border-cyan-400/20',
+                    amber: 'bg-amber-400/15 text-amber-200 border-amber-400/20'
+                  }[role.color];
+                  return (
+                    <motion.article
+                      key={role.role}
+                      initial="hidden"
+                      whileInView="visible"
+                      viewport={{ once: true, amount: 0.25 }}
+                      variants={reveal}
+                      transition={{ ...motionTransition, delay: reduceMotion ? 0 : index * 0.1 }}
+                      className="grid gap-6 rounded-[2rem] border border-white/10 bg-white/[0.035] p-6 transition hover:border-white/20 sm:grid-cols-[auto_1fr] sm:p-7"
+                    >
+                      <span className={`flex h-14 w-14 items-center justify-center rounded-2xl border ${colorClasses}`}>
+                        <Icon className="text-2xl" />
+                      </span>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">{role.role}</p>
+                        <h3 className="mt-2 text-2xl font-black text-white">{role.headline}</h3>
+                        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                          {role.items.map((item) => (
+                            <div key={item} className="flex items-center gap-2 text-sm text-slate-400">
+                              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-[8px] text-emerald-300"><FaCheck /></span>
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </motion.article>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="ai" className="relative px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="mx-auto max-w-[1440px]">
+            <div className="grid items-center gap-14 lg:grid-cols-2">
+              <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.25 }} variants={reveal} transition={motionTransition}>
+                <div className="relative overflow-hidden rounded-[2.25rem] border border-white/10 bg-gradient-to-br from-violet-500/15 via-white/[0.035] to-cyan-400/10 p-6 shadow-2xl sm:p-8">
+                  <div className="absolute -right-12 -top-12 h-48 w-48 rounded-full bg-violet-500/15 blur-3xl" />
+                  <div className="relative flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 text-white shadow-lg shadow-violet-500/20"><FaBrain /></span>
+                      <div>
+                        <p className="font-black text-white">Inner Performance AI</p>
+                        <p className="text-xs text-slate-500">Structured assistance for schools</p>
+                      </div>
+                    </div>
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Ready</span>
+                  </div>
+
+                  <div className="relative mt-7 rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs leading-6 text-slate-300">
+                      “Create a four-week set of confidence, organisation, and revision habits for Year 10 students preparing for assessments.”
+                    </p>
+                  </div>
+                  <div className="relative mt-4 space-y-3">
+                    {[
+                      ['Morning plan', '10 minutes · Weekdays'],
+                      ['Focused revision block', '35 minutes · Mon–Thu'],
+                      ['Confidence reflection', '5 minutes · Friday']
+                    ].map(([title, meta], index) => (
+                      <motion.div
+                        key={title}
+                        initial={{ opacity: 0, x: -18 }}
+                        whileInView={{ opacity: 1, x: 0 }}
+                        viewport={{ once: true }}
+                        transition={{ delay: reduceMotion ? 0 : 0.3 + index * 0.16 }}
+                        className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.05] p-4"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-400/10 text-amber-300"><FaStar /></span>
+                          <div>
+                            <p className="text-sm font-bold text-white">{title}</p>
+                            <p className="mt-0.5 text-[10px] text-slate-500">{meta}</p>
+                          </div>
+                        </div>
+                        <span className="rounded-full bg-cyan-400/10 px-2.5 py-1 text-[9px] font-bold text-cyan-300">Review</span>
+                      </motion.div>
+                    ))}
+                  </div>
+                  <div className="relative mt-5 flex items-center gap-2 text-[10px] text-slate-500">
+                    <FaShieldAlt className="text-emerald-300" />
+                    AI output is structured for review before it enters the school workflow.
                   </div>
                 </div>
+              </motion.div>
+
+              <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.25 }} variants={reveal} transition={motionTransition}>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-violet-300">AI that understands the workflow</p>
+                <h2 className="mt-4 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
+                  Faster school operations. Clear human review.
+                </h2>
+                <p className="mt-5 text-base leading-7 text-slate-400">
+                  AI supports the repetitive and time-consuming parts of the platform while staff remain in control of what is reviewed, approved, and used.
+                </p>
+                <div className="mt-8 grid gap-4 sm:grid-cols-2">
+                  {aiTools.map((tool) => {
+                    const Icon = tool.icon;
+                    return (
+                      <div key={tool.title} className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+                        <Icon className="text-lg text-cyan-300" />
+                        <h3 className="mt-4 font-black text-white">{tool.title}</h3>
+                        <p className="mt-2 text-xs leading-6 text-slate-500">{tool.text}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            </div>
+          </div>
+        </section>
+
+        <section className="relative border-y border-white/10 bg-white/[0.025] px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="mx-auto max-w-[1440px]">
+            <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.3 }} variants={reveal} transition={motionTransition} className="mx-auto max-w-3xl text-center">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-amber-300">From setup to daily action</p>
+              <h2 className="mt-4 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">A clear operating rhythm for the school.</h2>
+            </motion.div>
+            <div className="relative mt-14 grid gap-4 md:grid-cols-4">
+              <div className="absolute left-[12.5%] right-[12.5%] top-8 hidden h-px bg-gradient-to-r from-violet-500/20 via-cyan-300/50 to-amber-300/20 md:block" />
+              {workflow.map((step, index) => (
+                <motion.div key={step.number} initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.3 }} variants={reveal} transition={{ ...motionTransition, delay: reduceMotion ? 0 : index * 0.1 }} className="relative rounded-2xl border border-white/10 bg-[#081024] p-5">
+                  <span className="relative z-10 flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-br from-violet-500/20 to-cyan-400/10 font-mono text-lg font-black text-white shadow-xl">
+                    {step.number}
+                  </span>
+                  <h3 className="mt-6 text-lg font-black text-white">{step.title}</h3>
+                  <p className="mt-3 text-sm leading-6 text-slate-500">{step.text}</p>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="privacy" className="relative px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="mx-auto max-w-[1200px]">
+            <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.25 }} variants={reveal} transition={motionTransition} className="relative overflow-hidden rounded-[2.5rem] border border-white/10 bg-gradient-to-br from-[#101a35] via-[#091126] to-[#071b25] p-7 shadow-[0_35px_100px_rgba(0,0,0,0.35)] sm:p-10 lg:p-14">
+              <div className="absolute -right-20 -top-24 h-72 w-72 rounded-full bg-cyan-400/10 blur-3xl" />
+              <div className="relative grid items-center gap-10 lg:grid-cols-[1fr_.8fr]">
                 <div>
-                  <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">Did You Know?</h3>
-                  <p className="text-secondary-700 dark:text-secondary-300">
-                    Research shows that consistently repeating a behavior for 30 days or more can help make it a lasting habit. While the exact time varies for everyone, studies suggest it takes on average 2–3 months for a new habit to become automatic.
+                  <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-300/20 bg-amber-300/10 text-2xl text-amber-200"><FaLock /></span>
+                  <p className="mt-7 text-xs font-black uppercase tracking-[0.28em] text-amber-300">Private by design</p>
+                  <h2 className="mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
+                    This is not an open social platform.
+                  </h2>
+                  <p className="mt-5 max-w-2xl text-base leading-8 text-slate-300">
+                    Inner Performance is private software for authorised schools. Administrators create and manage accounts, students belong to their school workspace, and role-based access keeps each user focused on the information and tools relevant to them.
                   </p>
                 </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Stats Section (Replaced) */}
-        <section className="py-16 bg-white dark:bg-secondary-800 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">
-              Your Journey Starts Here
-            </h2>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 mb-8 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Every big change begins with a single step. Inner Performance is here to help you build habits, stay accountable, and celebrate your progress—one day at a time.
-            </p>
-            <div className="flex justify-center animate-fade-in" style={{ animationDelay: '0.3s' }}>
-              <svg className="w-32 h-32 text-primary-200 dark:text-primary-700" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 64 64">
-                <circle cx="32" cy="32" r="30" stroke="currentColor" strokeWidth="4" />
-                <path d="M32 12v20l14 8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-          </div>
-        </section>
-
-        {/* Features Section */}
-        <section id="features" className="py-16 bg-primary-50 dark:bg-secondary-900 transition-colors duration-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h2 className="text-3xl font-bold text-center text-secondary-900 dark:text-white mb-12 animate-fade-in">
-              Everything You Need, Always Free
-            </h2>
-            
-            <div className="grid md:grid-cols-3 gap-8">
-              {/* Feature 1 */}
-              <div className="bg-white dark:bg-secondary-800 rounded-xl p-6 text-center transform hover:scale-105 transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-                <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 animate-float">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8 text-primary-600 dark:text-primary-400">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 002.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 012.916.52 6.003 6.003 0 01-5.395 4.972m0 0a6.726 6.726 0 01-2.749 1.35m0 0a6.772 6.772 0 01-3.044 0" />
-                  </svg>
+                <div className="grid gap-3">
+                  {[
+                    [FaSchool, 'School-managed access', 'Accounts are provisioned and managed within an authorised school.'],
+                    [FaUsers, 'Role-specific workspaces', 'Admins, teachers, and students receive different controls and support.'],
+                    [FaShieldAlt, 'Review before action', 'Sensitive bulk imports and AI-generated structures are reviewed before use.']
+                  ].map(([Icon, title, text]) => (
+                    <div key={title} className="flex gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-cyan-300"><Icon /></span>
+                      <div>
+                        <p className="text-sm font-black text-white">{title}</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{text}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <h3 className="text-xl font-semibold mb-3 text-secondary-800 dark:text-white">Unlimited Tasks</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  Create as many tasks as you need. No limits, no restrictions - just pure habit-building power.
-                </p>
               </div>
-              
-              {/* Feature 2 */}
-              <div className="bg-white dark:bg-secondary-800 rounded-xl p-6 text-center transform hover:scale-105 transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.4s' }}>
-                <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 animate-float" style={{ animationDelay: '0.2s' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8 text-primary-600 dark:text-primary-400">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-semibold mb-3 text-secondary-800 dark:text-white">Advanced Analytics</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  Get detailed insights into your habits with comprehensive analytics and progress tracking.
-                </p>
-              </div>
-              
-              {/* Feature 3 */}
-              <div className="bg-white dark:bg-secondary-800 rounded-xl p-6 text-center transform hover:scale-105 transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.6s' }}>
-                <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 animate-float" style={{ animationDelay: '0.4s' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8 text-primary-600 dark:text-primary-400">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-semibold mb-3 text-secondary-800 dark:text-white">Custom Categories</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  Organize your tasks with custom categories to better manage different areas of your life.
-                </p>
-              </div>
-            </div>
+            </motion.div>
           </div>
         </section>
 
-        {/* Testimonials Section */}
-        <section className="py-16 bg-white dark:bg-secondary-800 transition-colors duration-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h2 className="text-3xl font-bold text-center text-secondary-900 dark:text-white mb-12 animate-fade-in">
-              Join Our Community
-            </h2>
-            <div className="flex flex-col items-center justify-center animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              <div className="bg-primary-50 dark:bg-secondary-700 rounded-xl p-8 text-center max-w-2xl">
-                <h3 className="text-xl font-semibold mb-3 text-secondary-800 dark:text-white">A Place to Grow</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  Inner Performance is more than just a habit tracker—it's a supportive space for anyone looking to build better routines. Whether you're starting your first 30-day challenge or are a seasoned habit builder, you're in good company. Join thousands of others on the journey to self-improvement!
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* FAQ Section */}
-        <section className="py-16 bg-white dark:bg-secondary-800 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h2 className="text-3xl font-bold text-center text-secondary-900 dark:text-white mb-12 animate-fade-in">
-              Frequently Asked Questions
-            </h2>
-            
-            <div className="space-y-6">
-              {/* FAQ Item 1 */}
-              <div className="bg-primary-50 dark:bg-secondary-700 rounded-xl p-6 transform hover:scale-[1.02] transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-                <h3 className="text-lg font-semibold text-secondary-800 dark:text-white mb-2">What is the 30-day commitment system?</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  The 30-day commitment system is a proven method for habit formation. When you create a task, you commit to completing it every day for 30 days. This creates consistency and helps build lasting habits.
-                </p>
-              </div>
-              
-              {/* FAQ Item 2 */}
-              <div className="bg-primary-50 dark:bg-secondary-700 rounded-xl p-6 transform hover:scale-[1.02] transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.3s' }}>
-                <h3 className="text-lg font-semibold text-secondary-800 dark:text-white mb-2">Can I change my tasks during the 30-day period?</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  No, tasks are locked in for the full 30 days to maintain consistency. However, you can add new tasks at any time, and they will start their own 30-day commitment period.
-                </p>
-              </div>
-              
-              {/* FAQ Item 3 */}
-              <div className="bg-primary-50 dark:bg-secondary-700 rounded-xl p-6 transform hover:scale-[1.02] transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.4s' }}>
-                <h3 className="text-lg font-semibold text-secondary-800 dark:text-white mb-2">What happens if I miss a day?</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  Missing a day doesn't mean failure! Your streak will reset, but you can start a new streak the next day. The important thing is to keep going and maintain consistency.
-                </p>
-              </div>
-              
-              {/* FAQ Item 4 */}
-              <div className="bg-primary-50 dark:bg-secondary-700 rounded-xl p-6 transform hover:scale-[1.02] transition-all duration-300 animate-fade-in" style={{ animationDelay: '0.5s' }}>
-                <h3 className="text-lg font-semibold text-secondary-800 dark:text-white mb-2">How do the analytics work?</h3>
-                <p className="text-secondary-600 dark:text-secondary-300">
-                  Our analytics track your completion rates, streaks, and patterns over time. You can see your progress through visual charts and identify your most productive times and days.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* CTA Section */}
-        <section className="py-20 bg-primary-600 dark:bg-primary-700 text-white transition-colors duration-200">
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl md:text-4xl font-bold mb-6 animate-fade-in">Ready to Transform Your Daily Routine?</h2>
-            <p className="text-xl mb-8 max-w-3xl mx-auto animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Join thousands of people who have already changed their lives with Inner Performance's 30-day commitment system. Start your journey today - completely free!
-            </p>
-            <div className="flex justify-center animate-fade-in" style={{ animationDelay: '0.4s' }}>
-              <Link to="/login" className="btn bg-white text-primary-600 hover:bg-gray-100 dark:hover:bg-gray-200 px-8 py-3 text-lg font-medium transform hover:scale-105 active:scale-95 transition-all duration-200">
-                Login
+        <section className="relative px-4 pb-24 sm:px-6 lg:px-8 lg:pb-32">
+          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.3 }} variants={reveal} transition={motionTransition} className="mx-auto max-w-[1200px] overflow-hidden rounded-[2.5rem] border border-amber-300/20 bg-gradient-to-r from-amber-300 via-amber-400 to-cyan-300 p-[1px]">
+            <div className="relative overflow-hidden rounded-[calc(2.5rem-1px)] bg-[#071022] px-6 py-14 text-center sm:px-10 sm:py-16">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(251,191,36,.18),transparent_48%)]" />
+              <FaGraduationCap className="relative mx-auto text-3xl text-amber-300" />
+              <h2 className="relative mx-auto mt-5 max-w-3xl font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
+                Your school already has an Inner Performance workspace?
+              </h2>
+              <p className="relative mx-auto mt-5 max-w-2xl text-base leading-7 text-slate-400">
+                Sign in with the account supplied by your school administrator. Access is private and is not available through public registration.
+              </p>
+              <Link to="/login" className="group relative mt-8 inline-flex items-center gap-2 rounded-2xl bg-amber-300 px-7 py-3.5 text-sm font-black text-slate-950 shadow-xl shadow-amber-300/15 transition hover:-translate-y-0.5 hover:bg-amber-200">
+                Continue to school sign in
+                <FaArrowRight className="transition-transform group-hover:translate-x-1" />
               </Link>
             </div>
-          </div>
-        </section>
-        
-        {/* About Us Section */}
-        <section id="about" className="py-16 bg-primary-50 dark:bg-secondary-900 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">About Us</h2>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Inner Performance was created by a small team passionate about helping people build better habits. Our mission is to make habit formation simple, motivating, and accessible to everyone.
-            </p>
-          </div>
-        </section>
-
-        {/* Contact Section */}
-        <section id="contact" className="py-16 bg-white dark:bg-secondary-800 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">Contact</h2>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              Have questions, feedback, or need support? Email us at <a href="mailto:support@innerperformance.app" className="text-primary-600 dark:text-primary-400 underline">support@innerperformance.app</a> and we'll get back to you as soon as possible.
-            </p>
-          </div>
-        </section>
-
-        {/* Privacy Policy Section */}
-        <section id="privacy" className="py-16 bg-primary-50 dark:bg-secondary-900 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">Privacy Policy</h2>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              We respect your privacy. Inner Performance does not sell your data or share your personal information with third parties. For full details, please review our complete privacy policy (coming soon).
-            </p>
-          </div>
-        </section>
-
-        {/* Terms of Service Section */}
-        <section id="terms" className="py-16 bg-white dark:bg-secondary-800 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-6 animate-fade-in">Terms of Service</h2>
-            <p className="text-xl text-secondary-700 dark:text-secondary-300 animate-fade-in" style={{ animationDelay: '0.2s' }}>
-              By using Inner Performance, you agree to our terms of service. Please use the platform responsibly and respectfully. Full terms will be available here soon.
-            </p>
-          </div>
+          </motion.div>
         </section>
       </main>
-      {/* Footer (moved to always be last, outside <main>) */}
-      <footer className="bg-secondary-900 text-secondary-400 py-12 transition-colors duration-200 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row justify-between items-center">
-            <div className="mb-6 md:mb-0">
-              <span className="font-display text-xl font-bold text-white">Inner Performance</span>
-              <p className="mt-2">Build lasting habits through commitment</p>
-            </div>
-            
-            <div className="flex flex-col sm:flex-row gap-8">
-              <div>
-                <h3 className="text-white font-medium mb-3">Product</h3>
-                <ul className="space-y-2">
-                  <li><a href="#features" className="hover:text-white transition-colors duration-200">Features</a></li>
-                  <li><a href="#faq" className="hover:text-white transition-colors duration-200">FAQ</a></li>
-                </ul>
-              </div>
-              
-              <div>
-                <h3 className="text-white font-medium mb-3">Company</h3>
-                <ul className="space-y-2">
-                  <li><a href="#about" className="hover:text-white transition-colors duration-200">About Us</a></li>
-                  <li><a href="#contact" className="hover:text-white transition-colors duration-200">Contact</a></li>
-                </ul>
-              </div>
-              
-              <div>
-                <h3 className="text-white font-medium mb-3">Legal</h3>
-                <ul className="space-y-2">
-                  <li><a href="#privacy" className="hover:text-white transition-colors duration-200">Privacy Policy</a></li>
-                  <li><a href="#terms" className="hover:text-white transition-colors duration-200">Terms of Service</a></li>
-                </ul>
-              </div>
+
+      <footer className="relative border-t border-white/10 bg-black/20">
+        <div className="mx-auto flex max-w-[1440px] flex-col gap-8 px-4 py-10 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
+          <div className="flex items-center gap-3">
+            <img src={ipLogo} alt="Inner Performance" className="h-11 w-11 rounded-xl border border-white/10 object-cover" />
+            <div>
+              <p className="font-display text-sm font-black text-white">Inner Performance</p>
+              <p className="mt-1 text-xs text-slate-600">Private performance and support software for schools.</p>
             </div>
           </div>
-          
-          <div className="mt-8 pt-8 border-t border-secondary-800 text-center">
-            <p>&copy; {new Date().getFullYear()} Inner Performance. All rights reserved.</p>
-            <div className="mt-4">
-              <a 
-                href="https://miricledev.github.io/md-landing-page/" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="inline-flex items-center px-4 py-2 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 text-sm font-medium transition-all duration-300 hover:shadow-[0_0_15px_rgba(14,165,233,0.5)] dark:hover:shadow-[0_0_15px_rgba(56,189,248,0.5)] hover:scale-105"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                Developed by miricledev
-              </a>
-            </div>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3 text-xs font-semibold text-slate-500">
+            <a href="#platform" className="transition hover:text-white">Platform</a>
+            <a href="#roles" className="transition hover:text-white">School roles</a>
+            <a href="#ai" className="transition hover:text-white">AI tools</a>
+            <a href="mailto:support@innerperformance.co.uk" className="transition hover:text-white">Support</a>
+            <Link to="/login" className="text-amber-300 transition hover:text-amber-200">Sign in</Link>
           </div>
+        </div>
+        <div className="border-t border-white/5 px-4 py-5 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-700">
+          © {new Date().getFullYear()} Inner Performance. Authorised school access only.
         </div>
       </footer>
     </div>

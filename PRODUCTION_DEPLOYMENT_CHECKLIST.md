@@ -217,7 +217,9 @@ cd server
 git pull
 pip install -r requirements.txt  # Upgrades Stripe
 # Verify debug=False in server.py
-gunicorn server:app --timeout 120 --workers 2 --bind 0.0.0.0:$PORT
+gunicorn server:app --worker-class gthread --workers 1 --threads 100 --timeout 120 --bind 0.0.0.0:$PORT
+
+Keep one worker unless Socket.IO is configured with a shared Redis message queue. Multiple independent workers split chat rooms, presence, typing indicators, and read receipts between processes.
 ```
 
 ### 2. Frontend Deployment

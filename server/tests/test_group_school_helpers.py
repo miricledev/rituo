@@ -1,5 +1,5 @@
 import unittest
-from datetime import date as real_date
+from datetime import date as real_date, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -35,6 +35,113 @@ class _FakeInterventionRecord:
 
 
 class GroupSchoolHelperTests(unittest.TestCase):
+    def test_student_rewards_value_comebacks_and_improvement(self):
+        member_habit = {
+            "member": 7,
+            "joinedAt": "2026-08-03",
+            "habits": [{
+                "name": "Read",
+                "scheduleDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+                "progress": [
+                    {"date": "2026-08-03", "completed": True},
+                    {"date": "2026-08-04", "completed": True},
+                    {"date": "2026-08-06", "completed": True},
+                    {"date": "2026-08-07", "completed": True},
+                ],
+            }],
+        }
+        group = SimpleNamespace(
+            id=4,
+            active_challenge=SimpleNamespace(
+                start_date=datetime(2026, 8, 3),
+                end_date=datetime(2026, 8, 31),
+            ),
+        )
+        impact_records = [
+            SimpleNamespace(positive_points=2, negative_points=1, truancy_incidents=0),
+            SimpleNamespace(positive_points=5, negative_points=1, truancy_incidents=0),
+            SimpleNamespace(positive_points=3, negative_points=2, truancy_incidents=0),
+            SimpleNamespace(positive_points=7, negative_points=1, truancy_incidents=0),
+        ]
+
+        with patch.object(groups_routes, "get_member_habit_entry", return_value=member_habit):
+            metrics = groups_routes._student_reward_metrics(
+                group,
+                student_id=7,
+                today_value=real_date(2026, 8, 10),
+                impact_records=impact_records,
+                recovered_today=False,
+            )
+
+        self.assertEqual(metrics["successfulDays"], 4)
+        self.assertEqual(metrics["longestStreak"], 2)
+        self.assertEqual(metrics["bouncebacks"], 1)
+        self.assertEqual(metrics["improvementSteps"], 2)
+        self.assertEqual(metrics["growthScore"], 15)
+        catalog = groups_routes._student_reward_catalog(metrics)
+        unlocked_themes = {item["id"] for item in catalog["themes"] if item["unlocked"]}
+        unlocked_titles = {item["id"] for item in catalog["titles"] if item["unlocked"]}
+        self.assertIn("growth-green", unlocked_themes)
+        self.assertIn("sunrise-gold", unlocked_themes)
+        self.assertIn("comeback-builder", unlocked_titles)
+        self.assertIn("growth-navigator", unlocked_titles)
+
+    def test_student_reward_streak_ignores_unscheduled_weekend(self):
+        member_habit = {
+            "member": 8,
+            "habits": [{
+                "name": "Practice",
+                "scheduleDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+                "progress": [
+                    {"date": "2026-07-31", "completed": True},
+                    {"date": "2026-08-03", "completed": True},
+                ],
+            }],
+        }
+        group = SimpleNamespace(
+            id=5,
+            active_challenge=SimpleNamespace(
+                start_date=datetime(2026, 7, 31),
+                end_date=datetime(2026, 8, 31),
+            ),
+        )
+
+        with patch.object(groups_routes, "get_member_habit_entry", return_value=member_habit):
+            metrics = groups_routes._student_reward_metrics(
+                group,
+                student_id=8,
+                today_value=real_date(2026, 8, 3),
+                impact_records=[],
+                recovered_today=False,
+            )
+
+        self.assertEqual(metrics["longestStreak"], 2)
+        self.assertEqual(metrics["bouncebacks"], 0)
+
+    def test_student_rewards_reject_locked_saved_preferences(self):
+        locked_metrics = {
+            "successfulDays": 0,
+            "totalCompletions": 0,
+            "longestStreak": 0,
+            "bouncebacks": 0,
+            "improvementSteps": 0,
+            "growthScore": 0,
+        }
+        settings = SimpleNamespace(reward_preferences={
+            "selectedThemeId": "sunrise-gold",
+            "selectedTitleId": "growth-navigator",
+        })
+
+        with patch.object(groups_routes, "_student_reward_metrics", return_value=locked_metrics), patch.object(
+            groups_routes,
+            "_build_ip_economy",
+            return_value={},
+        ):
+            rewards = groups_routes._build_student_rewards(SimpleNamespace(), 9, settings)
+
+        self.assertEqual(rewards["preferences"]["selectedThemeId"], "ip-classic")
+        self.assertEqual(rewards["preferences"]["selectedTitleId"], "steady-starter")
+
     def test_calculate_performance_card_points_penalizes_missing_signature_and_refocus(self):
         checkpoints = [
             {

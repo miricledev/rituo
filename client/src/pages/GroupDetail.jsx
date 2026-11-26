@@ -37,8 +37,13 @@ import useHabitProgress from '../hooks/useHabitProgress';
 import useColorChartAccess from '../hooks/useColorChartAccess';
 import useGroupDetailViewModel from '../hooks/useGroupDetailViewModel';
 import useChallengeValidation from '../hooks/useChallengeValidation';
+import {
+  getProtocolNameForTab,
+  triggerProtocolTransition
+} from '../utils/protocolTransition';
 import SchoolGroupDetail from './SchoolGroupDetail';
-import StandardGroupDetail from './StandardGroupDetail';
+import FootballGroupDetail from './FootballGroupDetail';
+import StaffGroupDetail from './StaffGroupDetail';
 
 const ColorChart = lazy(() => import('../components/ColorChart'));
 const HabitCalendar = lazy(() => import('../components/HabitCalendar'));
@@ -62,7 +67,34 @@ const GroupDetail = () => {
   const [editingHabits, setEditingHabits] = useState({});
   const [tempNumericValues, setTempNumericValues] = useState({});
   const [tempTextValues, setTempTextValues] = useState({});
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTabState] = useState('overview');
+  const runWithPlannerGuard = (action) => {
+    const plannerGuard = window.__innerPerformancePlannerGuard;
+    if (activeTab === 'calendar' && plannerGuard?.isDirty?.()) {
+      plannerGuard.requestLeave(action);
+      return false;
+    }
+    action();
+    return true;
+  };
+  const setActiveTab = (nextTab) => {
+    const resolvedTab = typeof nextTab === 'function' ? nextTab(activeTab) : nextTab;
+    const applyTab = () => {
+      if (resolvedTab && resolvedTab !== activeTab) {
+        triggerProtocolTransition(
+          resolvedTab === 'school' && user?.accountRole === 'student'
+            ? 'Student Workspace'
+            : getProtocolNameForTab(resolvedTab)
+        );
+      }
+      setActiveTabState(resolvedTab);
+    };
+    if (resolvedTab && resolvedTab !== activeTab) {
+      runWithPlannerGuard(applyTab);
+      return;
+    }
+    applyTab();
+  };
   const [forcedSchoolSection, setForcedSchoolSection] = useState(null);
   const [currentSchoolSection, setCurrentSchoolSection] = useState('school-timetable');
   const [selectedChatClassId, setSelectedChatClassId] = useState(null);
@@ -198,12 +230,17 @@ const GroupDetail = () => {
 
   const isLeader = group?.viewerCanManage ?? (group?.leader && user ? String(group.leader.id) === String(user.id) : false);
   const isSchoolGroup = (group?.groupType || 'school') === 'school';
-  const containerLabel = isSchoolGroup ? 'School' : 'Group';
-  const containerIdLabel = isSchoolGroup ? 'School ID' : 'Group ID';
-  const overviewLabel = isSchoolGroup ? 'Dashboard' : 'Overview';
-  const chatLabel = isSchoolGroup ? 'School Chat' : 'Group Chat';
-  const schoolWorkspaceLabel = isSchoolGroup ? 'School Workspace' : 'School Impact';
-  const adminLabel = isSchoolGroup ? 'School Admin' : 'Admin';
+  const isStaffGroup = group?.groupType === 'staff';
+  const isSchoolStudent = isSchoolGroup && user?.accountRole === 'student' && !isLeader;
+  const isSchoolTeacher = isSchoolGroup && user?.accountRole === 'teacher' && !isLeader;
+  const containerLabel = isStaffGroup ? 'Coaches HQ' : isSchoolGroup ? 'School' : 'Football';
+  const containerIdLabel = isStaffGroup ? 'HQ ID' : isSchoolGroup ? 'School ID' : 'Client Workspace ID';
+  const overviewLabel = isStaffGroup ? 'Accountability' : isSchoolGroup ? (isSchoolStudent ? 'My Day' : 'Dashboard') : (isLeader ? 'Client Dashboard' : 'My Day');
+  const chatLabel = isStaffGroup ? 'Banter Room' : isSchoolGroup ? 'School Chat' : 'Coach Chat';
+  const schoolWorkspaceLabel = isSchoolGroup
+    ? (isSchoolStudent ? 'Student Workspace' : isSchoolTeacher ? 'Student Support' : 'School Workspace')
+    : 'Football Performance';
+  const adminLabel = isSchoolGroup ? 'School Admin' : 'Client Setup';
   const attendanceLabel = isSchoolGroup ? 'Attendance Ops' : 'Attendance';
   const {
     fetchSchoolProfiles,
@@ -304,34 +341,43 @@ const GroupDetail = () => {
     onRemoveChallenge: () => setShowDeleteChallengeConfirm(true)
   };
   const schoolTabs = [
-    { key: 'overview', label: overviewLabel, show: true },
-    { key: 'school', label: schoolWorkspaceLabel, show: true },
+    { key: 'overview', label: overviewLabel, mobileLabel: 'Day', show: true },
+    { key: 'school', label: schoolWorkspaceLabel, mobileLabel: 'Student', show: true },
     { key: 'chat', label: chatLabel, show: false },
     { key: 'dms', label: 'Staff DMs', show: false },
     { key: 'dm', label: 'Message', show: false },
     { key: 'course', label: 'Learning', show: isLeader || !!group?.activeChallenge?.courseId },
     { key: 'leaderboard', label: 'League', show: false },
-    { key: 'colorChart', label: 'Color Chart', show: false },
-    { key: 'calendar', label: 'Planner', show: false },
+    { key: 'colorChart', label: 'My Color Chart', mobileLabel: 'Chart', show: isSchoolStudent },
+    { key: 'calendar', label: 'My Planner', mobileLabel: 'Planner', show: isSchoolStudent },
+    { key: 'tools', label: 'IP Tools', mobileLabel: 'Tools', show: isSchoolStudent },
+    { key: 'rewards', label: 'IP Shop', mobileLabel: 'Shop', show: isSchoolStudent },
     { key: 'archives', label: 'Archives', show: false },
     { key: 'presets', label: 'Presets', show: false },
     { key: 'attendance', label: attendanceLabel, show: false },
     { key: 'admin', label: adminLabel, show: false }
   ];
-  const standardTabs = [
-    { key: 'overview', label: overviewLabel, show: true },
-    { key: 'chat', label: chatLabel, show: true },
-    { key: 'dms', label: 'DMs', show: isLeader },
-    { key: 'dm', label: 'Message', show: !isLeader },
-    { key: 'leaderboard', label: 'Leaderboard', show: true },
-    { key: 'course', label: 'Course', show: isLeader || !!group?.activeChallenge?.courseId },
-    { key: 'colorChart', label: 'Color Chart', show: true },
-    { key: 'calendar', label: 'Calendar', show: !isLeader },
-    { key: 'school', label: schoolWorkspaceLabel, show: true },
-    { key: 'archives', label: 'Archives', show: isLeader },
-    { key: 'presets', label: 'Presets', show: isLeader },
-    { key: 'attendance', label: attendanceLabel, show: isLeader },
-    { key: 'admin', label: adminLabel, show: isLeader }
+  const footballTabs = [
+    { key: 'overview', label: overviewLabel, mobileLabel: 'Day', show: true },
+    { key: 'calendar', label: 'My Planner', mobileLabel: 'Planner', show: !isLeader },
+    { key: 'colorChart', label: isLeader ? 'Player Charts' : 'Football Colour Chart', mobileLabel: 'Chart', show: true },
+    { key: 'chat', label: chatLabel, mobileLabel: 'Coach', show: true },
+    { key: 'rewards', label: 'IP Shop', mobileLabel: 'Shop', show: !isLeader },
+    { key: 'tools', label: 'IP Tools', mobileLabel: 'Tools', show: !isLeader },
+    { key: 'archives', label: 'Programme History', mobileLabel: 'History', show: isLeader },
+    { key: 'presets', label: 'Habit Presets', mobileLabel: 'Presets', show: isLeader },
+    { key: 'admin', label: adminLabel, mobileLabel: 'Setup', show: isLeader }
+  ];
+  const staffTabs = [
+    { key: 'challenge', label: 'My Challenge', mobileLabel: 'Challenge', show: true },
+    { key: 'calendar', label: 'My Planner', mobileLabel: 'Planner', show: true },
+    { key: 'overview', label: 'Accountability', mobileLabel: 'HQ', show: true },
+    { key: 'leaderboard', label: 'Standards Table', mobileLabel: 'Table', show: true },
+    { key: 'chat', label: 'Banter Room', mobileLabel: 'Banter', show: true },
+    { key: 'rewards', label: 'Avatar Shop', mobileLabel: 'Avatar', show: true },
+    { key: 'tools', label: 'IP Tools', mobileLabel: 'Tools', show: true },
+    { key: 'history', label: 'My History', mobileLabel: 'History', show: true },
+    { key: 'admin', label: 'HQ Members', mobileLabel: 'Members', show: isLeader }
   ];
   const {
     handleLoadPreset: challengeHandleLoadPreset,
@@ -447,22 +493,59 @@ const GroupDetail = () => {
   }, [groupId]);
 
   useEffect(() => {
-    fetchSchoolProfiles();
-  }, [groupId, user?.id]);
+    if (group?.groupType === 'school') fetchSchoolProfiles();
+  }, [group?.groupType, groupId, user?.id]);
+
+  useEffect(() => {
+    if (group?.groupType !== 'staff') return;
+    if (searchParams.get('tab') || searchParams.get('section')) return;
+    setActiveTabState('challenge');
+  }, [group?.groupId, group?.groupType]);
 
   useEffect(() => {
     const tab = searchParams.get('tab');
+    const section = searchParams.get('section');
     const classParam = searchParams.get('class');
     const parsedClassId = classParam ? Number(classParam) : null;
     setSelectedChatClassId(Number.isFinite(parsedClassId) ? parsedClassId : null);
-    if (tab === 'course') setActiveTab('course');
-    if (tab === 'school-impact' || tab === 'school') setActiveTab('school');
-    if (tab === 'admin' && isLeader) setActiveTab('admin');
-    if (tab === 'chat') setActiveTab('chat');
-    if (tab === 'dms' || tab === 'dm') {
-      setActiveTab(isSchoolGroup ? 'chat' : tab);
+    const schoolSectionAliases = {
+      students: 'student-profiles',
+      teaching: 'teacher-register',
+      reports: 'school-reports',
+      homework: 'school-homework'
+    };
+    const requestedSchoolSection = schoolSectionAliases[section] || section;
+    const schoolSections = new Set([
+      'school-classes',
+      'school-timetable',
+      'school-structure',
+      'school-operations',
+      'teacher-register',
+      'school-homework',
+      'school-reports',
+      'school-league-table',
+      'student-profiles'
+    ]);
+    let requestedTab = null;
+    if (section === 'dashboard') requestedTab = 'overview';
+    if (section === 'community') requestedTab = 'chat';
+    if (section === 'planner' || section === 'schedule') requestedTab = 'calendar';
+    if (section === 'color-chart' || section === 'skills') requestedTab = 'colorChart';
+    if (isSchoolGroup && schoolSections.has(requestedSchoolSection)) {
+      setForcedSchoolSection(requestedSchoolSection);
+      requestedTab = 'school';
     }
-  }, [isLeader, isSchoolGroup, searchParams]);
+    if (tab === 'overview') requestedTab = 'overview';
+    if (tab === 'calendar') requestedTab = 'calendar';
+    if (tab === 'colorChart') requestedTab = 'colorChart';
+    if (tab === 'course') requestedTab = 'course';
+    if (isStaffGroup && ['challenge', 'leaderboard', 'chat', 'rewards', 'tools', 'history'].includes(tab)) requestedTab = tab;
+    if (isSchoolGroup && (tab === 'school-impact' || tab === 'school')) requestedTab = 'school';
+    if (tab === 'admin' && isLeader) requestedTab = 'admin';
+    if (tab === 'chat') requestedTab = 'chat';
+    if (tab === 'dms' || tab === 'dm') requestedTab = 'chat';
+    if (requestedTab) setActiveTab(requestedTab);
+  }, [isLeader, isSchoolGroup, isStaffGroup, searchParams]);
 
   useEffect(() => {
     const currentClassParam = searchParams.get('class');
@@ -752,25 +835,32 @@ const GroupDetail = () => {
 
   const shellProps = {
     ...sharedTabState,
-    tabs: isSchoolGroup ? schoolTabs : standardTabs
+    tabs: isStaffGroup ? staffTabs : isSchoolGroup ? schoolTabs : footballTabs
   };
 
   const handleSelectSchoolArea = (area) => {
-    setActiveTab(area.defaultTab);
-    if (area.defaultSection) {
-      setCurrentSchoolSection(area.defaultSection);
-    }
-    setForcedSchoolSection(area.defaultSection || null);
+    runWithPlannerGuard(() => {
+      triggerProtocolTransition(getProtocolNameForTab(area.defaultTab, area.defaultSection));
+      setActiveTabState(area.defaultTab);
+      if (area.defaultSection) {
+        setCurrentSchoolSection(area.defaultSection);
+      }
+      setForcedSchoolSection(area.defaultSection || null);
+    });
   };
 
   const handleOpenSchoolSection = (section) => {
-    setActiveTab('school');
-    setCurrentSchoolSection(section);
-    setForcedSchoolSection(section);
+    runWithPlannerGuard(() => {
+      triggerProtocolTransition(getProtocolNameForTab('school', section));
+      setActiveTabState('school');
+      setCurrentSchoolSection(section);
+      setForcedSchoolSection(section);
+    });
   };
 
   const workspaceProps = {
     activeTab,
+    setActiveTab,
     isLeader,
     isCoach,
     mySchoolProfile,
@@ -845,6 +935,7 @@ const GroupDetail = () => {
     hasHabitsAdded,
     memberHabits,
     lockedHabits,
+    isEditingHabits,
     expandAllMembersInModal,
     collapseAllMembersInModal,
     collapsedMembersInModal,
@@ -902,10 +993,17 @@ const GroupDetail = () => {
     setDeleteGroupConfirmText,
     setShowDeleteGroupStep,
     showDeleteGroupStep,
-    handleDeleteGroup
+    handleDeleteGroup,
+    memberToKick,
+    setMemberToKick,
+    showKickMemberConfirm,
+    setShowKickMemberConfirm,
+    handleKickMember
   };
 
-  return isSchoolGroup ? (
+  return isStaffGroup ? (
+    <StaffGroupDetail shellProps={shellProps} workspaceProps={workspaceProps} />
+  ) : isSchoolGroup ? (
     <SchoolGroupDetail
       shellProps={shellProps}
       workspaceProps={workspaceProps}
@@ -913,7 +1011,7 @@ const GroupDetail = () => {
       onSelectSchoolArea={handleSelectSchoolArea}
     />
   ) : (
-    <StandardGroupDetail shellProps={shellProps} workspaceProps={workspaceProps} />
+    <FootballGroupDetail shellProps={shellProps} workspaceProps={workspaceProps} />
   );
 };
 

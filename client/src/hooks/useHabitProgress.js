@@ -30,7 +30,7 @@ const useHabitProgress = ({
         await axios.post(`/groups/${groupId}/challenge/${group.activeChallenge.id}/habit/${habitIndex}/toggle`, {});
         fetchGroupDetails();
       } catch (error) {
-        showPageToast('error', 'Failed to update habit completion');
+        showPageToast('error', error.response?.data?.error || 'Failed to update habit completion');
       }
     });
   }, [fetchGroupDetails, group, groupId, myMemberHabit, showPageToast, withTicking]);
@@ -46,7 +46,7 @@ const useHabitProgress = ({
         await axios.post(`/groups/${groupId}/challenge/${group.activeChallenge.id}/habit/${habitIndex}/numeric`, { value });
         fetchGroupDetails();
       } catch (error) {
-        showPageToast('error', 'Failed to update numeric habit');
+        showPageToast('error', error.response?.data?.error || 'Failed to update numeric habit');
       }
     });
   }, [fetchGroupDetails, group, groupId, myMemberHabit, showPageToast, withTicking]);
@@ -65,7 +65,7 @@ const useHabitProgress = ({
         fetchGroupDetails();
         setEditingHabits((prev) => ({ ...prev, [habitIndex]: false }));
       } catch (error) {
-        showPageToast('error', 'Failed to update text habit');
+        showPageToast('error', error.response?.data?.error || 'Failed to update text habit');
       }
     });
   }, [fetchGroupDetails, group, groupId, myMemberHabit, setEditingHabits, showPageToast, withTicking]);
@@ -116,7 +116,7 @@ const useHabitProgress = ({
         fetchGroupDetails();
         setEditingHabits((prev) => ({ ...prev, [habitIndex]: false }));
       } catch (error) {
-        showPageToast('error', 'Failed to update numeric habit');
+        showPageToast('error', error.response?.data?.error || 'Failed to update numeric habit');
       }
     });
   }, [fetchGroupDetails, group, groupId, myMemberHabit, setEditingHabits, showPageToast, withTicking]);
@@ -131,7 +131,7 @@ const useHabitProgress = ({
         fetchGroupDetails();
         setEditingHabits((prev) => ({ ...prev, [habitIndex]: false }));
       } catch (error) {
-        showPageToast('error', 'Failed to update text habit');
+        showPageToast('error', error.response?.data?.error || 'Failed to update text habit');
       }
     });
   }, [fetchGroupDetails, group, groupId, myMemberHabit, setEditingHabits, showPageToast, withTicking]);

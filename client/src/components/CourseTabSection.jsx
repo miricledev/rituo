@@ -17,7 +17,7 @@ const CourseTabSection = ({
   }
 
   return (
-    <div className="space-y-8">
+    <section className="space-y-8 rounded-[2rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.045] sm:p-6">
       {isLeader ? (
         renderLazyPanel(
           <>
@@ -56,7 +56,7 @@ const CourseTabSection = ({
           No course for this challenge. Your group leader can add one when creating a challenge.
         </div>
       )}
-    </div>
+    </section>
   );
 };
 

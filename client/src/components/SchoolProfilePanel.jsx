@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import DailyHabitPlanner from './DailyHabitPlanner';
 import InlineToast from './InlineToast';
+import SchoolClassesPanel from './SchoolClassesPanel';
+import {
+  getProtocolNameForTab,
+  triggerProtocolTransition
+} from '../utils/protocolTransition';
+import { HOMEWORK_ENABLED } from '../config/features';
 
 const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 const checkpoints = ['morning', 'midday', 'endOfDay'];
@@ -29,10 +35,18 @@ const parentContactTypes = [
 ];
 const schoolRoleOptions = [
   { value: 'coach', label: 'Coach' },
-  { value: 'teacher', label: 'Teacher' },
+  { value: 'subject-teacher', label: 'Subject teacher' },
+  { value: 'assistant-teacher', label: 'Assistant teacher / TA' },
+  { value: 'head-of-department', label: 'Head of department' },
+  { value: 'head-of-year', label: 'Head of year' },
+  { value: 'senco', label: 'SENCO' },
   { value: 'pastoral-lead', label: 'Pastoral lead' },
+  { value: 'slt', label: 'Senior leadership team' },
+  { value: 'assistant-headteacher', label: 'Assistant headteacher' },
+  { value: 'deputy-headteacher', label: 'Deputy headteacher' },
   { value: 'headteacher', label: 'Headteacher' },
-  { value: 'school-admin', label: 'School admin' }
+  { value: 'school-admin', label: 'School admin' },
+  { value: 'teacher', label: 'Teacher (legacy)' }
 ];
 const behaviourKindOptions = [
   { value: 'reward', label: 'Reward' },
@@ -92,12 +106,12 @@ const leagueBadgeTones = {
 
 const inputClass = 'w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-secondary-600 dark:bg-secondary-800 dark:text-white';
 const inputLabelClass = 'text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400';
+const isHomeworkRelated = (value) => !HOMEWORK_ENABLED && /homework/i.test(JSON.stringify(value || ''));
 const scoreGuideSteps = [
   'Start with Today recovery. If the score is low or marked needs-action, open the student before the end of the day and check which part is dragging them down.',
   'Use the lesson register first. That is the cleanest daily lever because attendance, engagement, and refocus entries immediately affect school points.',
-  'Set homework with a class selected whenever possible. That keeps the assignment, reminders, and submissions inside the correct class chat rather than scattering activity.',
-  'Use the weekly score and league as a recognition tool, not just a ranking. Celebrate consistent gains and use low movement as a prompt to review attendance, behaviour, and missing homework together.',
-  'Only use interventions after the score breakdown explains why a student is stuck. The score cards tell you whether the issue is lesson conduct, homework completion, habits, or attendance.'
+  'Use the weekly score and league as a recognition tool, not just a ranking. Celebrate consistent gains and use low movement as a prompt to review attendance, behaviour, and habits together.',
+  'Only use interventions after the score breakdown explains why a student is stuck. The score cards tell you whether the issue is lesson conduct, habits, or attendance.'
 ];
 
 function LabeledField({ label, hint, className = '', children }) {
@@ -131,14 +145,14 @@ function getRecommendedTeacherAction(profile) {
       tone: 'bg-blue-50 border-blue-200 text-blue-900 dark:bg-blue-950/20 dark:border-blue-900/40 dark:text-blue-100'
     };
   }
-  if (missingHomeworkCount > 0) {
+  if (HOMEWORK_ENABLED && missingHomeworkCount > 0) {
     return {
       title: 'Review missing homework',
       detail: `${missingHomeworkCount} homework ${missingHomeworkCount === 1 ? 'task is' : 'tasks are'} missing. Check whether this needs a reminder, a sanction, or a smaller support task in class chat.`,
       tone: 'bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/20 dark:border-amber-900/40 dark:text-amber-100'
     };
   }
-  if (dueTodayCount > 0) {
+  if (HOMEWORK_ENABLED && dueTodayCount > 0) {
     return {
       title: 'Check today’s homework completion',
       detail: `${dueTodayCount} homework ${dueTodayCount === 1 ? 'item is' : 'items are'} due today. Use the class channel to remind students before the end of the day.`,
@@ -162,7 +176,7 @@ function getRecommendedTeacherAction(profile) {
   if (activeIntervention) {
     return {
       title: 'Track the live intervention',
-      detail: 'There is already an active intervention on this profile. Use today’s score and homework movement to decide whether the plan is working.',
+      detail: 'There is already an active intervention on this profile. Use today’s score and progress movement to decide whether the plan is working.',
       tone: 'bg-cyan-50 border-cyan-200 text-cyan-900 dark:bg-cyan-950/20 dark:border-cyan-900/40 dark:text-cyan-100'
     };
   }
@@ -195,8 +209,8 @@ const emptyTimetable = () => ({
 });
 const emptySubject = () => ({ id: `subject-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: '', code: '' });
 const emptyRoom = () => ({ id: `room-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: '', block: '', capacity: '' });
-const emptyClass = () => ({ id: `class-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: '', tutorGroup: '', yearGroup: '', roomId: '', enrollments: [], teachingAssignments: [] });
-const emptyTeachingAssignment = () => ({ subjectId: '', teacherId: '' });
+const emptyClass = () => ({ id: `class-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: '', tutorGroup: '', yearGroup: '', description: '', subjectId: '', roomId: '', weeklyLessons: 5, enrollments: [], teachingAssignments: [] });
+const emptyTeachingAssignment = () => ({ subjectId: '', teacherId: '', assignmentRole: 'lead-teacher' });
 const emptyBehaviourType = () => ({ id: `behaviour-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, name: '', kind: 'reward', severity: 'low', defaultPoints: 0, noteType: '' });
 const emptyBehaviourEvent = () => ({ behaviourTypeId: '', eventDate: new Date().toISOString().slice(0, 10), kind: 'reward', severity: 'low', title: '', subject: '', className: '', pointsDelta: 0, notes: '' });
 const emptyHomeworkAssignment = () => ({
@@ -227,6 +241,7 @@ export default function SchoolProfilePanel({
   group,
   groupId,
   currentUserId,
+  accountRole,
   isLeader,
   isCoach,
   profilesData,
@@ -258,6 +273,18 @@ export default function SchoolProfilePanel({
   const [dashboard, setDashboard] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [schoolStructure, setSchoolStructure] = useState({ roles: [], subjects: [], rooms: [], classes: [] });
+  const [schoolDayConfig, setSchoolDayConfig] = useState({
+    timezone: 'Europe/London',
+    startTime: '08:30',
+    endTime: '15:30',
+    lessonMinutes: 60,
+    breaks: [
+      { name: 'Morning break', startTime: '10:30', endTime: '10:50' },
+      { name: 'Lunch', startTime: '12:30', endTime: '13:15' }
+    ]
+  });
+  const [aiTimetableInstructions, setAiTimetableInstructions] = useState('');
+  const [aiTimetableResult, setAiTimetableResult] = useState(null);
   const [teacherRegisterDate, setTeacherRegisterDate] = useState(new Date().toISOString().slice(0, 10));
   const [teacherRegister, setTeacherRegister] = useState([]);
   const [teacherRegisterForms, setTeacherRegisterForms] = useState({});
@@ -331,24 +358,39 @@ export default function SchoolProfilePanel({
     });
   }, [dashboard?.interventions, interventionFilters]);
   const currentSchoolRole = useMemo(
-    () => (schoolStructure.roles || []).find((item) => Number(item.userId) === Number(currentUserId))?.role || '',
-    [currentUserId, schoolStructure.roles]
+    () => schoolStructure.viewerRole || (schoolStructure.roles || []).find((item) => Number(item.userId) === Number(currentUserId))?.role || '',
+    [currentUserId, schoolStructure.roles, schoolStructure.viewerRole]
   );
-  const canUseSchoolOps = isLeader || isCoach || ['teacher', 'headteacher', 'pastoral-lead', 'school-admin'].includes(currentSchoolRole);
-  const canEditSchoolStructure = isLeader || ['headteacher', 'school-admin'].includes(currentSchoolRole);
-  const canUseTeacherRegister = isLeader || isCoach || ['teacher', 'headteacher', 'pastoral-lead', 'school-admin'].includes(currentSchoolRole);
+  const staffRoles = ['teacher', 'subject-teacher', 'assistant-teacher', 'head-of-department', 'head-of-year', 'senco', 'pastoral-lead', 'slt', 'assistant-headteacher', 'deputy-headteacher', 'headteacher', 'school-admin', 'coach'];
+  const canUseSchoolOps = isLeader || isCoach || staffRoles.includes(currentSchoolRole);
+  const canEditSchoolStructure = isLeader || schoolStructure.permissions?.canEditStructure || ['slt', 'assistant-headteacher', 'deputy-headteacher', 'headteacher', 'school-admin'].includes(currentSchoolRole);
+  const canManageTimetable = isLeader || schoolStructure.permissions?.canManageTimetable || ['head-of-department', 'head-of-year', 'slt', 'assistant-headteacher', 'deputy-headteacher', 'headteacher', 'school-admin'].includes(currentSchoolRole);
+  const canUseTeacherRegister = isLeader || isCoach || staffRoles.includes(currentSchoolRole);
   const canManage = canUseSchoolOps;
+  const isStudentView = accountRole === 'student' && !isLeader && !isCoach && !canUseSchoolOps;
   const sectionLinks = useMemo(() => {
-    const links = [{ id: 'school-timetable', label: 'Timetable' }];
+    if (isStudentView) {
+      const links = [
+        { id: 'school-classes', label: 'My classes' },
+        { id: 'school-timetable', label: 'My timetable' },
+        { id: 'student-profiles', label: 'My progress' }
+      ];
+      if (HOMEWORK_ENABLED) links.splice(2, 0, { id: 'school-homework', label: 'My homework' });
+      return links;
+    }
+    const links = [
+      { id: 'school-classes', label: 'Classes' },
+      { id: 'school-timetable', label: 'Timetable' }
+    ];
     if (canEditSchoolStructure) links.push({ id: 'school-structure', label: 'Structure' });
     if (canUseSchoolOps) links.push({ id: 'school-operations', label: 'Operations' });
     if (canUseTeacherRegister) links.push({ id: 'teacher-register', label: 'Register' });
-    links.push({ id: 'school-homework', label: 'Homework' });
+    if (HOMEWORK_ENABLED) links.push({ id: 'school-homework', label: 'Homework' });
     if (canUseSchoolOps) links.push({ id: 'school-reports', label: 'Reports' });
     if (leagueTable?.length) links.push({ id: 'school-league-table', label: 'League' });
     links.push({ id: 'student-profiles', label: 'Students' });
     return links;
-  }, [canEditSchoolStructure, canUseTeacherRegister, canUseSchoolOps, leagueTable?.length]);
+  }, [canEditSchoolStructure, canUseTeacherRegister, canUseSchoolOps, isStudentView, leagueTable?.length]);
   const filteredProfiles = useMemo(() => {
     const query = studentSearch.trim().toLowerCase();
     const matched = query
@@ -424,7 +466,7 @@ export default function SchoolProfilePanel({
     { id: 'recovered', label: 'Recovered today' },
     { id: 'homework-missing', label: 'Homework missing' },
     { id: 'homework-due', label: 'Homework due today' }
-  ]), []);
+  ].filter((filter) => HOMEWORK_ENABLED || !filter.id.startsWith('homework-'))), []);
   const studentQuickFilterCounts = useMemo(() => {
     const counts = {
       all: profiles.length,
@@ -515,11 +557,12 @@ export default function SchoolProfilePanel({
     setExpandedStudents((prev) => {
       const next = {};
       profiles.forEach((profile) => {
-        next[profile.student.id] = prev[profile.student.id] ?? false;
+        const isCurrentStudent = isStudentView && String(profile.student.id) === String(currentUserId);
+        next[profile.student.id] = isCurrentStudent || (prev[profile.student.id] ?? false);
       });
       return next;
     });
-  }, [profiles]);
+  }, [currentUserId, isStudentView, profiles]);
 
   useEffect(() => {
     setTimetableEntries(group?.schoolTimetable || []);
@@ -540,14 +583,35 @@ export default function SchoolProfilePanel({
         const [dashboardResult, structureResult, registerResult, homeworkResult] = await Promise.allSettled([
           axios.get(`/groups/${groupId}/school-dashboard`),
           axios.get(`/groups/${groupId}/school-structure`),
-          axios.get(`/groups/${groupId}/teacher-register`, { params: { date: teacherRegisterDate } }),
-          axios.get(`/groups/${groupId}/homework`)
+          canUseTeacherRegister
+            ? axios.get(`/groups/${groupId}/teacher-register`, { params: { date: teacherRegisterDate } })
+            : Promise.resolve({ data: { register: [] } }),
+          HOMEWORK_ENABLED ? axios.get(`/groups/${groupId}/homework`) : Promise.resolve({ data: { homework: [] } })
         ]);
         if (isMounted) {
-          setDashboard(dashboardResult.status === 'fulfilled' ? (dashboardResult.value.data?.dashboard || null) : null);
-          setSchoolStructure(structureResult.status === 'fulfilled' ? (structureResult.value.data?.structure || { roles: [], subjects: [], rooms: [], classes: [] }) : { roles: [], subjects: [], rooms: [], classes: [] });
+          const nextDashboard = dashboardResult.status === 'fulfilled' ? (dashboardResult.value.data?.dashboard || null) : null;
+          setDashboard(nextDashboard ? {
+            ...nextDashboard,
+            notifications: {
+              ...(nextDashboard.notifications || {}),
+              items: (nextDashboard.notifications?.items || []).filter((item) => !isHomeworkRelated(item))
+            },
+            recentActivity: (nextDashboard.recentActivity || []).filter((item) => !isHomeworkRelated(item)),
+            myStudentsAtRisk: (nextDashboard.myStudentsAtRisk || []).map((item) => ({
+              ...item,
+              reasons: (item.reasons || []).filter((reason) => !isHomeworkRelated(reason)),
+              autoFlags: (item.autoFlags || []).filter((flag) => !isHomeworkRelated(flag))
+            }))
+          } : null);
+          const nextStructure = structureResult.status === 'fulfilled'
+            ? (structureResult.value.data?.structure || { roles: [], subjects: [], rooms: [], classes: [] })
+            : { roles: [], subjects: [], rooms: [], classes: [] };
+          setSchoolStructure(nextStructure);
+          if (nextStructure.schoolDayConfig && Object.keys(nextStructure.schoolDayConfig).length) {
+            setSchoolDayConfig(nextStructure.schoolDayConfig);
+          }
           const registerData = registerResult.status === 'fulfilled' ? (registerResult.value.data?.register || []) : [];
-          const homeworkData = homeworkResult.status === 'fulfilled' ? (homeworkResult.value.data?.homework || []) : [];
+          const homeworkData = HOMEWORK_ENABLED && homeworkResult.status === 'fulfilled' ? (homeworkResult.value.data?.homework || []) : [];
           setTeacherRegister(registerData);
           setHomeworkAssignments(homeworkData);
           const nextForms = {};
@@ -583,7 +647,7 @@ export default function SchoolProfilePanel({
     };
     fetchSchoolData();
     return () => { isMounted = false; };
-  }, [groupId, profilesData, group?.schoolTimetable, teacherRegisterDate]);
+  }, [canUseTeacherRegister, groupId, profilesData, group?.schoolTimetable, teacherRegisterDate]);
 
   useEffect(() => {
     if (!profilesData?.length) return;
@@ -1017,13 +1081,45 @@ export default function SchoolProfilePanel({
   const saveTimetable = async () => {
     try {
       setSavingKey('timetable', true);
-      await axios.put(`/groups/${groupId}/school-timetable`, { entries: timetableEntries });
+      const response = await axios.put(`/groups/${groupId}/school-timetable`, {
+        entries: timetableEntries,
+        dayConfig: schoolDayConfig
+      });
+      setTimetableEntries(response.data?.schoolTimetable || timetableEntries);
+      if (response.data?.schoolDayConfig) setSchoolDayConfig(response.data.schoolDayConfig);
       await refreshGroup?.();
       setToast({ type: 'success', title: 'School timetable saved' });
     } catch (error) {
-      setToast({ type: 'error', title: 'School timetable not saved', message: error.response?.data?.error || 'Please try again.' });
+      const conflicts = error.response?.data?.conflicts || [];
+      setToast({
+        type: 'error',
+        title: 'School timetable not saved',
+        message: conflicts[0]?.message || error.response?.data?.error || 'Please try again.'
+      });
     } finally {
       setSavingKey('timetable', false);
+    }
+  };
+  const generateAiTimetable = async () => {
+    try {
+      setSavingKey('ai-timetable', true);
+      setAiTimetableResult(null);
+      const response = await axios.post(`/groups/${groupId}/school-timetable/ai`, {
+        dayConfig: schoolDayConfig,
+        instructions: aiTimetableInstructions
+      });
+      setTimetableEntries(response.data?.entries || []);
+      if (response.data?.schoolDayConfig) setSchoolDayConfig(response.data.schoolDayConfig);
+      setAiTimetableResult(response.data);
+      setToast({
+        type: response.data?.conflicts?.length ? 'error' : 'success',
+        title: response.data?.conflicts?.length ? 'AI draft needs review' : 'AI timetable draft ready',
+        message: response.data?.conflicts?.[0]?.message || response.data?.summary || 'Review the draft, then save it.'
+      });
+    } catch (error) {
+      setToast({ type: 'error', title: 'AI timetable not generated', message: error.response?.data?.error || 'Please try again.' });
+    } finally {
+      setSavingKey('ai-timetable', false);
     }
   };
   const saveSchoolStructure = async () => {
@@ -1061,6 +1157,10 @@ export default function SchoolProfilePanel({
     }
   };
   const refreshHomework = async () => {
+    if (!HOMEWORK_ENABLED) {
+      setHomeworkAssignments([]);
+      return;
+    }
     const homeworkResponse = await axios.get(`/groups/${groupId}/homework`);
     setHomeworkAssignments(homeworkResponse.data?.homework || []);
   };
@@ -1135,23 +1235,27 @@ export default function SchoolProfilePanel({
   };
 
   if (profilesLoading) return <div className="flex justify-center items-center py-12"><div className="w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div></div>;
-  if (!profiles.length) return <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-card p-8 text-center text-secondary-500 dark:text-secondary-400">No school profiles available yet.</div>;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <InlineToast toast={toast} onClose={() => setToast(null)} />
 
       <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_220px] xl:gap-6 xl:items-start">
         <div className="space-y-6">
-      <div className="xl:hidden rounded-xl border border-gray-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 shadow-card p-4">
-        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">Jump to</div>
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+      <div className={`xl:hidden rounded-xl border border-gray-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 shadow-card ${isStudentView ? 'p-2' : 'p-4'}`}>
+        <div className={`${isStudentView ? 'sr-only' : 'text-xs font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400'}`}>Jump to</div>
+        <div className={isStudentView ? 'grid grid-cols-3 gap-1' : 'mt-3 flex gap-2 overflow-x-auto pb-1'}>
               {sectionLinks.map((link) => (
                 <button
                   key={link.id}
                   type="button"
-                  onClick={() => setActiveSection(link.id)}
-                  className={`shrink-0 rounded-full border px-3 py-2 text-sm font-medium ${
+                  onClick={() => {
+                    if (activeSection !== link.id) {
+                      triggerProtocolTransition(getProtocolNameForTab('school', link.id));
+                      setActiveSection(link.id);
+                    }
+                  }}
+                  className={`shrink-0 border font-medium ${isStudentView ? 'rounded-lg px-2 py-2.5 text-xs' : 'rounded-full px-3 py-2 text-sm'} ${
                     activeSection === link.id
                       ? 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
                       : 'border-gray-200 text-secondary-600 hover:border-primary-200 hover:text-primary-700 dark:border-secondary-700 dark:text-secondary-300 dark:hover:border-primary-700 dark:hover:text-primary-300'
@@ -1163,15 +1267,77 @@ export default function SchoolProfilePanel({
         </div>
       </div>
 
+      {activeSection === 'school-classes' ? (
+        <SchoolClassesPanel
+          groupId={groupId}
+          classes={schoolStructure.classes || []}
+          subjects={schoolStructure.subjects || []}
+          rooms={schoolStructure.rooms || []}
+          teachers={teacherOptions}
+          isStudentView={isStudentView}
+          onStructureChange={(structure) => {
+            if (!structure) return;
+            setSchoolStructure(structure);
+            if (structure.schoolDayConfig && Object.keys(structure.schoolDayConfig).length) {
+              setSchoolDayConfig(structure.schoolDayConfig);
+            }
+            refreshProfiles?.();
+            refreshGroup?.();
+          }}
+          onOpenHomework={HOMEWORK_ENABLED ? () => {
+            triggerProtocolTransition(getProtocolNameForTab('school', 'school-homework'));
+            setActiveSection('school-homework');
+          } : undefined}
+          onToast={setToast}
+        />
+      ) : null}
+
       {activeSection === 'school-timetable' && (
-      <section id="school-timetable" className="scroll-mt-24 bg-white dark:bg-secondary-800 rounded-xl shadow-card border border-gray-200 dark:border-secondary-700 p-6">
-        <div className="flex items-center justify-between mb-4">
+      <section id="school-timetable" className="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-3 shadow-card dark:border-secondary-700 dark:bg-secondary-800 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-5">
           <div>
-            <h3 className="text-2xl font-semibold text-secondary-900 dark:text-white">School timetable</h3>
-            <p className="text-sm text-secondary-500 dark:text-secondary-400">Teachers can set lesson slots so students place habits around the school day.</p>
+            <h3 className="text-xl font-semibold text-secondary-900 dark:text-white sm:text-2xl">School timetable</h3>
+            <p className="hidden text-sm text-secondary-500 dark:text-secondary-400 sm:block">
+              {isStudentView ? 'Your lesson detail is locked into your daily planner alongside habits and personal commitments.' : 'Build lesson detail for every class, then students automatically see it inside their daily planner.'}
+            </p>
           </div>
-          {canManage ? <button type="button" onClick={() => setTimetableEntries((prev) => [...prev, emptyTimetable()])} className="px-3 py-2 rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">Add lesson</button> : null}
+          {canManageTimetable ? <button type="button" onClick={() => setTimetableEntries((prev) => [...prev, emptyTimetable()])} className="px-3 py-2 rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">Add lesson</button> : null}
         </div>
+        {canManageTimetable ? (
+          <div className="mb-5 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-cyan-50 p-5 dark:border-violet-500/20 dark:from-violet-950/30 dark:to-cyan-950/20">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-end">
+              <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-4">
+                <LabeledField label="School starts"><input type="time" value={schoolDayConfig.startTime || ''} onChange={(event) => setSchoolDayConfig((previous) => ({ ...previous, startTime: event.target.value }))} className={inputClass} /></LabeledField>
+                <LabeledField label="School finishes"><input type="time" value={schoolDayConfig.endTime || ''} onChange={(event) => setSchoolDayConfig((previous) => ({ ...previous, endTime: event.target.value }))} className={inputClass} /></LabeledField>
+                <LabeledField label="Lesson length"><input type="number" min="20" max="180" value={schoolDayConfig.lessonMinutes || 60} onChange={(event) => setSchoolDayConfig((previous) => ({ ...previous, lessonMinutes: Number(event.target.value) }))} className={inputClass} /></LabeledField>
+                <div className="flex items-end"><button type="button" onClick={() => setSchoolDayConfig((previous) => ({ ...previous, breaks: [...(previous.breaks || []), { name: 'Break', startTime: '11:00', endTime: '11:15' }] }))} className="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm font-bold text-violet-700 dark:border-violet-500/20 dark:bg-white/[0.06] dark:text-violet-200">+ Break</button></div>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2 md:grid-cols-2">
+              {(schoolDayConfig.breaks || []).map((schoolBreak, breakIndex) => (
+                <div key={`break-${breakIndex}`} className="grid grid-cols-[1fr_110px_110px_auto] gap-2">
+                  <input value={schoolBreak.name || ''} onChange={(event) => setSchoolDayConfig((previous) => ({ ...previous, breaks: previous.breaks.map((item, index) => index === breakIndex ? { ...item, name: event.target.value } : item) }))} className={inputClass} />
+                  <input type="time" value={schoolBreak.startTime || ''} onChange={(event) => setSchoolDayConfig((previous) => ({ ...previous, breaks: previous.breaks.map((item, index) => index === breakIndex ? { ...item, startTime: event.target.value } : item) }))} className={inputClass} />
+                  <input type="time" value={schoolBreak.endTime || ''} onChange={(event) => setSchoolDayConfig((previous) => ({ ...previous, breaks: previous.breaks.map((item, index) => index === breakIndex ? { ...item, endTime: event.target.value } : item) }))} className={inputClass} />
+                  <button type="button" onClick={() => setSchoolDayConfig((previous) => ({ ...previous, breaks: previous.breaks.filter((_, index) => index !== breakIndex) }))} className="rounded-lg bg-red-100 px-3 text-red-700 dark:bg-red-500/10 dark:text-red-200">×</button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_auto]">
+              <textarea value={aiTimetableInstructions} onChange={(event) => setAiTimetableInstructions(event.target.value)} rows={3} placeholder="Optional AI instructions, for example: Year 11 Maths should be before lunch; avoid Friday afternoon PE..." className={inputClass} />
+              <button type="button" disabled={!!saving['ai-timetable']} onClick={generateAiTimetable} className="rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 px-5 py-3 text-sm font-black text-white shadow-lg disabled:opacity-50">
+                {saving['ai-timetable'] ? 'Designing timetable...' : 'Generate collision-free draft with AI'}
+              </button>
+            </div>
+            {aiTimetableResult ? (
+              <div className={`mt-4 rounded-xl border p-3 text-sm ${aiTimetableResult.conflicts?.length ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200'}`}>
+                <div className="font-bold">{aiTimetableResult.summary || 'AI draft ready for review.'}</div>
+                {(aiTimetableResult.warnings || []).map((warning) => <div key={warning} className="mt-1">• {warning}</div>)}
+                {(aiTimetableResult.conflicts || []).slice(0, 4).map((conflict) => <div key={`${conflict.type}-${conflict.message}`} className="mt-1">• {conflict.message}</div>)}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {!timetableEntries.length ? (
           <div className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 p-4 text-sm text-secondary-500 dark:text-secondary-400">No lesson slots added yet.</div>
         ) : (
@@ -1179,28 +1345,28 @@ export default function SchoolProfilePanel({
             {timetableEntries.map((entry) => (
               <div key={entry.id} className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 border border-gray-200 dark:border-secondary-700 p-4">
                 <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-                  <select value={entry.weekday} disabled={!canManage} onChange={(e) => updateTimetable(entry.id, 'weekday', e.target.value)} className={inputClass}>{weekdays.map((day) => <option key={day} value={day}>{day}</option>)}</select>
-                  <input type="time" value={entry.startTime || ''} disabled={!canManage} onChange={(e) => updateTimetable(entry.id, 'startTime', e.target.value)} className={inputClass} />
-                  <input type="time" value={entry.endTime || ''} disabled={!canManage} onChange={(e) => updateTimetable(entry.id, 'endTime', e.target.value)} className={inputClass} />
-                  <select value={entry.subjectId || ''} disabled={!canManage} onChange={(e) => { const subject = (schoolStructure.subjects || []).find((item) => String(item.id) === String(e.target.value)); updateTimetable(entry.id, 'subjectId', e.target.value || ''); updateTimetable(entry.id, 'subject', subject?.name || ''); }} className={inputClass}>
+                  <select value={entry.weekday} disabled={!canManageTimetable} onChange={(e) => updateTimetable(entry.id, 'weekday', e.target.value)} className={inputClass}>{weekdays.map((day) => <option key={day} value={day}>{day}</option>)}</select>
+                  <input type="time" value={entry.startTime || ''} disabled={!canManageTimetable} onChange={(e) => updateTimetable(entry.id, 'startTime', e.target.value)} className={inputClass} />
+                  <input type="time" value={entry.endTime || ''} disabled={!canManageTimetable} onChange={(e) => updateTimetable(entry.id, 'endTime', e.target.value)} className={inputClass} />
+                  <select value={entry.subjectId || ''} disabled={!canManageTimetable} onChange={(e) => { const subject = (schoolStructure.subjects || []).find((item) => String(item.id) === String(e.target.value)); updateTimetable(entry.id, 'subjectId', e.target.value || ''); updateTimetable(entry.id, 'subject', subject?.name || ''); }} className={inputClass}>
                     <option value="">Subject</option>
                     {(schoolStructure.subjects || []).map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
                   </select>
-                  <select value={entry.teacherId || ''} disabled={!canManage} onChange={(e) => { const teacher = teacherOptions.find((option) => String(option.id) === String(e.target.value)); updateTimetable(entry.id, 'teacherId', e.target.value ? Number(e.target.value) : null); updateTimetable(entry.id, 'teacherName', teacher?.username || ''); }} className={inputClass}>
+                  <select value={entry.teacherId || ''} disabled={!canManageTimetable} onChange={(e) => { const teacher = teacherOptions.find((option) => String(option.id) === String(e.target.value)); updateTimetable(entry.id, 'teacherId', e.target.value ? Number(e.target.value) : null); updateTimetable(entry.id, 'teacherName', teacher?.username || ''); }} className={inputClass}>
                     <option value="">Teacher</option>
                     {teacherOptions.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.username}</option>)}
                   </select>
                   <div className="flex gap-2">
-                    <select value={entry.roomId || ''} disabled={!canManage} onChange={(e) => { const room = (schoolStructure.rooms || []).find((item) => String(item.id) === String(e.target.value)); updateTimetable(entry.id, 'roomId', e.target.value || ''); updateTimetable(entry.id, 'room', room?.name || ''); }} className={`${inputClass} min-w-0 flex-1`}>
+                    <select value={entry.roomId || ''} disabled={!canManageTimetable} onChange={(e) => { const room = (schoolStructure.rooms || []).find((item) => String(item.id) === String(e.target.value)); updateTimetable(entry.id, 'roomId', e.target.value || ''); updateTimetable(entry.id, 'room', room?.name || ''); }} className={`${inputClass} min-w-0 flex-1`}>
                       <option value="">Room</option>
                       {(schoolStructure.rooms || []).map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
                     </select>
-                    {canManage ? <button type="button" onClick={() => setTimetableEntries((prev) => prev.filter((item) => item.id !== entry.id))} className="px-3 py-2 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">Remove</button> : null}
+                    {canManageTimetable ? <button type="button" onClick={() => setTimetableEntries((prev) => prev.filter((item) => item.id !== entry.id))} className="px-3 py-2 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">Remove</button> : null}
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input value={entry.teacherName || ''} disabled className={`${inputClass} opacity-70`} placeholder="Teacher name" />
-                  <select value={entry.classId || ''} disabled={!canManage} onChange={(e) => { const schoolClass = (schoolStructure.classes || []).find((item) => String(item.id) === String(e.target.value)); updateTimetable(entry.id, 'classId', e.target.value || ''); updateTimetable(entry.id, 'className', schoolClass?.name || ''); updateTimetable(entry.id, 'studentIds', (schoolClass?.enrollments || []).map((row) => row.studentId)); }} className={inputClass}>
+                  <select value={entry.classId || ''} disabled={!canManageTimetable} onChange={(e) => { const schoolClass = (schoolStructure.classes || []).find((item) => String(item.id) === String(e.target.value)); updateTimetable(entry.id, 'classId', e.target.value || ''); updateTimetable(entry.id, 'className', schoolClass?.name || ''); updateTimetable(entry.id, 'studentIds', (schoolClass?.enrollments || []).map((row) => row.studentId)); }} className={inputClass}>
                     <option value="">Class / tutor group</option>
                     {(schoolStructure.classes || []).map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}
                   </select>
@@ -1212,7 +1378,7 @@ export default function SchoolProfilePanel({
                       const checked = (entry.studentIds || []).some((value) => Number(value) === student.id);
                       return (
                         <label key={`${entry.id}-${student.id}`} className="flex items-center gap-2 rounded-lg bg-white dark:bg-secondary-800 border border-gray-200 dark:border-secondary-700 px-3 py-2 text-sm text-secondary-700 dark:text-secondary-300">
-                          <input type="checkbox" disabled={!canManage} checked={checked} onChange={() => toggleTimetableStudent(entry.id, student.id)} />
+                          <input type="checkbox" disabled={!canManageTimetable} checked={checked} onChange={() => toggleTimetableStudent(entry.id, student.id)} />
                           <span>{student.username}</span>
                         </label>
                       );
@@ -1224,7 +1390,7 @@ export default function SchoolProfilePanel({
             ))}
           </div>
         )}
-        {canManage ? <div className="mt-4 flex justify-end"><button type="button" onClick={saveTimetable} disabled={!!saving.timetable} className="px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-60">{saving.timetable ? 'Saving...' : 'Save timetable'}</button></div> : null}
+        {canManageTimetable ? <div className="mt-4 flex justify-end"><button type="button" onClick={saveTimetable} disabled={!!saving.timetable} className="px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-60">{saving.timetable ? 'Saving...' : 'Validate & save timetable'}</button></div> : null}
       </section>
       )}
 
@@ -1296,15 +1462,21 @@ export default function SchoolProfilePanel({
               </div>
               {(schoolStructure.classes || []).map((schoolClass, classIndex) => (
                 <div key={schoolClass.id || `class-${classIndex}`} className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 border border-gray-200 dark:border-secondary-700 p-4 space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
                     <input value={schoolClass.name || ''} onChange={(e) => updateStructureList('classes', classIndex, 'name', e.target.value)} placeholder="Class name" className={inputClass} />
                     <input value={schoolClass.tutorGroup || ''} onChange={(e) => updateStructureList('classes', classIndex, 'tutorGroup', e.target.value)} placeholder="Tutor group" className={inputClass} />
                     <input value={schoolClass.yearGroup || ''} onChange={(e) => updateStructureList('classes', classIndex, 'yearGroup', e.target.value)} placeholder="Year group" className={inputClass} />
+                    <select value={schoolClass.subjectId || ''} onChange={(e) => updateStructureList('classes', classIndex, 'subjectId', e.target.value)} className={inputClass}>
+                      <option value="">Primary subject</option>
+                      {(schoolStructure.subjects || []).map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
+                    </select>
                     <select value={schoolClass.roomId || ''} onChange={(e) => updateStructureList('classes', classIndex, 'roomId', e.target.value)} className={inputClass}>
                       <option value="">Room</option>
                       {(schoolStructure.rooms || []).map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
                     </select>
+                    <input type="number" min="1" max="20" value={schoolClass.weeklyLessons || 5} onChange={(e) => updateStructureList('classes', classIndex, 'weeklyLessons', e.target.value)} placeholder="Lessons / week" className={inputClass} />
                   </div>
+                  <textarea value={schoolClass.description || ''} onChange={(e) => updateStructureList('classes', classIndex, 'description', e.target.value)} placeholder="Class description, curriculum focus or notes" rows={2} className={inputClass}></textarea>
                   <div>
                     <div className="text-sm font-semibold text-secondary-900 dark:text-white mb-2">Students</div>
                     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
@@ -1326,7 +1498,7 @@ export default function SchoolProfilePanel({
                     </div>
                     <div className="space-y-2">
                       {(schoolClass.teachingAssignments || []).map((assignment, assignmentIndex) => (
-                        <div key={`${schoolClass.id}-assignment-${assignmentIndex}`} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_90px] gap-3">
+                        <div key={`${schoolClass.id}-assignment-${assignmentIndex}`} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_90px] gap-3">
                           <select value={assignment.subjectId || ''} onChange={(e) => updateTeachingAssignment(classIndex, assignmentIndex, 'subjectId', e.target.value)} className={inputClass}>
                             <option value="">Subject</option>
                             {(schoolStructure.subjects || []).map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
@@ -1334,6 +1506,11 @@ export default function SchoolProfilePanel({
                           <select value={assignment.teacherId || ''} onChange={(e) => updateTeachingAssignment(classIndex, assignmentIndex, 'teacherId', e.target.value)} className={inputClass}>
                             <option value="">Teacher</option>
                             {teacherOptions.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.username}</option>)}
+                          </select>
+                          <select value={assignment.assignmentRole || 'lead-teacher'} onChange={(e) => updateTeachingAssignment(classIndex, assignmentIndex, 'assignmentRole', e.target.value)} className={inputClass}>
+                            <option value="lead-teacher">Lead teacher</option>
+                            <option value="subject-teacher">Subject teacher</option>
+                            <option value="assistant-teacher">Assistant teacher</option>
                           </select>
                           <button type="button" onClick={() => removeTeachingAssignment(classIndex, assignmentIndex)} className="px-3 py-2 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">Remove</button>
                         </div>
@@ -1389,7 +1566,7 @@ export default function SchoolProfilePanel({
             <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/40 p-4"><div className="text-xs uppercase tracking-wide text-amber-600 dark:text-amber-300">Overdue actions</div><div className="mt-2 text-3xl font-bold text-amber-700 dark:text-amber-200">{dashboard.overview?.overdueActionsCount ?? 0}</div></div>
             <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/40 p-4"><div className="text-xs uppercase tracking-wide text-blue-600 dark:text-blue-300">Lesson marks</div><div className="mt-2 text-3xl font-bold text-blue-700 dark:text-blue-200">{dashboard.overview?.loggedLessonMarks ?? 0}/{dashboard.overview?.expectedLessonMarks ?? 0}</div></div>
             <div className="rounded-xl bg-gray-50 dark:bg-secondary-900/60 border border-gray-200 dark:border-secondary-700 p-4"><div className="text-xs uppercase tracking-wide text-secondary-500 dark:text-secondary-400">Avg attendance</div><div className="mt-2 text-3xl font-bold text-secondary-900 dark:text-white">{dashboard.overview?.averageAttendanceRate ?? 0}%</div></div>
-            <div className="rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-100 dark:border-violet-900/40 p-4"><div className="text-xs uppercase tracking-wide text-violet-600 dark:text-violet-300">Avg homework</div><div className="mt-2 text-3xl font-bold text-violet-700 dark:text-violet-200">{dashboard.overview?.averageHomeworkPoints ?? 0}</div></div>
+            {HOMEWORK_ENABLED ? <div className="rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-100 dark:border-violet-900/40 p-4"><div className="text-xs uppercase tracking-wide text-violet-600 dark:text-violet-300">Avg homework</div><div className="mt-2 text-3xl font-bold text-violet-700 dark:text-violet-200">{dashboard.overview?.averageHomeworkPoints ?? 0}</div></div> : null}
           </div>
           {!!dashboard.notifications?.items?.length ? (
             <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
@@ -1542,7 +1719,7 @@ export default function SchoolProfilePanel({
               )}
             </div>
           </div>
-          {!!dashboard.homework?.overview ? (
+          {HOMEWORK_ENABLED && !!dashboard.homework?.overview ? (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
                 <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Homework pressure</h4>
@@ -1826,7 +2003,7 @@ export default function SchoolProfilePanel({
         </section>
       ) : null}
 
-      {activeSection === 'school-homework' ? (
+      {HOMEWORK_ENABLED && activeSection === 'school-homework' ? (
         <section id="school-homework" className="scroll-mt-24 bg-white dark:bg-secondary-800 rounded-xl shadow-card border border-gray-200 dark:border-secondary-700 p-6 space-y-6">
           <div>
             <h3 className="text-2xl font-semibold text-secondary-900 dark:text-white">Homework and recovery points</h3>
@@ -2020,17 +2197,17 @@ export default function SchoolProfilePanel({
         <section id="school-reports" className="scroll-mt-24 bg-white dark:bg-secondary-800 rounded-xl shadow-card border border-gray-200 dark:border-secondary-700 p-6 space-y-6">
           <div>
             <h3 className="text-2xl font-semibold text-secondary-900 dark:text-white">Reports and exports</h3>
-            <p className="text-sm text-secondary-500 dark:text-secondary-400">Download printable or spreadsheet-ready outputs for students, classes, interventions, homework, parents, audit history, subjects, and leadership review.</p>
+            <p className="text-sm text-secondary-500 dark:text-secondary-400">Download printable or spreadsheet-ready outputs for students, classes, interventions, parents, audit history, subjects, and leadership review.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             <a href={`${axios.defaults.baseURL}/groups/${groupId}/reports/interventions`} className="rounded-xl border border-gray-200 dark:border-secondary-700 bg-gray-50 dark:bg-secondary-900/60 p-4 text-secondary-900 dark:text-white">
               <div className="font-semibold">Intervention report</div>
               <div className="mt-2 text-sm text-secondary-500 dark:text-secondary-400">CSV of intervention status, owner, due date, and next step.</div>
             </a>
-            <a href={`${axios.defaults.baseURL}/groups/${groupId}/reports/homework`} className="rounded-xl border border-gray-200 dark:border-secondary-700 bg-gray-50 dark:bg-secondary-900/60 p-4 text-secondary-900 dark:text-white">
+            {HOMEWORK_ENABLED ? <a href={`${axios.defaults.baseURL}/groups/${groupId}/reports/homework`} className="rounded-xl border border-gray-200 dark:border-secondary-700 bg-gray-50 dark:bg-secondary-900/60 p-4 text-secondary-900 dark:text-white">
               <div className="font-semibold">Homework report</div>
               <div className="mt-2 text-sm text-secondary-500 dark:text-secondary-400">CSV of homework submissions, status, points, and teacher feedback.</div>
-            </a>
+            </a> : null}
             <a href={`${axios.defaults.baseURL}/groups/${groupId}/reports/parents`} className="rounded-xl border border-gray-200 dark:border-secondary-700 bg-gray-50 dark:bg-secondary-900/60 p-4 text-secondary-900 dark:text-white">
               <div className="font-semibold">Parent summary</div>
               <div className="mt-2 text-sm text-secondary-500 dark:text-secondary-400">CSV of parent/carer profiles plus the latest contact and acknowledgement state.</div>
@@ -2169,9 +2346,16 @@ export default function SchoolProfilePanel({
       <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-card border border-gray-200 dark:border-secondary-700 p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h3 className="text-2xl font-semibold text-secondary-900 dark:text-white">Student profiles</h3>
-            <p className="text-sm text-secondary-500 dark:text-secondary-400">Search students, then expand only the profile you need to work on.</p>
+            <h3 className="text-2xl font-semibold text-secondary-900 dark:text-white">
+              {isStudentView ? 'My progress and points' : 'Student profiles'}
+            </h3>
+            <p className="text-sm text-secondary-500 dark:text-secondary-400">
+              {isStudentView
+                ? 'Review your own weekly score, today’s points, habits, attendance, goals, and progress trend.'
+                : 'Search students, then expand only the profile you need to work on.'}
+            </p>
           </div>
+          {!isStudentView && (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
               type="button"
@@ -2221,8 +2405,9 @@ export default function SchoolProfilePanel({
               </button>
             ) : null}
           </div>
+          )}
         </div>
-        {showScoreGuide ? (
+        {!isStudentView && showScoreGuide ? (
           <div className="mt-4 rounded-2xl border border-primary-100 bg-gradient-to-r from-primary-50 via-white to-cyan-50 p-5 dark:border-primary-900/40 dark:from-primary-900/15 dark:via-secondary-800 dark:to-cyan-900/10">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -2234,10 +2419,10 @@ export default function SchoolProfilePanel({
               </div>
               <div className="rounded-xl bg-secondary-900 px-4 py-3 text-white dark:bg-secondary-950">
                 <div className="text-[11px] uppercase tracking-[0.2em] text-primary-200">Fastest route</div>
-                <div className="mt-2 text-sm font-medium">Today recovery, weekly score, homework, attendance, then intervention.</div>
+                <div className="mt-2 text-sm font-medium">Today recovery, weekly score, attendance, then intervention.</div>
               </div>
             </div>
-            <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-5">
+            <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-4">
               {scoreGuideSteps.map((step, index) => (
                 <div key={`score-guide-step-${index + 1}`} className="rounded-xl border border-white/60 bg-white/80 p-4 dark:border-secondary-700 dark:bg-secondary-900/50">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-secondary-500 dark:text-secondary-400">Step {index + 1}</div>
@@ -2247,6 +2432,7 @@ export default function SchoolProfilePanel({
             </div>
           </div>
         ) : null}
+        {!isStudentView && (
         <div className="mt-4 flex flex-wrap gap-2">
           {studentQuickFilters.map((filter) => (
             <button
@@ -2270,10 +2456,11 @@ export default function SchoolProfilePanel({
             </button>
           ))}
         </div>
+        )}
       </div>
       {!filteredProfiles.length ? (
         <div className="bg-white dark:bg-secondary-800 rounded-xl shadow-card border border-gray-200 dark:border-secondary-700 p-8 text-center text-secondary-500 dark:text-secondary-400">
-          No students match that search yet.
+          {isStudentView ? 'Your school progress profile is not available yet.' : 'No students match that search yet.'}
         </div>
       ) : filteredProfiles.map((profile) => {
         const scorecards = profile.scorecards || {};
@@ -2289,6 +2476,11 @@ export default function SchoolProfilePanel({
         const evidenceBase = `${axios.defaults.baseURL}/groups/school-impact`;
         const lessonEntries = profile.lessonRegister?.entries || [];
         const isExpanded = !!expandedStudents[profile.student.id];
+        const habitSummary = profile.habitStatistics?.summary || {};
+        const challengeMember = (group?.activeChallenge?.memberHabits || []).find((entry) => (
+          String(entry?.member?.id ?? entry?.member) === String(profile.student.id)
+        )) || null;
+        const hasHabitStats = Boolean(challengeMember?.habits?.length);
 
         return (
           <div key={profile.student.id} className="bg-white dark:bg-secondary-800 rounded-xl shadow-card border border-gray-200 dark:border-secondary-700 overflow-hidden">
@@ -2300,8 +2492,23 @@ export default function SchoolProfilePanel({
                 </div>
                 <p className="text-sm text-secondary-500 dark:text-secondary-400">{isOwn ? 'Your school profile' : 'Student school profile'}</p>
               </div>
-              <div className="flex items-center gap-3">
-                <a href={`${axios.defaults.baseURL}/groups/${groupId}/reports/student/${profile.student.id}`} className="rounded-lg bg-primary-100 dark:bg-primary-900/30 px-3 py-2 text-sm font-medium text-primary-700 dark:text-primary-300">Weekly report</a>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {!isStudentView && hasHabitStats ? (
+                  <>
+                    <span className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-bold text-cyan-700 dark:border-cyan-400/20 dark:bg-cyan-500/10 dark:text-cyan-200">
+                      {Math.round(habitSummary.completionRate || 0)}% habits
+                    </span>
+                    <Link to={`/groups/${groupId}/member/${profile.student.id}`} className="rounded-lg bg-secondary-900 px-3 py-2 text-sm font-medium text-white hover:bg-secondary-700 dark:bg-white dark:text-secondary-950 dark:hover:bg-secondary-200">
+                      Full habit stats
+                    </Link>
+                    <Link to={`/groups/${groupId}/member/${profile.student.id}?section=calendar`} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-400/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+                      Consistency calendar
+                    </Link>
+                  </>
+                ) : null}
+                <a href={`${axios.defaults.baseURL}/groups/${groupId}/reports/student/${profile.student.id}`} className="rounded-lg bg-primary-100 dark:bg-primary-900/30 px-3 py-2 text-sm font-medium text-primary-700 dark:text-primary-300">
+                  {isStudentView ? 'My weekly report' : 'Weekly report'}
+                </a>
                 <div className={`inline-flex rounded-full px-3 py-1 text-sm font-medium ${trendStyles[profile.trend?.status] || trendStyles.inconsistent}`}>{profile.trend?.status || 'inconsistent'}</div>
                 <button
                   type="button"
@@ -2318,12 +2525,14 @@ export default function SchoolProfilePanel({
               <div className={`rounded-2xl border px-5 py-4 ${recommendedAction.tone}`}>
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] opacity-75">Recommended next action</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] opacity-75">
+                      {isStudentView ? 'Your next step' : 'Recommended next action'}
+                    </div>
                     <div className="mt-2 text-lg font-semibold">{recommendedAction.title}</div>
                     <div className="mt-2 text-sm opacity-90">{recommendedAction.detail}</div>
                   </div>
                   <div className="rounded-full border border-current/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] opacity-80">
-                    Teacher workflow
+                    {isStudentView ? 'Personal progress' : 'Teacher workflow'}
                   </div>
                 </div>
               </div>
@@ -2352,7 +2561,8 @@ export default function SchoolProfilePanel({
                   <div className="mt-3 space-y-2 text-sm text-secondary-600 dark:text-secondary-300">
                     <div className="flex justify-between"><span>School points</span><span>{scorecards.daily?.schoolPoints ?? 0}</span></div>
                     <div className="flex justify-between"><span>Habit recovery</span><span>{scorecards.daily?.habitRecoveryPoints ?? 0}</span></div>
-                    <div className="flex justify-between"><span>Habits today</span><span>{scorecards.daily?.habitsCompleted ?? 0}/{scorecards.daily?.habitsScheduled ?? 0}</span></div>
+                    <div className="flex justify-between"><span>Habit units today</span><span>{scorecards.daily?.habitCompletionUnits ?? 0}/{scorecards.daily?.habitsScheduled ?? 0}</span></div>
+                    <div className="flex justify-between"><span>Habit rate today</span><span>{Math.round(scorecards.daily?.habitCompletionRate ?? 0)}%</span></div>
                     <div className="flex justify-between"><span>Lessons logged</span><span>{scorecards.daily?.lessonRegisterLoggedLessons ?? 0}/{scorecards.daily?.lessonRegisterExpectedLessons ?? 0}</span></div>
                   </div>
                 </div>
@@ -2387,7 +2597,7 @@ export default function SchoolProfilePanel({
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
+                <div className={`${isStudentView ? 'hidden' : ''} rounded-xl border border-gray-200 dark:border-secondary-700 p-5`}>
                   <div className="flex items-center justify-between mb-4">
                     <h4 className="text-lg font-semibold text-secondary-900 dark:text-white">Goal plan</h4>
                     {canManage ? <button type="button" onClick={() => addGoal(profile.student.id)} className="px-3 py-2 rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">Add row</button> : null}
@@ -2409,7 +2619,7 @@ export default function SchoolProfilePanel({
                         value={aiPlanInputs[profile.student.id] || ''}
                         onChange={(e) => setAiPlanInputs((prev) => ({ ...prev, [profile.student.id]: e.target.value }))}
                         rows={4}
-                        placeholder="Example: Sam is capable but loses focus after lunch, misses science homework, and responds well to short routines with visible praise..."
+                        placeholder="Example: Sam is capable but loses focus after lunch and responds well to short routines with visible praise..."
                         className="mt-4 w-full rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm text-secondary-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-secondary-700 dark:bg-secondary-950 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
                       />
                       <div className="mt-3 flex flex-wrap justify-end gap-2">
@@ -2488,9 +2698,17 @@ export default function SchoolProfilePanel({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <DailyHabitPlanner groupId={groupId} profile={profile} canEdit={isOwn} schoolTimetable={group?.schoolTimetable || []} />
-                <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
+              <div className={`${isStudentView ? 'grid grid-cols-1' : 'grid grid-cols-1 xl:grid-cols-2'} gap-6`}>
+                <DailyHabitPlanner
+                  groupId={groupId}
+                  profile={profile}
+                  canEdit={isOwn}
+                  schoolTimetable={group?.schoolTimetable || []}
+                  schoolDayConfig={group?.schoolDayConfig || {}}
+                  activeChallenge={group?.activeChallenge || null}
+                  challengeMember={challengeMember}
+                />
+                <div className={`${isStudentView ? 'hidden' : ''} rounded-xl border border-gray-200 dark:border-secondary-700 p-5`}>
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Coach notes and evidence</h4>
                   <div className="space-y-3 max-h-80 overflow-y-auto">
                     {!profile.impactRecords.length ? <div className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 p-4 text-sm text-secondary-500 dark:text-secondary-400">No behaviour records uploaded yet.</div> : profile.impactRecords.map((record) => (
@@ -2506,7 +2724,7 @@ export default function SchoolProfilePanel({
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
+                <div className={`${isStudentView ? 'hidden' : ''} rounded-xl border border-gray-200 dark:border-secondary-700 p-5`}>
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Upload school impact data</h4>
                   {canManage ? (
                     <div className="space-y-4">
@@ -2524,7 +2742,7 @@ export default function SchoolProfilePanel({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <div className={`${isStudentView ? 'hidden' : 'grid'} grid-cols-1 xl:grid-cols-2 gap-6`}>
                 <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Lesson register</h4>
                   {!lessonEntries.length ? <div className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 p-4 text-sm text-secondary-500 dark:text-secondary-400">No lessons are scheduled today.</div> : (
@@ -2587,7 +2805,7 @@ export default function SchoolProfilePanel({
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Goal activity unlock</h4>
                   {canManage ? <div className="space-y-4"><input value={goalActivityForm.activity} onChange={(e) => setGoalActivityForms((prev) => ({ ...prev, [profile.student.id]: { ...goalActivityForm, activity: e.target.value } }))} placeholder="Reward activity" className={inputClass} /><input value={goalActivityForm.fallbackActivity} onChange={(e) => setGoalActivityForms((prev) => ({ ...prev, [profile.student.id]: { ...goalActivityForm, fallbackActivity: e.target.value } }))} placeholder="Fallback session" className={inputClass} /><div className="flex justify-end"><button type="button" onClick={() => saveGoalActivity(profile.student.id)} disabled={!!saving[`activity-${profile.student.id}`]} className="px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-60">{saving[`activity-${profile.student.id}`] ? 'Saving...' : 'Save goal activity'}</button></div></div> : <div className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 p-4 text-sm text-secondary-500 dark:text-secondary-400">Your coach sets the activity you unlock when your school week is successful.</div>}
                 </div>
-                <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
+                {HOMEWORK_ENABLED ? <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Homework recovery</h4>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                     <div className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 px-4 py-3">
@@ -2616,8 +2834,8 @@ export default function SchoolProfilePanel({
                       </div>
                     ))}
                   </div>
-                </div>
-                <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
+                </div> : null}
+                <div className={`${isStudentView ? 'hidden' : ''} rounded-xl border border-gray-200 dark:border-secondary-700 p-5`}>
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Interventions</h4>
                   <div className="space-y-3 max-h-80 overflow-y-auto">
                     {!profile.interventions?.length ? <div className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 p-4 text-sm text-secondary-500 dark:text-secondary-400">No interventions logged yet.</div> : profile.interventions.map((record) => <div key={record.id} className="rounded-lg bg-gray-50 dark:bg-secondary-900/60 border border-gray-200 dark:border-secondary-700 p-4"><div className="flex items-center justify-between gap-3"><div className="font-medium text-secondary-900 dark:text-white">{record.interventionType}</div><div className="text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 px-2 py-1 text-primary-700 dark:text-primary-300">{record.status}</div></div><div className="mt-2 text-xs text-secondary-500 dark:text-secondary-400">{new Date(record.interventionDate).toLocaleDateString()} | {record.staff?.username || 'Staff'}</div>{record.owner?.username ? <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">Owner: {record.owner.username}{record.dueDate ? ` | Due ${new Date(record.dueDate).toLocaleDateString()}` : ''}</div> : null}{record.summary ? <div className="mt-2 text-sm text-secondary-700 dark:text-secondary-300">{record.summary}</div> : null}{record.nextStep ? <div className="mt-2 text-xs text-secondary-500 dark:text-secondary-400">Next: {record.nextStep}</div> : null}</div>)}
@@ -2643,7 +2861,7 @@ export default function SchoolProfilePanel({
                     ))}
                   </div>
                 </div>
-                <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
+                <div className={`${isStudentView ? 'hidden' : ''} rounded-xl border border-gray-200 dark:border-secondary-700 p-5`}>
                   <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Log behaviour event</h4>
                   {canManage ? (
                     <div className="space-y-3">
@@ -2695,7 +2913,7 @@ export default function SchoolProfilePanel({
                 </div>
               ) : null}
 
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <div className={`${isStudentView ? 'hidden' : 'grid'} grid-cols-1 xl:grid-cols-2 gap-6`}>
                 <div className="rounded-xl border border-gray-200 dark:border-secondary-700 p-5">
                   <div className="flex items-center justify-between gap-3 mb-4">
                     <h4 className="text-lg font-semibold text-secondary-900 dark:text-white">Parent / carer profiles</h4>
@@ -2752,7 +2970,7 @@ export default function SchoolProfilePanel({
                 <div className="rounded-lg bg-white dark:bg-secondary-800 border border-gray-200 dark:border-secondary-700 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-wide text-secondary-500 dark:text-secondary-400">Weekly score</div>
                   <div className="mt-2 text-2xl font-bold text-secondary-900 dark:text-white">{scorecards.combinedWeeklyScore ?? 0}</div>
-                  <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">Behaviour {scorecards.latestBehaviourScore ?? 0} | Live {scorecards.liveBehaviourPoints ?? 0} | Homework {profile.homework?.weeklyPoints ?? 0}</div>
+                  <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">Behaviour {scorecards.latestBehaviourScore ?? 0} | Live {scorecards.liveBehaviourPoints ?? 0}</div>
                 </div>
                 <div className="rounded-lg bg-white dark:bg-secondary-800 border border-gray-200 dark:border-secondary-700 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-wide text-secondary-500 dark:text-secondary-400">Today</div>
@@ -2760,7 +2978,7 @@ export default function SchoolProfilePanel({
                     <div className="text-2xl font-bold text-secondary-900 dark:text-white">{scorecards.daily?.combinedPoints ?? 0}</div>
                     <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${dailyTones[scorecards.daily?.status] || dailyTones['on-track']}`}>{scorecards.daily?.status || 'on-track'}</span>
                   </div>
-                  <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">{scorecards.daily?.habitsCompleted ?? 0}/{scorecards.daily?.habitsScheduled ?? 0} habits | Homework {scorecards.daily?.homeworkPoints ?? 0} | Behaviour {scorecards.daily?.behaviourPoints ?? 0}</div>
+                  <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">{scorecards.daily?.habitCompletionUnits ?? scorecards.daily?.habitsCompleted ?? 0}/{scorecards.daily?.habitsScheduled ?? 0} habit units · {Math.round(scorecards.daily?.habitCompletionRate ?? 0)}% | Behaviour {scorecards.daily?.behaviourPoints ?? 0}</div>
                 </div>
                 <div className="rounded-lg bg-white dark:bg-secondary-800 border border-gray-200 dark:border-secondary-700 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-wide text-secondary-500 dark:text-secondary-400">Attendance</div>
@@ -2775,7 +2993,7 @@ export default function SchoolProfilePanel({
                 <div className="rounded-lg bg-white dark:bg-secondary-800 border border-gray-200 dark:border-secondary-700 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-wide text-secondary-500 dark:text-secondary-400">Focus</div>
                   <div className="mt-2 text-sm font-semibold text-secondary-900 dark:text-white">{profile.goals?.[0]?.title || 'No goal set yet'}</div>
-                  <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">Homework due {profile.homework?.dueTodayCount ?? 0} | Missing {profile.homework?.missingCount ?? 0}</div>
+                  <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">Keep today&apos;s priority visible.</div>
                 </div>
               </div>
             </div>
@@ -2794,7 +3012,12 @@ export default function SchoolProfilePanel({
                 <button
                   key={link.id}
                   type="button"
-                  onClick={() => setActiveSection(link.id)}
+                  onClick={() => {
+                    if (activeSection !== link.id) {
+                      triggerProtocolTransition(getProtocolNameForTab('school', link.id));
+                      setActiveSection(link.id);
+                    }
+                  }}
                   className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-medium ${
                     activeSection === link.id
                       ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'

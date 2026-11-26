@@ -68,7 +68,9 @@ You can add the migration to your build command so it runs automatically on each
 1. Go to your Web Service → **Settings** → **Build Command**
 2. Update your build command:
 ```bash
-cd server && pip install -r requirements.txt && export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH && FLASK_APP=server:app flask db upgrade && gunicorn server:app --timeout 120 --workers 2 --bind 0.0.0.0:$PORT
+cd server && pip install -r requirements.txt && export PYTHONPATH=/opt/render/project/src/server:$PYTHONPATH && FLASK_APP=server:app flask db upgrade && gunicorn server:app --worker-class gthread --workers 1 --threads 100 --timeout 120 --bind 0.0.0.0:$PORT
+
+Use one worker for the current in-memory Socket.IO presence layer. Add a shared Redis message queue before scaling the backend to multiple workers or instances.
 ```
 
 **Option C: Manual SQL (Backup - Only if migrations fail)**

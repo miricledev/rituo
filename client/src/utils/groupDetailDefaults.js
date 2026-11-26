@@ -19,7 +19,10 @@ export const createEmptyCurrentHabit = () => ({
   applyToAll: false,
   scheduleDays: [...DEFAULT_SCHEDULE_DAYS],
   durationMinutes: 30,
-  combatType: 'neutral',
+  combatType: 'attack',
+  periodicIntervalHours: 4,
+  periodicOccurrences: 4,
+  allowOverlap: false,
   linkedGoalIds: {}
 });
 
@@ -37,5 +40,8 @@ export const createEmptyPresetHabit = () => ({
   prompt: '',
   scheduleDays: [...DEFAULT_SCHEDULE_DAYS],
   durationMinutes: 30,
-  combatType: 'neutral'
+  combatType: 'attack',
+  periodicIntervalHours: 4,
+  periodicOccurrences: 4,
+  allowOverlap: false
 });

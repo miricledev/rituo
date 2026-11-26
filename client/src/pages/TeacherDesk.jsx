@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import InlineToast from '../components/InlineToast';
+import { HOMEWORK_ENABLED } from '../config/features';
 
 const attendanceOptions = [
   { value: 'present', label: 'Present' },
@@ -18,6 +19,7 @@ const quickBehaviourActions = [
 ];
 
 const inputClass = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-secondary-900 shadow-sm outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-secondary-700 dark:bg-secondary-900 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-500/30';
+const isHomeworkRelated = (value) => !HOMEWORK_ENABLED && /homework/i.test(JSON.stringify(value || ''));
 const cardClass = 'rounded-2xl border border-gray-200 bg-white/95 p-5 shadow-sm backdrop-blur dark:border-secondary-700 dark:bg-secondary-800/95';
 
 const emptyRegisterEntry = (slotId, lesson = {}) => ({
@@ -234,7 +236,7 @@ function TeacherDesk() {
       const [dashboardResponse, registerResponse, homeworkResponse] = await Promise.all([
         api.get(`/groups/${groupId}/school-dashboard`),
         api.get(`/groups/${groupId}/teacher-register`, { params: { date: targetDate } }),
-        api.get(`/groups/${groupId}/homework`)
+        HOMEWORK_ENABLED ? api.get(`/groups/${groupId}/homework`) : Promise.resolve({ data: { homework: [] } })
       ]);
       const nextRegisterClasses = (registerResponse.data?.register || []).map(normalizeRegisterClass);
       const nextHomework = (homeworkResponse.data?.homework || []).map(normalizeHomeworkAssignment);
@@ -243,9 +245,21 @@ function TeacherDesk() {
             ...dashboardResponse.data.dashboard,
             myClassesToday: (dashboardResponse.data.dashboard.myClassesToday || []).map(normalizeRegisterClass),
             classSummaries: (dashboardResponse.data.dashboard.classSummaries || []).map(normalizeRegisterClass),
+            notifications: {
+              ...(dashboardResponse.data.dashboard.notifications || {}),
+              items: (dashboardResponse.data.dashboard.notifications?.items || []).filter((item) => !isHomeworkRelated(item))
+            },
+            recentActivity: (dashboardResponse.data.dashboard.recentActivity || []).filter((item) => !isHomeworkRelated(item)),
+            myStudentsAtRisk: (dashboardResponse.data.dashboard.myStudentsAtRisk || []).map((item) => ({
+              ...item,
+              reasons: (item.reasons || []).filter((reason) => !isHomeworkRelated(reason)),
+              autoFlags: (item.autoFlags || []).filter((flag) => !isHomeworkRelated(flag))
+            })),
             homework: {
-              ...(dashboardResponse.data.dashboard.homework || {}),
-              watchlist: ((dashboardResponse.data.dashboard.homework || {}).watchlist || []).map(normalizeHomeworkWatchItem)
+              ...(HOMEWORK_ENABLED ? dashboardResponse.data.dashboard.homework || {} : {}),
+              watchlist: HOMEWORK_ENABLED
+                ? ((dashboardResponse.data.dashboard.homework || {}).watchlist || []).map(normalizeHomeworkWatchItem)
+                : []
             }
           }
         : null;
@@ -363,10 +377,10 @@ function TeacherDesk() {
   const recoveryOpportunities = useMemo(() => {
     const source = dashboard?.myStudentsAtRisk || [];
     return source
-      .filter((item) => (item.habitRecoveryPoints || 0) > 0 || (item.homeworkDueTodayCount || 0) > 0 || (item.homeworkMissingCount || 0) > 0)
+      .filter((item) => (item.habitRecoveryPoints || 0) > 0 || (HOMEWORK_ENABLED && ((item.homeworkDueTodayCount || 0) > 0 || (item.homeworkMissingCount || 0) > 0)))
       .sort((a, b) => {
-        const aPotential = (a.habitRecoveryPoints || 0) + (a.homeworkDueTodayCount || 0);
-        const bPotential = (b.habitRecoveryPoints || 0) + (b.homeworkDueTodayCount || 0);
+        const aPotential = (a.habitRecoveryPoints || 0) + (HOMEWORK_ENABLED ? (a.homeworkDueTodayCount || 0) : 0);
+        const bPotential = (b.habitRecoveryPoints || 0) + (HOMEWORK_ENABLED ? (b.homeworkDueTodayCount || 0) : 0);
         return bPotential - aPotential;
       });
   }, [dashboard]);
@@ -691,15 +705,17 @@ function TeacherDesk() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
+      <div className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-900/80 sm:p-7">
+        <img src="/images/teacher/teacher-desk-hero.webp" alt="" aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 hidden h-full w-1/2 object-cover opacity-[0.14] dark:opacity-25 lg:block" />
+        <div className="relative flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-primary-500">Teacher desk</p>
           <h1 className="mt-2 text-4xl font-semibold tracking-tight text-secondary-900 dark:text-white">Run today&apos;s classes from one screen</h1>
           <p className="mt-2 max-w-3xl text-secondary-600 dark:text-secondary-300">
-            Take registers, log behaviour, review homework, remind students, and escalate interventions without going back into the full school workspace.
+            Take registers, log behaviour, support students, and escalate interventions without going back into the full school workspace.
           </p>
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-secondary-500 dark:text-secondary-400">School</label>
             <select value={selectedGroupId} onChange={(e) => handleGroupChange(e.target.value)} className={inputClass} disabled={loadingGroups}>
@@ -714,6 +730,7 @@ function TeacherDesk() {
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-secondary-500 dark:text-secondary-400">Date</label>
             <input type="date" value={registerDate} onChange={(e) => handleDateChange(e.target.value)} className={inputClass} />
+          </div>
           </div>
         </div>
       </div>
@@ -752,15 +769,15 @@ function TeacherDesk() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className={cardClass}>
               <div className="text-sm text-secondary-500 dark:text-secondary-400">Late arrivals today</div>
               <div className="mt-2 text-3xl font-semibold text-secondary-900 dark:text-white">{teacherMiniDashboard.lateArrivals}</div>
             </div>
-            <div className={cardClass}>
+            {HOMEWORK_ENABLED ? <div className={cardClass}>
               <div className="text-sm text-secondary-500 dark:text-secondary-400">Homework pressure</div>
               <div className="mt-2 text-3xl font-semibold text-secondary-900 dark:text-white">{teacherMiniDashboard.missingHomework}</div>
-            </div>
+            </div> : null}
             <div className={cardClass}>
               <div className="text-sm text-secondary-500 dark:text-secondary-400">Interventions due today</div>
               <div className="mt-2 text-3xl font-semibold text-secondary-900 dark:text-white">{teacherMiniDashboard.interventionsDueToday}</div>
@@ -927,7 +944,7 @@ function TeacherDesk() {
                 </div>
               </section>
 
-              <section className={cardClass}>
+              {HOMEWORK_ENABLED ? <section className={cardClass}>
                 <div className="flex flex-col gap-2 border-b border-gray-200 pb-4 dark:border-secondary-700 md:flex-row md:items-center md:justify-between">
                   <div>
                     <h2 className="text-xl font-semibold text-secondary-900 dark:text-white">Homework review queue</h2>
@@ -992,13 +1009,13 @@ function TeacherDesk() {
                     })
                   )}
                 </div>
-              </section>
+              </section> : null}
             </div>
 
             <div className="space-y-6">
               <section className={cardClass}>
                 <h2 className="text-xl font-semibold text-secondary-900 dark:text-white">Today&apos;s recovery opportunities</h2>
-                <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">Students who can still recover points through homework or after-school habits.</p>
+                <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">Students who can still recover points through their after-school habits.</p>
                 <div className="mt-4 space-y-3">
                   {recoveryOpportunities.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-gray-300 px-4 py-6 text-center text-sm text-secondary-500 dark:border-secondary-700 dark:text-secondary-400">
@@ -1011,7 +1028,7 @@ function TeacherDesk() {
                           <div>
                             <div className="font-semibold text-secondary-900 dark:text-white">{item.username}</div>
                             <div className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">
-                              Daily {item.dailyScore} | Habit recovery {item.habitRecoveryPoints || 0} | Homework due today {item.homeworkDueTodayCount || 0}
+                              Daily {item.dailyScore} | Habit recovery {item.habitRecoveryPoints || 0}
                             </div>
                           </div>
                           <button type="button" onClick={() => openStudentProfile(item.studentId)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-secondary-700 hover:bg-gray-100 dark:border-secondary-700 dark:text-secondary-200 dark:hover:bg-secondary-700">
@@ -1020,8 +1037,8 @@ function TeacherDesk() {
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {(item.habitRecoveryPoints || 0) > 0 ? <span className="rounded-full bg-primary-100 px-2.5 py-1 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">Habits can recover {item.habitRecoveryPoints} pts</span> : null}
-                          {(item.homeworkDueTodayCount || 0) > 0 ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">Homework due today</span> : null}
-                          {(item.homeworkMissingCount || 0) > 0 ? <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300">{item.homeworkMissingCount} missing homework</span> : null}
+                          {HOMEWORK_ENABLED && (item.homeworkDueTodayCount || 0) > 0 ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">Homework due today</span> : null}
+                          {HOMEWORK_ENABLED && (item.homeworkMissingCount || 0) > 0 ? <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300">{item.homeworkMissingCount} missing homework</span> : null}
                         </div>
                       </div>
                     ))
@@ -1062,7 +1079,7 @@ function TeacherDesk() {
                 </div>
               </section>
 
-              <section className={cardClass}>
+              {HOMEWORK_ENABLED ? <section className={cardClass}>
                 <h2 className="text-xl font-semibold text-secondary-900 dark:text-white">Homework due and missing</h2>
                 <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">Chase the work that can still recover points today.</p>
                 <div className="mt-4 space-y-3">
@@ -1082,7 +1099,7 @@ function TeacherDesk() {
                     ))
                   )}
                 </div>
-              </section>
+              </section> : null}
 
               <section className={cardClass}>
                 <h2 className="text-xl font-semibold text-secondary-900 dark:text-white">System alerts</h2>

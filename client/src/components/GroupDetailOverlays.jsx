@@ -35,10 +35,10 @@ const GroupDetailOverlays = ({
 
       {showCancelConfirm && (
         <ConfirmModal
-          title="Discard Changes?"
-          message={`You have ${Object.values(memberHabits).flat().length} habit${Object.values(memberHabits).flat().length !== 1 ? 's' : ''} added. Are you sure you want to cancel and lose all your progress?`}
+          title="Close Challenge Editor?"
+          message={`You have ${Object.values(memberHabits).flat().length} habit${Object.values(memberHabits).flat().length !== 1 ? 's' : ''} in the editor. New challenge work is autosaved and will be restored next time; unsaved edits to an already active challenge are not published.`}
           cancelLabel="Keep Editing"
-          confirmLabel="Discard Changes"
+          confirmLabel="Close Editor"
           onCancel={() => setShowCancelConfirm(false)}
           onConfirm={confirmCancel}
         />

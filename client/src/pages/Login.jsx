@@ -84,7 +84,17 @@ const Login = () => {
               A focused space for school performance, personal discipline and the habits that connect the two.
             </p>
 
-            <div className="mt-10 grid gap-3">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.18, duration: 0.7 }}
+              className="relative mt-7 h-44 overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.04] shadow-2xl shadow-indigo-950/40"
+            >
+              <img src="/images/auth/login-focus-panel.webp" alt="Student entering the Inner Performance focus environment" className="h-full w-full object-cover object-[center_42%]" />
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/20 via-transparent to-violet-950/20" />
+            </motion.div>
+
+            <div className="mt-7 grid gap-3">
               {featureItems.map(({ icon: Icon, title, detail }, index) => (
                 <motion.div
                   key={title}

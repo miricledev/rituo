@@ -1,29 +1,49 @@
 from collections import defaultdict
 from flask import Blueprint, jsonify, request, send_from_directory, make_response
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from db.models import db, User, Group, GroupChallenge, StudentSchedulePlan, Message, SkillDevelopmentChart, HabitPreset, CoachAssignment, Course, CourseSection, CourseItem, CourseProgress, StudentGoal, SchoolImpactRecord, PerformanceCard, LessonRegister, InterventionRecord, ParentContactRecord, ParentProfile, SchoolAuditLog, SchoolRoleAssignment, SchoolSubject, SchoolRoom, SchoolClass, SchoolEnrollment, SchoolTeachingAssignment, SchoolBehaviourType, SchoolBehaviourEvent, SchoolHomeworkAssignment, SchoolHomeworkSubmission
+from db.models import db, User, Group, GroupChallenge, StaffPersonalChallenge, StudentSchedulePlan, StudentPlannerSettings, StudentIpWallet, StudentIpTransaction, StudentIpPurchase, StudentToolState, MeditationSession, Message, SkillDevelopmentChart, HabitPreset, CoachAssignment, Course, CourseSection, CourseItem, CourseProgress, StudentGoal, SchoolImpactRecord, PerformanceCard, LessonRegister, InterventionRecord, ParentContactRecord, ParentProfile, SchoolAuditLog, SchoolRoleAssignment, SchoolSubject, SchoolRoom, SchoolClass, SchoolEnrollment, SchoolTeachingAssignment, SchoolBehaviourType, SchoolBehaviourEvent, SchoolHomeworkAssignment, SchoolHomeworkSubmission
+import base64
+import html
 import uuid
 import stripe
 import logging
 import json
 import csv
+import re
+import math
 from io import StringIO
 from datetime import datetime, date, timedelta, timezone
 import os
 import traceback
+import threading
+import time
+from urllib.parse import quote, urlencode
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import HTTPError, URLError
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 from werkzeug.utils import secure_filename
 from utils.ai_school import (
     RITUO_APP_GUIDE,
+    AI_HABIT_TYPE_GUIDANCE,
     build_student_plan_schema,
     build_copilot_schema,
     build_habit_draft_schema,
+    build_personalized_habit_draft_schema,
+    build_test_goal_seed_schema,
     build_daily_schedule_schema,
+    build_schedule_clarification_schema,
+    build_school_timetable_schema,
     normalize_student_plan,
     normalize_copilot_response,
     normalize_habit_draft,
+    normalize_personalized_habit_draft,
+    normalize_test_goal_seed,
     normalize_daily_schedule,
+    normalize_schedule_clarification,
+    normalize_school_timetable,
     build_copilot_action_link,
     build_copilot_system_prompt,
     get_copilot_public_config,
@@ -32,13 +52,44 @@ from utils.openai_responses import (
     OpenAIResponsesError,
     create_structured_response,
     structured_contract_metadata,
+    validate_structured_output,
+)
+from utils.habit_completion import (
+    DEFAULT_SCHOOL_TIMEZONE,
+    build_completion_window_access,
+    build_default_habit_schedule_items,
+    normalize_habit_schedule_items,
+    resolve_timezone,
+)
+from utils.google_calendar import GOOGLE_SYNC_MAX_DAYS, build_google_challenge_horizon_days, build_managed_google_events, normalize_external_google_events, reconcile_managed_google_events
+from utils.habit_statistics import build_member_habit_statistics, effective_challenge_start, habit_progress_fraction, periodic_progress_counts
+from utils.student_tools import (
+    GCSE_LANGUAGES,
+    MEDITATION_DURATION_MINUTES,
+    MEDITATION_FOCUS_OPTIONS,
+    STUDY_PLAN_LIBRARY_LIMIT,
+    active_study_plan,
+    build_tutor_config_payload,
+    build_tutor_daily_usage,
+    build_fitness_plan_prompts,
+    build_fitness_plan_schema,
+    build_meditation_manual_prompt,
+    build_study_plan_prompts,
+    build_study_plan_schema,
+    build_tutor_prompts,
+    build_tutor_response_schema,
+    estimate_meditation_duration,
+    normalize_study_plan_library,
+    validate_meditation_payload,
 )
 
 groups_bp = Blueprint('groups', __name__)
+_google_calendar_refresh_locks = defaultdict(threading.Lock)
 stripe.api_key = os.getenv('STRIPE_TEST_SECRET_KEY')
 logging.info(f"Stripe API key loaded: {'Yes' if stripe.api_key else 'No'}")
 
-ALLOWED_GROUP_TYPES = {'school', 'football'}
+ALLOWED_GROUP_TYPES = {'school', 'football', 'staff'}
+STAFF_ACCOUNT_ROLES = {'admin', 'teacher'}
 ALLOWED_EVIDENCE_EXTENSIONS = {'pdf'}
 CHECKPOINT_SLOTS = ('morning', 'midday', 'endOfDay')
 VALID_WEEKDAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
@@ -46,7 +97,45 @@ VALID_ENGAGEMENT_COLORS = ('green', 'amber', 'red')
 VALID_INTERVENTION_TYPES = ('reflection-session', 'mindset-lesson', 'behaviour-coaching', 'pastoral-follow-up', 'parent-call')
 VALID_INTERVENTION_STATUSES = ('scheduled', 'delivered', 'monitoring', 'closed')
 VALID_PARENT_CONTACT_TYPES = ('phone-call', 'email', 'meeting', 'text-message')
-VALID_SCHOOL_ROLES = ('student', 'teacher', 'headteacher', 'pastoral-lead', 'school-admin', 'coach')
+VALID_SCHOOL_ROLES = (
+    'student',
+    'teacher',
+    'subject-teacher',
+    'assistant-teacher',
+    'head-of-department',
+    'head-of-year',
+    'senco',
+    'pastoral-lead',
+    'slt',
+    'assistant-headteacher',
+    'deputy-headteacher',
+    'headteacher',
+    'school-admin',
+    'coach'
+)
+FULL_SCHOOL_ACCESS_ROLES = {
+    'school-admin',
+    'headteacher',
+    'deputy-headteacher',
+    'assistant-headteacher',
+    'slt',
+}
+GROUP_MANAGEMENT_ROLES = {'school-admin', 'headteacher'}
+SCHOOL_WIDE_STUDENT_SUPPORT_ROLES = {
+    'pastoral-lead',
+    'senco',
+}
+CLASS_SCOPED_TEACHER_ROLES = {
+    'teacher',
+    'subject-teacher',
+    'assistant-teacher',
+}
+SCHOOL_LEADERSHIP_ROLES = FULL_SCHOOL_ACCESS_ROLES | {
+    'head-of-department',
+    'head-of-year',
+}
+SCHOOL_STAFF_ROLES = SCHOOL_LEADERSHIP_ROLES | SCHOOL_WIDE_STUDENT_SUPPORT_ROLES | CLASS_SCOPED_TEACHER_ROLES | {'coach'}
+VALID_TEACHING_ASSIGNMENT_ROLES = ('lead-teacher', 'subject-teacher', 'assistant-teacher')
 VALID_ATTENDANCE_STATUSES = ('present', 'late', 'absent', 'authorised-absence')
 VALID_BEHAVIOUR_KINDS = ('reward', 'sanction', 'referral', 'on-call', 'removal')
 VALID_BEHAVIOUR_SEVERITIES = ('low', 'medium', 'high')
@@ -58,6 +147,9 @@ OPENAI_STUDENT_PLAN_MODEL = os.getenv('OPENAI_STUDENT_PLAN_MODEL', OPENAI_DEFAUL
 OPENAI_COPILOT_MODEL = os.getenv('OPENAI_COPILOT_MODEL', OPENAI_DEFAULT_MODEL)
 OPENAI_HABIT_DRAFT_MODEL = os.getenv('OPENAI_HABIT_DRAFT_MODEL', OPENAI_DEFAULT_MODEL)
 OPENAI_SCHEDULER_MODEL = os.getenv('OPENAI_SCHEDULER_MODEL', OPENAI_DEFAULT_MODEL)
+OPENAI_STUDENT_TOOLS_MODEL = os.getenv('OPENAI_STUDENT_TOOLS_MODEL', 'gpt-5.6-luna')
+AI_HABIT_STUDENT_BATCH_SIZE = 8
+AI_HABIT_RETRY_BATCH_SIZE = 4
 
 def get_current_user():
     user_id = get_jwt_identity()
@@ -67,6 +159,36 @@ def get_current_user():
 def get_group_members_list(group):
     members = group.members if group else []
     return members.all() if hasattr(members, 'all') else list(members or [])
+
+
+def get_staff_group_members(group):
+    members_by_id = {}
+    if group and group.leader and group.leader.is_active and group.leader.account_role in STAFF_ACCOUNT_ROLES:
+        members_by_id[group.leader.id] = group.leader
+    for member in get_group_members_list(group):
+        if member.is_active and member.account_role in STAFF_ACCOUNT_ROLES:
+            members_by_id[member.id] = member
+    return sorted(members_by_id.values(), key=lambda member: ((member.first_name or member.username or '').lower(), member.id))
+
+
+def is_staff_group_member(group, user):
+    return bool(
+        group
+        and user
+        and getattr(group, 'group_type', 'school') == 'staff'
+        and getattr(user, 'is_active', True)
+        and getattr(user, 'account_role', 'student') in STAFF_ACCOUNT_ROLES
+        and any(member.id == user.id for member in get_staff_group_members(group))
+    )
+
+
+def is_planner_member(group, member_id):
+    if any(member.id == member_id for member in get_group_members_list(group)):
+        return True
+    return bool(
+        getattr(group, 'group_type', 'school') == 'staff'
+        and any(member.id == member_id for member in get_staff_group_members(group))
+    )
 
 
 def is_legacy_group_manager(group, user_id):
@@ -81,14 +203,32 @@ def can_manage_group(group, user_id):
     if getattr(group, 'is_legacy', True):
         return False
     user = User.query.get(int(user_id))
-    if not user or not user.is_active or user.account_role != 'admin':
+    if not user or not user.is_active:
         return False
-    return user_has_school_role(group.id, user.id, {'school-admin', 'headteacher'})
+    if getattr(group, 'group_type', 'school') == 'staff':
+        return user.account_role in STAFF_ACCOUNT_ROLES and str(group.leader_id) == str(user.id)
+    return user_has_school_role(group.id, user.id, GROUP_MANAGEMENT_ROLES)
 
 
 def serialize_group_for_user(group, user_id):
     payload = group.to_dict()
     school_role = get_school_role(group.id, int(user_id))
+    if group.group_type == 'school' and not can_manage_school_timetable(group, int(user_id)):
+        accessible_class_ids = get_accessible_class_ids(group, int(user_id))
+        filtered_timetable = []
+        for entry in payload.get('schoolTimetable') or []:
+            try:
+                class_id = int(entry.get('classId')) if entry.get('classId') not in (None, '') else None
+            except (TypeError, ValueError):
+                class_id = None
+            student_ids = {
+                int(value)
+                for value in (entry.get('studentIds') or [])
+                if str(value).isdigit()
+            }
+            if class_id in accessible_class_ids or int(user_id) in student_ids:
+                filtered_timetable.append(entry)
+        payload['schoolTimetable'] = filtered_timetable
     payload.update({
         'viewerSchoolRole': school_role,
         'viewerCanManage': can_manage_group(group, user_id),
@@ -205,6 +345,9 @@ def apply_ai_student_plan(group, student, normalized_plan, current_user_id):
             'scheduleTime': habit.get('scheduleTime') or (existing_habit.get('scheduleTime') if existing_habit else ''),
             'durationMinutes': habit.get('durationMinutes') or 20,
             'combatType': habit.get('combatType') or 'neutral',
+            'periodicIntervalHours': habit.get('periodicIntervalHours') or 4,
+            'periodicOccurrences': habit.get('periodicOccurrences') or 4,
+            'allowOverlap': bool(habit.get('allowOverlap')),
             'linkedGoalId': linked_goal_id,
             'orderIndex': habit.get('orderIndex', index),
             'progress': list(existing_habit.get('progress') or []) if existing_habit else []
@@ -349,7 +492,7 @@ def can_manage_student(group, current_user_id, student_id):
         return True
 
     school_role = get_school_role(group.id, current_user_id)
-    if school_role == 'pastoral-lead':
+    if school_role in FULL_SCHOOL_ACCESS_ROLES | SCHOOL_WIDE_STUDENT_SUPPORT_ROLES:
         return True
 
     is_group_coach = any(coach.id == current_user_id for coach in group.coaches)
@@ -362,8 +505,16 @@ def can_manage_student(group, current_user_id, student_id):
         if assignment is not None:
             return True
 
-    if user_has_school_role(group.id, current_user_id, {'teacher'}):
+    if school_role in CLASS_SCOPED_TEACHER_ROLES:
         return any(student.id == student_id for student in get_students_for_teacher(group, current_user_id))
+
+    if school_role in {'head-of-department', 'head-of-year'}:
+        accessible_class_ids = get_accessible_class_ids(group, current_user_id)
+        return SchoolEnrollment.query.filter(
+            SchoolEnrollment.group_id == group.id,
+            SchoolEnrollment.student_id == student_id,
+            SchoolEnrollment.class_id.in_(accessible_class_ids) if accessible_class_ids else False
+        ).first() is not None
 
     return False
 
@@ -389,26 +540,74 @@ def get_teacher_class_ids(group_id, teacher_id):
     return {assignment.class_id for assignment in assignments}
 
 
+def get_teacher_subject_ids(group_id, teacher_id):
+    assignments = SchoolTeachingAssignment.query.filter_by(
+        group_id=group_id,
+        teacher_id=teacher_id
+    ).all()
+    return {assignment.subject_id for assignment in assignments}
+
+
+def get_department_class_ids(group_id, teacher_id):
+    subject_ids = get_teacher_subject_ids(group_id, teacher_id)
+    if not subject_ids:
+        return set()
+    assignments = SchoolTeachingAssignment.query.filter(
+        SchoolTeachingAssignment.group_id == group_id,
+        SchoolTeachingAssignment.subject_id.in_(subject_ids)
+    ).all()
+    return {assignment.class_id for assignment in assignments}
+
+
+def get_year_class_ids(group_id, teacher_id):
+    assigned_class_ids = get_teacher_class_ids(group_id, teacher_id)
+    if not assigned_class_ids:
+        return set()
+    year_groups = {
+        school_class.year_group
+        for school_class in SchoolClass.query.filter(
+            SchoolClass.group_id == group_id,
+            SchoolClass.id.in_(assigned_class_ids)
+        ).all()
+        if school_class.year_group
+    }
+    if not year_groups:
+        return assigned_class_ids
+    return {
+        school_class.id
+        for school_class in SchoolClass.query.filter(
+            SchoolClass.group_id == group_id,
+            SchoolClass.year_group.in_(year_groups)
+        ).all()
+    }
+
+
 def get_all_school_class_ids(group):
     classes = SchoolClass.query.filter_by(group_id=group.id).all()
     return {school_class.id for school_class in classes}
 
 
 def get_accessible_class_ids(group, user_id):
-    if not group or group.group_type != 'school':
+    if not group or getattr(group, 'group_type', 'school') != 'school':
         return set()
 
     if can_manage_group(group, user_id):
         return get_all_school_class_ids(group)
 
-    if any(coach.id == user_id for coach in group.coaches):
+    if any(coach.id == user_id for coach in getattr(group, 'coaches', []) or []):
         return get_all_school_class_ids(group)
 
     school_role = get_school_role(group.id, user_id)
-    if school_role in {'school-admin', 'headteacher', 'pastoral-lead', 'coach'}:
+    if school_role in FULL_SCHOOL_ACCESS_ROLES | SCHOOL_WIDE_STUDENT_SUPPORT_ROLES | {'coach'}:
         return get_all_school_class_ids(group)
 
-    if school_role == 'teacher':
+    if school_role == 'head-of-department':
+        return get_department_class_ids(group.id, user_id)
+
+    if school_role == 'head-of-year':
+        return get_year_class_ids(group.id, user_id)
+
+    if school_role in CLASS_SCOPED_TEACHER_ROLES:
         return get_teacher_class_ids(group.id, user_id)
 
     enrollment_class_ids = {
@@ -585,7 +784,33 @@ def get_students_for_teacher(group, teacher_id, members=None, class_ids=None):
 
 
 def can_manage_school(group, current_user_id):
-    return can_manage_group(group, current_user_id)
+    if can_manage_group(group, current_user_id):
+        return True
+    return user_has_school_role(group.id, current_user_id, FULL_SCHOOL_ACCESS_ROLES)
+
+
+def can_manage_school_timetable(group, current_user_id):
+    if can_manage_school(group, current_user_id):
+        return True
+    return get_school_role(group.id, current_user_id) in SCHOOL_LEADERSHIP_ROLES
+
+
+def can_manage_class_roster(group, current_user_id, class_id):
+    if can_manage_school(group, current_user_id):
+        return True
+    school_role = get_school_role(group.id, current_user_id)
+    if school_role in SCHOOL_LEADERSHIP_ROLES:
+        return class_id in get_accessible_class_ids(group, current_user_id)
+    if school_role in CLASS_SCOPED_TEACHER_ROLES:
+        return class_id in get_teacher_class_ids(group.id, current_user_id)
+    return False
+
+
+def can_manage_class_staff(group, current_user_id, class_id):
+    if can_manage_school(group, current_user_id):
+        return True
+    school_role = get_school_role(group.id, current_user_id)
+    return school_role in {'head-of-department', 'head-of-year'} and class_id in get_accessible_class_ids(group, current_user_id)
 
 
 def can_view_school_operations(group, current_user_id):
@@ -596,7 +821,7 @@ def can_view_school_operations(group, current_user_id):
     return user_has_school_role(
         group.id,
         current_user_id,
-        {'teacher', 'headteacher', 'pastoral-lead', 'school-admin', 'coach'}
+        SCHOOL_STAFF_ROLES
     )
 
 
@@ -635,6 +860,8 @@ def calculate_habit_recovery_metrics(group, student_id):
         return {
             'completionRate': 0,
             'completedCount': 0,
+            'fullyCompletedCount': 0,
+            'partialCount': 0,
             'scheduledCount': 0,
             'recoveryPoints': 0
         }
@@ -647,35 +874,31 @@ def calculate_habit_recovery_metrics(group, student_id):
         return {
             'completionRate': 0,
             'completedCount': 0,
+            'fullyCompletedCount': 0,
+            'partialCount': 0,
             'scheduledCount': 0,
             'recoveryPoints': 0
         }
 
-    today = date.today()
+    today = datetime.now(_student_timezone(group, student_id)[1]).date()
     week_start = today - timedelta(days=today.weekday())
-    completed_count = 0
-    scheduled_count = 0
-
-    for habit in member_habit.get('habits', []):
-        progress = habit.get('progress') or []
-        schedule_days = habit.get('scheduleDays') or []
-        for offset in range(7):
-            target_day = week_start + timedelta(days=offset)
-            if target_day > today:
-                break
-
-            day_name = target_day.strftime('%A')
-            is_scheduled = not schedule_days or day_name in schedule_days
-            if not is_scheduled:
-                continue
-
-            scheduled_count += 1
-            progress_entry = next(
-                (entry for entry in progress if str(entry.get('date', ''))[:10] == target_day.isoformat()),
-                None
-            )
-            if progress_entry and progress_entry.get('completed'):
-                completed_count += 1
+    stats = _build_group_member_habit_statistics(
+        group,
+        group.active_challenge,
+        member_habit,
+        student_id,
+        today_value=today,
+    )
+    weekly_rows = [
+        row
+        for habit in stats['habits']
+        for row in habit['dailyData']
+        if row['date'] >= week_start.isoformat()
+    ]
+    completed_count = sum(row['progressFraction'] for row in weekly_rows)
+    scheduled_count = len(weekly_rows)
+    fully_completed_count = sum(1 for row in weekly_rows if row['status'] == 'complete')
+    partial_count = sum(1 for row in weekly_rows if row['status'] == 'partial')
 
     completion_rate = round((completed_count / scheduled_count) * 100, 1) if scheduled_count else 0
     if scheduled_count == 0:
@@ -693,7 +916,9 @@ def calculate_habit_recovery_metrics(group, student_id):
 
     return {
         'completionRate': completion_rate,
-        'completedCount': completed_count,
+        'completedCount': round(completed_count, 2),
+        'fullyCompletedCount': fully_completed_count,
+        'partialCount': partial_count,
         'scheduledCount': scheduled_count,
         'recoveryPoints': recovery_points
     }
@@ -705,29 +930,31 @@ def calculate_today_habit_recovery_metrics(group, student_id):
         return {
             'completionRate': 0,
             'completedCount': 0,
+            'fullyCompletedCount': 0,
+            'partialCount': 0,
             'scheduledCount': 0,
             'recoveryPoints': 0
         }
 
-    today = date.today()
+    today = datetime.now(_student_timezone(group, student_id)[1]).date()
     today_iso = today.isoformat()
-    day_name = today.strftime('%A')
-    completed_count = 0
-    scheduled_count = 0
-
-    for habit in member_habit.get('habits', []):
-        schedule_days = habit.get('scheduleDays') or []
-        is_scheduled = not schedule_days or day_name in schedule_days
-        if not is_scheduled:
-            continue
-
-        scheduled_count += 1
-        progress_entry = next(
-            (entry for entry in (habit.get('progress') or []) if str(entry.get('date', ''))[:10] == today_iso),
-            None
-        )
-        if progress_entry and progress_entry.get('completed'):
-            completed_count += 1
+    stats = _build_group_member_habit_statistics(
+        group,
+        group.active_challenge,
+        member_habit,
+        student_id,
+        today_value=today,
+    )
+    today_rows = [
+        row
+        for habit in stats['habits']
+        for row in habit['dailyData']
+        if row['date'] == today_iso
+    ]
+    completed_count = sum(row['progressFraction'] for row in today_rows)
+    scheduled_count = len(today_rows)
+    fully_completed_count = sum(1 for row in today_rows if row['status'] == 'complete')
+    partial_count = sum(1 for row in today_rows if row['status'] == 'partial')
 
     completion_rate = round((completed_count / scheduled_count) * 100, 1) if scheduled_count else 0
     if scheduled_count == 0:
@@ -745,7 +972,9 @@ def calculate_today_habit_recovery_metrics(group, student_id):
 
     return {
         'completionRate': completion_rate,
-        'completedCount': completed_count,
+        'completedCount': round(completed_count, 2),
+        'fullyCompletedCount': fully_completed_count,
+        'partialCount': partial_count,
         'scheduledCount': scheduled_count,
         'recoveryPoints': recovery_points
     }
@@ -1242,6 +1471,110 @@ def create_system_alert(group, recipient_id, content):
     ))
 
 
+def create_challenge_published_notifications(group, challenge, member_habits):
+    student_member_ids = {
+        member.id
+        for member in get_group_members_list(group)
+        if (member.account_role or 'student') == 'student'
+    }
+    notified_ids = set()
+    for member_habit in member_habits or []:
+        if not isinstance(member_habit, dict):
+            continue
+        member_value = member_habit.get('member')
+        member_id = member_value.get('id') if isinstance(member_value, dict) else member_value
+        try:
+            member_id = int(member_id)
+        except (TypeError, ValueError):
+            continue
+        habits = member_habit.get('habits') or []
+        if member_id not in student_member_ids or member_id in notified_ids or not habits:
+            continue
+        create_system_alert(
+            group,
+            member_id,
+            (
+                f"New challenge published: {len(habits)} habit{'s' if len(habits) != 1 else ''} "
+                f"from {challenge.start_date.date().isoformat()} to {challenge.end_date.date().isoformat()}. "
+                "Open your school dashboard to review your plan."
+            ),
+        )
+        notified_ids.add(member_id)
+    return len(notified_ids)
+
+
+def normalize_challenge_member_habits(
+    group,
+    member_habits,
+    joined_at_by_member=None,
+    default_joined_at=None,
+    activation_at_by_member=None,
+    default_activation_at=None,
+):
+    if not isinstance(member_habits, list) or not member_habits:
+        raise ValueError('memberHabits must contain at least one student')
+
+    group_member_ids = {member.id for member in get_group_members_list(group)}
+    joined_at_by_member = joined_at_by_member or {}
+    activation_at_by_member = activation_at_by_member or {}
+    normalized = []
+    seen_member_ids = set()
+
+    for entry in member_habits:
+        if not isinstance(entry, dict):
+            raise ValueError('Every member habit entry must be an object')
+        raw_member = entry.get('member')
+        if isinstance(raw_member, dict):
+            raw_member = raw_member.get('id')
+        try:
+            member_id = int(raw_member)
+        except (TypeError, ValueError):
+            raise ValueError('Every member habit entry requires a valid student ID')
+        if member_id not in group_member_ids:
+            raise ValueError(f'Student {member_id} does not belong to this group')
+        if member_id in seen_member_ids:
+            raise ValueError(f'Student {member_id} was submitted more than once')
+
+        habits = entry.get('habits')
+        if not isinstance(habits, list) or not habits:
+            raise ValueError(f'Student {member_id} requires at least one habit')
+
+        joined_at = (
+            entry.get('joinedAt')
+            or joined_at_by_member.get(member_id)
+            or default_joined_at
+            or date.today().isoformat()
+        )
+        joined_at_text = str(joined_at).strip()
+        try:
+            parsed_joined_at = datetime.fromisoformat(joined_at_text.replace('Z', '+00:00'))
+            joined_at_text = parsed_joined_at.date().isoformat()
+        except (TypeError, ValueError):
+            joined_at_text = str(joined_at)[:10]
+        activation_at = (
+            entry.get('activationAt')
+            or activation_at_by_member.get(member_id)
+            or default_activation_at
+        )
+        normalized_entry = {
+            'member': member_id,
+            'habits': habits,
+            'joinedAt': joined_at_text,
+        }
+        if activation_at:
+            try:
+                parsed_activation = datetime.fromisoformat(str(activation_at).replace('Z', '+00:00'))
+                if parsed_activation.tzinfo is None:
+                    parsed_activation = parsed_activation.replace(tzinfo=timezone.utc)
+                normalized_entry['activationAt'] = parsed_activation.astimezone(timezone.utc).isoformat()
+            except (TypeError, ValueError):
+                pass
+        normalized.append(normalized_entry)
+        seen_member_ids.add(member_id)
+
+    return normalized
+
+
 def create_class_chat_message(group, class_id, sender_id, content, message_type='system'):
     if not group or not class_id or not content:
         return None
@@ -1515,11 +1848,16 @@ def build_group_league_table(group):
     return standings
 
 
+def _member_habit_user_id(member_habit):
+    member = (member_habit or {}).get('member')
+    return member.get('id') if isinstance(member, dict) else member
+
+
 def get_member_habit_entry(group, student_id):
     if not group.active_challenge or not group.active_challenge.member_habits:
         return None
     return next(
-        (mh for mh in group.active_challenge.member_habits if str(mh.get('member')) == str(student_id)),
+        (mh for mh in group.active_challenge.member_habits if str(_member_habit_user_id(mh)) == str(student_id)),
         None
     )
 
@@ -1590,6 +1928,9 @@ def build_daily_points_summary(group, student_id):
         'combinedPoints': combined_points,
         'status': recovery_status,
         'habitsCompleted': today_habits['completedCount'],
+        'habitCompletionUnits': today_habits['completedCount'],
+        'habitsFullyCompleted': today_habits.get('fullyCompletedCount', today_habits['completedCount']),
+        'habitsPartiallyCompleted': today_habits.get('partialCount', 0),
         'habitsScheduled': today_habits['scheduledCount'],
         'habitCompletionRate': today_habits['completionRate'],
         'performanceLogged': today_performance['logged'],
@@ -1644,7 +1985,110 @@ def normalize_timetable_entries(entries):
     return normalized
 
 
-def serialize_school_structure(group):
+def normalize_school_day_config(config):
+    source = config or {}
+    timezone_name, _ = resolve_timezone(
+        source.get('timezone') or os.getenv('SCHOOL_TIMEZONE', DEFAULT_SCHOOL_TIMEZONE)
+    )
+    defaults = {
+        'startTime': '08:30',
+        'endTime': '15:30',
+        'lessonMinutes': 60,
+        'breaks': [
+            {'name': 'Morning break', 'startTime': '10:30', 'endTime': '10:50'},
+            {'name': 'Lunch', 'startTime': '12:30', 'endTime': '13:15'},
+        ],
+    }
+    start_time = str(source.get('startTime') or defaults['startTime']).strip()
+    end_time = str(source.get('endTime') or defaults['endTime']).strip()
+    if len(start_time) != 5:
+        start_time = defaults['startTime']
+    if len(end_time) != 5:
+        end_time = defaults['endTime']
+    try:
+        lesson_minutes = max(20, min(180, int(source.get('lessonMinutes') or defaults['lessonMinutes'])))
+    except (TypeError, ValueError):
+        lesson_minutes = defaults['lessonMinutes']
+    breaks = []
+    for item in source.get('breaks', defaults['breaks']) or []:
+        name = str((item or {}).get('name') or '').strip()
+        break_start = str((item or {}).get('startTime') or '').strip()
+        break_end = str((item or {}).get('endTime') or '').strip()
+        if name and len(break_start) == 5 and len(break_end) == 5 and break_start < break_end:
+            breaks.append({
+                'name': name[:80],
+                'startTime': break_start,
+                'endTime': break_end,
+            })
+    return {
+        'timezone': timezone_name,
+        'startTime': start_time,
+        'endTime': end_time,
+        'lessonMinutes': lesson_minutes,
+        'breaks': breaks[:6],
+    }
+
+
+def _time_ranges_overlap(start_a, end_a, start_b, end_b):
+    return bool(start_a < end_b and start_b < end_a)
+
+
+def find_timetable_conflicts(entries, day_config=None):
+    config = normalize_school_day_config(day_config)
+    conflicts = []
+    for entry in entries:
+        start_time = entry.get('startTime') or ''
+        end_time = entry.get('endTime') or ''
+        label = f"{entry.get('weekday')} {start_time}-{end_time} {entry.get('className') or entry.get('subject')}"
+        if len(start_time) != 5 or len(end_time) != 5 or start_time >= end_time:
+            conflicts.append({'type': 'invalid-time', 'entryIds': [entry.get('id')], 'message': f'Invalid lesson time: {label}'})
+            continue
+        if start_time < config['startTime'] or end_time > config['endTime']:
+            conflicts.append({'type': 'outside-school-day', 'entryIds': [entry.get('id')], 'message': f'Lesson is outside school hours: {label}'})
+        for school_break in config['breaks']:
+            if _time_ranges_overlap(start_time, end_time, school_break['startTime'], school_break['endTime']):
+                conflicts.append({
+                    'type': 'break-overlap',
+                    'entryIds': [entry.get('id')],
+                    'message': f"{label} overlaps {school_break['name']}.",
+                })
+
+    for index, left in enumerate(entries):
+        for right in entries[index + 1:]:
+            if left.get('weekday') != right.get('weekday'):
+                continue
+            if not _time_ranges_overlap(
+                left.get('startTime') or '',
+                left.get('endTime') or '',
+                right.get('startTime') or '',
+                right.get('endTime') or ''
+            ):
+                continue
+            reasons = []
+            if left.get('classId') and str(left.get('classId')) == str(right.get('classId')):
+                reasons.append('class')
+            if left.get('teacherId') and str(left.get('teacherId')) == str(right.get('teacherId')):
+                reasons.append('teacher')
+            if left.get('roomId') and str(left.get('roomId')) == str(right.get('roomId')):
+                reasons.append('room')
+            left_students = {int(value) for value in (left.get('studentIds') or []) if str(value).isdigit()}
+            right_students = {int(value) for value in (right.get('studentIds') or []) if str(value).isdigit()}
+            if left_students & right_students:
+                reasons.append('students')
+            if reasons:
+                conflicts.append({
+                    'type': 'collision',
+                    'entryIds': [left.get('id'), right.get('id')],
+                    'message': (
+                        f"{left.get('weekday')} {left.get('startTime')}: "
+                        f"{left.get('className') or left.get('subject')} conflicts with "
+                        f"{right.get('className') or right.get('subject')} ({', '.join(reasons)})."
+                    ),
+                })
+    return conflicts
+
+
+def serialize_school_structure(group, user_id=None):
     roles = SchoolRoleAssignment.query.filter_by(group_id=group.id).all()
     subjects = SchoolSubject.query.filter_by(group_id=group.id).order_by(SchoolSubject.name.asc()).all()
     rooms = SchoolRoom.query.filter_by(group_id=group.id).order_by(SchoolRoom.name.asc()).all()
@@ -1652,6 +2096,23 @@ def serialize_school_structure(group):
     enrollments = SchoolEnrollment.query.filter_by(group_id=group.id).all()
     teaching_assignments = SchoolTeachingAssignment.query.filter_by(group_id=group.id).all()
     behaviour_types = SchoolBehaviourType.query.filter_by(group_id=group.id).order_by(SchoolBehaviourType.kind.asc(), SchoolBehaviourType.name.asc()).all()
+    accessible_class_ids = get_all_school_class_ids(group) if user_id is None else get_accessible_class_ids(group, user_id)
+    can_edit_structure = bool(user_id is not None and can_manage_school(group, user_id))
+    visible_classes = classes if user_id is None or can_edit_structure else [
+        school_class for school_class in classes if school_class.id in accessible_class_ids
+    ]
+    visible_class_ids = {school_class.id for school_class in visible_classes}
+    if user_id is not None and not can_edit_structure:
+        visible_staff_ids = {
+            assignment.teacher_id
+            for assignment in teaching_assignments
+            if assignment.class_id in visible_class_ids
+        } | {user_id}
+        roles = [assignment for assignment in roles if assignment.user_id in visible_staff_ids]
+        teaching_assignments = [
+            assignment for assignment in teaching_assignments if assignment.class_id in visible_class_ids
+        ]
+        enrollments = [enrollment for enrollment in enrollments if enrollment.class_id in visible_class_ids]
 
     enrollment_map = {}
     for enrollment in enrollments:
@@ -1666,13 +2127,26 @@ def serialize_school_structure(group):
         'subjects': [subject.to_dict() for subject in subjects],
         'rooms': [room.to_dict() for room in rooms],
         'behaviourTypes': [item.to_dict() for item in behaviour_types],
+        'schoolDayConfig': group.school_day_config or {},
+        'viewerRole': get_school_role(group.id, user_id) if user_id is not None else None,
+        'permissions': {
+            'canEditStructure': can_edit_structure,
+            'canManageTimetable': bool(user_id is not None and can_manage_school_timetable(group, user_id)),
+            'canViewAllClasses': bool(user_id is not None and accessible_class_ids == get_all_school_class_ids(group)),
+        },
         'classes': [
             {
                 **school_class.to_dict(),
                 'enrollments': enrollment_map.get(school_class.id, []),
-                'teachingAssignments': teaching_map.get(school_class.id, [])
+                'teachingAssignments': teaching_map.get(school_class.id, []),
+                'permissions': {
+                    'canManageRoster': bool(user_id is not None and can_manage_class_roster(group, user_id, school_class.id)),
+                    'canManageStaff': bool(user_id is not None and can_manage_class_staff(group, user_id, school_class.id)),
+                    'canManageDetails': bool(user_id is not None and can_manage_class_staff(group, user_id, school_class.id)),
+                    'canManageTimetable': bool(user_id is not None and can_manage_school_timetable(group, user_id) and school_class.id in accessible_class_ids),
+                }
             }
-            for school_class in classes
+            for school_class in visible_classes
         ]
     }
 
@@ -1882,6 +2356,8 @@ def build_weekly_student_report_html(group, student):
     goal_activity = profile.get('goalActivity') or {}
     scorecards = profile.get('scorecards') or {}
     homework = profile.get('homework') or {}
+    habit_statistics = profile.get('habitStatistics') or {}
+    habit_summary = habit_statistics.get('summary') or {}
     behaviour_rows = ''.join(
         f"<tr><td>{item.get('subject','')}</td><td>{item.get('reward',0)}</td><td>{item.get('sanction',0)}</td><td>{item.get('referral',0)}</td><td>{item.get('onCall',0)}</td><td>{item.get('removal',0)}</td><td>{item.get('pointsDelta',0)}</td></tr>"
         for item in (behaviour_summary.get('subjects') or [])[:8]
@@ -1891,9 +2367,15 @@ def build_weekly_student_report_html(group, student):
         for goal in (profile.get('goals') or [])
     ) or '<li>No goals set.</li>'
     habit_rows = ''.join(
-        f"<li>{habit.get('name','')} | Why: {next((goal.get('title') for goal in (profile.get('goals') or []) if str(goal.get('id')) == str(habit.get('linkedGoalId'))), 'No linked goal')}</li>"
-        for habit in (profile.get('linkedHabits') or [])
-    ) or '<li>No linked habits set.</li>'
+        (
+            f"<tr><td>{habit.get('name','')}</td><td>{habit.get('habitType','')}</td>"
+            f"<td>{habit.get('combatType','')}</td><td>{habit.get('completionRate',0)}%</td>"
+            f"<td>{habit.get('fullCount',0)}</td><td>{habit.get('partialCount',0)}</td>"
+            f"<td>{habit.get('earnedUnits',0)}/{habit.get('possibleUnits',0)}</td>"
+            f"<td>{habit.get('linkedGoalTitle') or 'No linked goal'}</td></tr>"
+        )
+        for habit in (habit_statistics.get('habits') or [])
+    ) or '<tr><td colspan="8">No habit statistics are available.</td></tr>'
     return f"""<!doctype html>
 <html>
 <head>
@@ -1919,11 +2401,18 @@ def build_weekly_student_report_html(group, student):
     <div class="card"><div>Behaviour score</div><h2>{scorecards.get('latestBehaviourScore', 0)}</h2></div>
     <div class="card"><div>Goal activity</div><h2>{goal_activity.get('statusLabel', 'Unknown')}</h2></div>
     <div class="card"><div>Homework points</div><h2>{homework.get('weeklyPoints', 0)}</h2></div>
+    <div class="card"><div>Habit completion</div><h2>{habit_summary.get('completionRate', 0)}%</h2></div>
+    <div class="card"><div>Habit units earned</div><h2>{habit_summary.get('earnedUnits', 0)}/{habit_summary.get('possibleUnits', 0)}</h2></div>
+    <div class="card"><div>Perfect / partial days</div><h2>{habit_summary.get('perfectDays', 0)} / {habit_summary.get('partialDays', 0)}</h2></div>
   </div>
   <h2>Goal plan</h2>
   <ul>{goal_rows}</ul>
-  <h2>Linked habits</h2>
-  <ul>{habit_rows}</ul>
+  <h2>Habit performance</h2>
+  <p>Completion rate is the average progress across scheduled habit-days. Recurring habits contribute proportionally, so three of four occurrences counts as 75%.</p>
+  <table>
+    <thead><tr><th>Habit</th><th>Type</th><th>Purpose</th><th>Rate</th><th>Full</th><th>Partial</th><th>Units</th><th>Linked goal</th></tr></thead>
+    <tbody>{habit_rows}</tbody>
+  </table>
   <h2>Attendance summary</h2>
   <p>Today status: {attendance.get('todayStatus', 'No lessons logged')} | Present: {attendance.get('present',0)} | Late: {attendance.get('late',0)} | Absent: {attendance.get('absent',0)} | Authorised absence: {attendance.get('authorisedAbsence',0)}</p>
   <h2>Behaviour by subject</h2>
@@ -2011,7 +2500,17 @@ def serialize_school_profile(group, student, league_standing=None):
 
     linked_habits = []
     member_habit = get_member_habit_entry(group, student.id)
+    habit_statistics = None
     if member_habit:
+        student_today = datetime.now(_student_timezone(group, student.id)[1]).date()
+        habit_statistics = _build_group_member_habit_statistics(
+            group,
+            group.active_challenge,
+            member_habit,
+            student.id,
+            today_value=student_today,
+            goal_titles={str(goal.id): goal.title for goal in goals},
+        ) if group.active_challenge else None
         for index, habit in enumerate(member_habit.get('habits', [])):
             linked_habits.append({
                 'index': index,
@@ -2023,7 +2522,10 @@ def serialize_school_profile(group, student, league_standing=None):
                 'scheduleTime': habit.get('scheduleTime') or '',
                 'durationMinutes': habit.get('durationMinutes') or 30,
                 'orderIndex': habit.get('orderIndex', index),
-                'combatType': habit.get('combatType') or 'neutral'
+                'combatType': habit.get('combatType') or 'neutral',
+                'periodicIntervalHours': habit.get('periodicIntervalHours') or 4,
+                'periodicOccurrences': habit.get('periodicOccurrences') or 4,
+                'allowOverlap': bool(habit.get('allowOverlap'))
             })
 
     latest_impact = impact_records[-1].to_dict() if impact_records else None
@@ -2045,11 +2547,39 @@ def serialize_school_profile(group, student, league_standing=None):
     attendance_summary = build_attendance_summary(group, student.id)
     behaviour_events = get_student_behaviour_events(group.id, student.id)
     behaviour_summary = build_student_behaviour_summary(group.id, student.id)
+    class_ids = {
+        enrollment.class_id
+        for enrollment in SchoolEnrollment.query.filter_by(
+            group_id=group.id,
+            student_id=student.id
+        ).all()
+    }
+    student_classes = []
+    if class_ids:
+        school_classes = SchoolClass.query.filter(
+            SchoolClass.group_id == group.id,
+            SchoolClass.id.in_(class_ids)
+        ).order_by(SchoolClass.name.asc()).all()
+        teaching_assignments = SchoolTeachingAssignment.query.filter(
+            SchoolTeachingAssignment.group_id == group.id,
+            SchoolTeachingAssignment.class_id.in_(class_ids)
+        ).all()
+        teaching_map = defaultdict(list)
+        for assignment in teaching_assignments:
+            teaching_map[assignment.class_id].append(assignment.to_dict())
+        student_classes = [
+            {
+                **school_class.to_dict(),
+                'teachingAssignments': teaching_map.get(school_class.id, []),
+            }
+            for school_class in school_classes
+        ]
 
     profile = {
         'student': student.to_dict(),
         'goals': [goal.to_dict() for goal in goals],
         'linkedHabits': linked_habits,
+        'habitStatistics': habit_statistics,
         'latestImpact': latest_impact,
         'impactRecords': [record.to_dict() for record in reversed(impact_records)],
         'trend': build_school_trend(impact_records),
@@ -2070,6 +2600,7 @@ def serialize_school_profile(group, student, league_standing=None):
         'interventions': [record.to_dict() for record in interventions],
         'parentProfiles': [record.to_dict() for record in parent_profiles],
         'parentContacts': [record.to_dict() for record in parent_contacts],
+        'classes': student_classes,
         'schoolTimetable': group.school_timetable or []
     }
     profile['leagueStanding'] = league_standing
@@ -2078,12 +2609,13 @@ def serialize_school_profile(group, student, league_standing=None):
 
 def get_school_students_for_user(group, current_user_id, members=None):
     members = members if members is not None else get_group_members_list(group)
+    school_role = get_school_role(group.id, current_user_id)
 
-    if group.leader_id == current_user_id or user_has_school_role(group.id, current_user_id, {'school-admin', 'headteacher', 'pastoral-lead'}):
+    if group.leader_id == current_user_id or school_role in FULL_SCHOOL_ACCESS_ROLES | SCHOOL_WIDE_STUDENT_SUPPORT_ROLES:
         return list(members)
 
-    if user_has_school_role(group.id, current_user_id, {'teacher'}):
-        class_ids = get_teacher_class_ids(group.id, current_user_id)
+    if school_role in CLASS_SCOPED_TEACHER_ROLES | {'head-of-department', 'head-of-year'}:
+        class_ids = get_accessible_class_ids(group, current_user_id)
         return get_students_for_teacher(group, current_user_id, members=members, class_ids=class_ids)
 
     if any(coach.id == current_user_id for coach in group.coaches):
@@ -2875,8 +3407,14 @@ def build_school_operations_dashboard_fast(group, current_user_id):
             teacher_id_int = int(teacher_id) if teacher_id not in (None, '') else None
         except (TypeError, ValueError):
             teacher_id_int = None
-        if not can_manage_group(group, current_user_id) and teacher_id_int and teacher_id_int != current_user_id:
-            continue
+        if not can_manage_group(group, current_user_id):
+            accessible_class_ids = get_accessible_class_ids(group, current_user_id)
+            try:
+                entry_class_id = int(entry.get('classId')) if entry.get('classId') not in (None, '') else None
+            except (TypeError, ValueError):
+                entry_class_id = None
+            if entry_class_id not in accessible_class_ids:
+                continue
         if not class_students:
             continue
 
@@ -3180,19 +3718,21 @@ def update_school_timetable(group_id):
         if not group:
             return jsonify({'error': 'Group not found'}), 404
 
-        is_group_coach = any(coach.id == current_user_id for coach in group.coaches)
-        if not can_manage_school(group, current_user_id) and not is_group_coach:
-            return jsonify({'error': 'Only school managers or coaches can update the school timetable'}), 403
+        if not can_manage_school_timetable(group, current_user_id):
+            return jsonify({'error': 'Only school leaders can update the school timetable'}), 403
 
         data = request.get_json() or {}
         entries = data.get('entries', [])
         if not isinstance(entries, list):
             return jsonify({'error': 'entries must be an array'}), 400
+        day_config = normalize_school_day_config(data.get('dayConfig') or group.school_day_config)
+        accessible_class_ids = get_accessible_class_ids(group, current_user_id)
+        has_full_access = can_manage_school(group, current_user_id)
 
         allowed_teacher_ids = {group.leader_id, *[coach.id for coach in group.coaches]}
         school_roles = SchoolRoleAssignment.query.filter(
             SchoolRoleAssignment.group_id == group.id,
-            SchoolRoleAssignment.role.in_(('teacher', 'headteacher', 'pastoral-lead', 'school-admin'))
+            SchoolRoleAssignment.role.in_(tuple(SCHOOL_STAFF_ROLES))
         ).all()
         allowed_teacher_ids.update(assignment.user_id for assignment in school_roles)
         subjects = {subject.id: subject for subject in SchoolSubject.query.filter_by(group_id=group.id).all()}
@@ -3227,6 +3767,8 @@ def update_school_timetable(group_id):
             subject = subjects.get(subject_id)
             room = rooms.get(room_id)
             school_class = classes.get(class_id)
+            if not has_full_access and (not school_class or school_class.id not in accessible_class_ids):
+                return jsonify({'error': 'You can only timetable classes within your assigned scope'}), 403
             student_ids = entry.get('studentIds') or []
             if school_class:
                 student_ids = [
@@ -3247,8 +3789,28 @@ def update_school_timetable(group_id):
                 'studentIds': student_ids
             })
 
-        group.school_timetable = normalize_timetable_entries(sanitized_entries)
+        normalized_entries = normalize_timetable_entries(sanitized_entries)
+        if not has_full_access:
+            preserved_entries = []
+            for existing_entry in group.school_timetable or []:
+                try:
+                    existing_class_id = int(existing_entry.get('classId')) if existing_entry.get('classId') not in (None, '') else None
+                except (TypeError, ValueError):
+                    existing_class_id = None
+                if existing_class_id not in accessible_class_ids:
+                    preserved_entries.append(existing_entry)
+            normalized_entries = normalize_timetable_entries(preserved_entries + normalized_entries)
+        conflicts = find_timetable_conflicts(normalized_entries, day_config)
+        if conflicts:
+            return jsonify({
+                'error': 'Resolve timetable collisions before saving.',
+                'conflicts': conflicts,
+            }), 400
+
+        group.school_timetable = normalized_entries
+        group.school_day_config = day_config
         flag_modified(group, 'school_timetable')
+        flag_modified(group, 'school_day_config')
         log_school_audit(
             group.id,
             current_user_id,
@@ -3259,9 +3821,161 @@ def update_school_timetable(group_id):
             metadata={'slotCount': len(sanitized_entries)}
         )
         db.session.commit()
-        return jsonify({'schoolTimetable': group.school_timetable or []}), 200
+        return jsonify({
+            'schoolTimetable': group.school_timetable or [],
+            'schoolDayConfig': group.school_day_config or {},
+            'conflicts': [],
+        }), 200
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/school-timetable/ai', methods=['POST'])
+@jwt_required()
+def generate_school_timetable(group_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        if not can_manage_school_timetable(group, current_user_id):
+            return jsonify({'error': 'Only school leaders can generate a timetable'}), 403
+
+        data = request.get_json() or {}
+        day_config = normalize_school_day_config(data.get('dayConfig') or group.school_day_config)
+        accessible_class_ids = get_accessible_class_ids(group, current_user_id)
+        classes = SchoolClass.query.filter(
+            SchoolClass.group_id == group.id,
+            SchoolClass.id.in_(accessible_class_ids) if accessible_class_ids else False
+        ).order_by(SchoolClass.name.asc()).all()
+        subjects = {subject.id: subject for subject in SchoolSubject.query.filter_by(group_id=group.id).all()}
+        rooms = {room.id: room for room in SchoolRoom.query.filter_by(group_id=group.id).all()}
+        assignments = SchoolTeachingAssignment.query.filter(
+            SchoolTeachingAssignment.group_id == group.id,
+            SchoolTeachingAssignment.class_id.in_(accessible_class_ids) if accessible_class_ids else False
+        ).all()
+        if not classes:
+            return jsonify({'error': 'Create or assign at least one class before generating a timetable'}), 400
+        if not rooms:
+            return jsonify({'error': 'Add at least one room before generating a timetable'}), 400
+
+        assignments_by_class = defaultdict(list)
+        valid_teacher_ids = set()
+        valid_assignment_keys = set()
+        for assignment in assignments:
+            assignments_by_class[assignment.class_id].append({
+                'teacherId': assignment.teacher_id,
+                'teacherName': assignment.teacher.username if assignment.teacher else '',
+                'subjectId': assignment.subject_id,
+                'subjectName': assignment.subject.name if assignment.subject else '',
+                'assignmentRole': assignment.assignment_role or 'lead-teacher',
+            })
+            valid_teacher_ids.add(assignment.teacher_id)
+            valid_assignment_keys.add((assignment.class_id, assignment.subject_id, assignment.teacher_id))
+
+        class_payload = []
+        for school_class in classes:
+            class_assignments = assignments_by_class.get(school_class.id, [])
+            if not class_assignments:
+                continue
+            roster_size = SchoolEnrollment.query.filter_by(
+                group_id=group.id,
+                class_id=school_class.id
+            ).count()
+            class_payload.append({
+                'classId': school_class.id,
+                'className': school_class.name,
+                'yearGroup': school_class.year_group or '',
+                'weeklyLessons': school_class.weekly_lessons or 5,
+                'preferredRoomId': school_class.room_id or 0,
+                'rosterSize': roster_size,
+                'teachingAssignments': class_assignments,
+            })
+        if not class_payload:
+            return jsonify({'error': 'Assign teachers and subjects to classes before generating a timetable'}), 400
+
+        raw_plan = create_structured_response(
+            model=OPENAI_SCHEDULER_MODEL,
+            system_prompt=(
+                "You are a UK school timetable planner. Produce a Monday-to-Friday lesson timetable using only "
+                "the supplied numeric class, subject, teacher, and room IDs. Meet each class weeklyLessons target. "
+                "Use only a teachingAssignments combination belonging to that class. Never double-book a class, "
+                "teacher, room, or overlapping student cohort. Keep every lesson inside school hours and outside "
+                "all break and lunch windows. Prefer the class room when it is available and respect room capacity. "
+                "Spread lessons across the week rather than clustering them. Return a reviewable draft only."
+            ),
+            user_prompt=json.dumps({
+                'task': 'Generate a collision-free weekly school timetable draft.',
+                'schoolDay': day_config,
+                'classes': class_payload,
+                'rooms': [
+                    {
+                        'roomId': room.id,
+                        'name': room.name,
+                        'block': room.block or '',
+                        'capacity': room.capacity or 0,
+                    }
+                    for room in rooms.values()
+                ],
+                'additionalInstructions': str(data.get('instructions') or '').strip()[:3000],
+            }),
+            schema_name='rituo_school_timetable',
+            schema=build_school_timetable_schema(),
+            max_output_tokens=6000,
+        )
+        normalized_plan = normalize_school_timetable(
+            raw_plan,
+            {school_class.id for school_class in classes},
+            set(subjects),
+            valid_teacher_ids,
+            set(rooms),
+        )
+        class_map = {school_class.id: school_class for school_class in classes}
+        sanitized_entries = []
+        invalid_assignment_count = 0
+        for entry in normalized_plan['entries']:
+            assignment_key = (entry['classId'], entry['subjectId'], entry['teacherId'])
+            if assignment_key not in valid_assignment_keys:
+                invalid_assignment_count += 1
+                continue
+            school_class = class_map[entry['classId']]
+            subject = subjects[entry['subjectId']]
+            room = rooms[entry['roomId']]
+            teacher = User.query.get(entry['teacherId'])
+            student_ids = [
+                enrollment.student_id
+                for enrollment in SchoolEnrollment.query.filter_by(
+                    group_id=group.id,
+                    class_id=school_class.id
+                ).all()
+            ]
+            sanitized_entries.append({
+                **entry,
+                'subject': subject.name,
+                'teacherName': teacher.username if teacher else '',
+                'room': room.name,
+                'className': school_class.name,
+                'studentIds': student_ids,
+            })
+        timetable_entries = normalize_timetable_entries(sanitized_entries)
+        conflicts = find_timetable_conflicts(timetable_entries, day_config)
+        warnings = list(normalized_plan['warnings'])
+        if invalid_assignment_count:
+            warnings.append(f'{invalid_assignment_count} lesson(s) used invalid class teaching assignments and were removed.')
+        if conflicts:
+            warnings.append(f'{len(conflicts)} collision(s) need review before this draft can be saved.')
+        return jsonify({
+            'summary': normalized_plan['summary'],
+            'entries': timetable_entries,
+            'schoolDayConfig': day_config,
+            'warnings': warnings,
+            'conflicts': conflicts,
+            'contract': structured_contract_metadata('rituo_school_timetable'),
+        }), 200
+    except OpenAIResponsesError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @groups_bp.route('/create', methods=['POST'])
@@ -3271,7 +3985,7 @@ def create_group():
         current_user_id = int(get_jwt_identity())
         user = User.query.get(current_user_id)
         if not user or not user.is_active or user.account_role != 'admin':
-            return jsonify({'error': 'Only admin accounts can create schools'}), 403
+            return jsonify({'error': 'Only admin accounts can create workspaces'}), 403
 
         data = request.get_json() or {}
         name = data.get('name')
@@ -3296,11 +4010,14 @@ def create_group():
         db.session.add(group)
         db.session.flush()
         user.leading_groups.append(group)
-        db.session.add(SchoolRoleAssignment(
-            group_id=group.id,
-            user_id=user.id,
-            role='school-admin',
-        ))
+        if group_type == 'staff':
+            group.members.append(user)
+        else:
+            db.session.add(SchoolRoleAssignment(
+                group_id=group.id,
+                user_id=user.id,
+                role='school-admin',
+            ))
         db.session.commit()
         return jsonify({'group': serialize_group_for_user(group, current_user_id)}), 201
     except Exception as e:
@@ -3319,9 +4036,14 @@ def join_group():
             return jsonify({'error': 'Group not found'}), 404
         if group.password != password:
             return jsonify({'error': 'Invalid password'}), 401
-        if not group.is_legacy:
-            return jsonify({'error': 'New school accounts are created and assigned by an admin'}), 403
         user = User.query.get(get_jwt_identity())
+        if not user or not user.is_active:
+            return jsonify({'error': 'An active account is required'}), 403
+        if not group.is_legacy:
+            if group.group_type != 'staff':
+                return jsonify({'error': 'New school and client accounts are created and assigned by an admin'}), 403
+            if user.account_role not in STAFF_ACCOUNT_ROLES:
+                return jsonify({'error': 'Coaches HQ workspaces are only available to admin and teacher accounts'}), 403
         if group in user.groups:
             return jsonify({'error': 'Already a member of this group'}), 400
         group.members.append(user)
@@ -3335,17 +4057,64 @@ def join_group():
 @jwt_required()
 def create_challenge():
     try:
-        data = request.get_json()
-        group_id = data.get('groupId')
-        start_date = datetime.fromisoformat(data.get('startDate'))
-        end_date = datetime.fromisoformat(data.get('endDate'))
-        member_habits = data.get('memberHabits')
+        data = request.get_json() or {}
+        group_id = str(data.get('groupId') or '').strip()
         course_id = data.get('courseId')
         course_required_member_ids = data.get('courseRequiredMemberIds')  # [] = all, else [id,...]
         group = Group.query.filter_by(group_id=group_id).first()
         current_user_id = int(get_jwt_identity())
         if not group or not can_manage_group(group, current_user_id):
             return jsonify({'error': 'Group not found or unauthorized'}), 404
+        if group.group_type == 'staff':
+            return jsonify({'error': 'Every Coaches HQ member creates their own independent challenge'}), 400
+        if group.active_challenge:
+            return jsonify({'error': 'Finish or remove the active challenge before publishing another'}), 409
+
+        try:
+            start_date = datetime.fromisoformat(str(data.get('startDate') or ''))
+            end_date = datetime.fromisoformat(str(data.get('endDate') or ''))
+        except ValueError:
+            return jsonify({'error': 'Valid startDate and endDate values are required'}), 400
+        if end_date < start_date:
+            return jsonify({'error': 'Challenge endDate must be on or after startDate'}), 400
+
+        start_iso = start_date.date().isoformat()
+        published_at = datetime.now(timezone.utc).isoformat()
+        try:
+            member_habits = normalize_challenge_member_habits(
+                group,
+                data.get('memberHabits'),
+                default_joined_at=start_iso,
+                default_activation_at=published_at,
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        expected_student_ids = {
+            member.id
+            for member in get_group_members_list(group)
+            if (member.account_role or 'student') == 'student'
+        }
+        submitted_student_ids = {entry['member'] for entry in member_habits}
+        missing_student_ids = sorted(expected_student_ids - submitted_student_ids)
+        if missing_student_ids:
+            return jsonify({
+                'error': (
+                    f'Every student requires at least one habit before publishing. '
+                    f'Missing student IDs: {", ".join(map(str, missing_student_ids))}'
+                )
+            }), 400
+
+        if course_required_member_ids is not None:
+            if not isinstance(course_required_member_ids, list):
+                return jsonify({'error': 'courseRequiredMemberIds must be an array'}), 400
+            try:
+                course_required_member_ids = sorted({int(member_id) for member_id in course_required_member_ids})
+            except (TypeError, ValueError):
+                return jsonify({'error': 'courseRequiredMemberIds must contain valid student IDs'}), 400
+            invalid_course_member_ids = set(course_required_member_ids) - submitted_student_ids
+            if invalid_course_member_ids:
+                return jsonify({'error': 'Course students must be included in this challenge'}), 400
 
         # Validate course: if course attached, challenge must be >= course sections in weeks. Course can be from any group the leader leads.
         if course_id:
@@ -3360,12 +4129,6 @@ def create_challenge():
             if challenge_weeks < sections_count:
                 return jsonify({'error': f'Challenge must be at least {sections_count} weeks for this course'}), 400
 
-        # Add joinedAt to each member_habits entry (for late joiner logic)
-        start_iso = start_date.date().isoformat() if hasattr(start_date, 'date') else start_date.isoformat()[:10]
-        for mh in (member_habits or []):
-            if isinstance(mh, dict) and 'joinedAt' not in mh:
-                mh['joinedAt'] = start_iso
-
         challenge = GroupChallenge(
             group_id=group.id,
             start_date=start_date,
@@ -3378,8 +4141,12 @@ def create_challenge():
         group.active_challenge = challenge
         for member in group.members:
             member.active_group_challenges.append(challenge)
+        notifications_created = create_challenge_published_notifications(group, challenge, member_habits)
         db.session.commit()
-        return jsonify({'challenge': challenge.to_dict()}), 201
+        return jsonify({
+            'challenge': challenge.to_dict(),
+            'notificationsCreated': notifications_created,
+        }), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
@@ -3426,7 +4193,13 @@ def add_members_to_challenge(group_id, challenge_id):
             if challenge not in user.active_group_challenges:
                 user.active_group_challenges.append(challenge)
             # Add member_habits entry with empty habits; joinedAt = now for late joiner logic
-            member_habits.append({'member': user.id, 'habits': [], 'joinedAt': date.today().isoformat()})
+            joined_now = datetime.now(_student_timezone(group, user.id)[1])
+            member_habits.append({
+                'member': user.id,
+                'habits': [],
+                'joinedAt': joined_now.date().isoformat(),
+                'activationAt': joined_now.astimezone(timezone.utc).isoformat(),
+            })
             existing_member_ids.add(mid_str)
             added.append(user.id)
 
@@ -3464,9 +4237,37 @@ def update_challenge_member_habits(group_id, challenge_id):
 
         challenge = group.active_challenge
         data = request.get_json() or {}
-        member_habits = data.get('memberHabits')
-        if member_habits is None:
-            return jsonify({'error': 'memberHabits array is required'}), 400
+        joined_at_by_member = {}
+        activation_at_by_member = {}
+        for entry in challenge.member_habits or []:
+            if not isinstance(entry, dict):
+                continue
+            raw_member = entry.get('member')
+            if isinstance(raw_member, dict):
+                raw_member = raw_member.get('id')
+            try:
+                member_id = int(raw_member)
+            except (TypeError, ValueError):
+                continue
+            joined_at_by_member[member_id] = entry.get('joinedAt')
+            activation_at_by_member[member_id] = entry.get('activationAt')
+        try:
+            member_habits = normalize_challenge_member_habits(
+                group,
+                data.get('memberHabits'),
+                joined_at_by_member=joined_at_by_member,
+                default_joined_at=challenge.start_date.date().isoformat(),
+                activation_at_by_member=activation_at_by_member,
+                default_activation_at=(
+                    challenge.created_at.replace(tzinfo=timezone.utc).isoformat()
+                    if challenge.created_at and challenge.created_at.tzinfo is None
+                    else challenge.created_at.isoformat()
+                    if challenge.created_at
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         challenge.member_habits = member_habits
         flag_modified(challenge, 'member_habits')
@@ -3644,6 +4445,238 @@ def get_ai_assistant_response():
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 
+@groups_bp.route('/<group_id>/students/goals/ai-seed', methods=['POST'])
+@jwt_required()
+def seed_test_student_goals(group_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'School not found'}), 404
+        if not can_manage_group(group, current_user_id):
+            return jsonify({'error': 'Only school admins or legacy owners can generate test goals'}), 403
+
+        data = request.get_json() or {}
+        requested_member_ids = {
+            int(member_id)
+            for member_id in (data.get('memberIds') or [])
+            if str(member_id).isdigit()
+        }
+        student_members = [
+            member for member in get_group_members_list(group)
+            if (member.account_role or 'student') == 'student'
+            and (not requested_member_ids or member.id in requested_member_ids)
+        ]
+        if requested_member_ids and len(student_members) != len(requested_member_ids):
+            return jsonify({'error': 'One or more selected students are not student members of this school'}), 400
+        if not student_members:
+            return jsonify({'error': 'Select at least one student'}), 400
+        if len(student_members) > 60:
+            return jsonify({'error': 'Generate goals for no more than 60 students at a time'}), 400
+
+        existing_goals = StudentGoal.query.filter(
+            StudentGoal.group_id == group.id,
+            StudentGoal.student_id.in_([member.id for member in student_members]),
+        ).order_by(StudentGoal.student_id, StudentGoal.id).all()
+        existing_by_student = defaultdict(list)
+        for goal in existing_goals:
+            existing_by_student[goal.student_id].append(goal.title)
+
+        target_students = [
+            {
+                'id': str(member.id),
+                'name': member.username,
+                'existingGoalTitles': existing_by_student[member.id],
+            }
+            for member in student_members
+        ]
+        generated_sets = []
+        warnings = []
+        summaries = []
+        batch_size = 8
+        for batch_start in range(0, len(target_students), batch_size):
+            student_batch = target_students[batch_start:batch_start + batch_size]
+            raw_seed = create_structured_response(
+                model=OPENAI_STUDENT_PLAN_MODEL,
+                system_prompt=(
+                    "You create safe demonstration goals for testing a school performance app. "
+                    "Return exactly five distinct, realistic, age-appropriate goals for every supplied student. "
+                    "Vary the set across academic progress, organisation, healthy routine, contribution or kindness, and personal development. "
+                    "These are test records, so do not infer diagnoses, protected traits, family circumstances, or sensitive personal facts. "
+                    "Avoid duplicating supplied existingGoalTitles. Keep every field concise and useful for linking practical habits."
+                ),
+                user_prompt=json.dumps({
+                    'task': 'Generate exactly five student-style demonstration goals for each student.',
+                    'school': group.name,
+                    'students': student_batch,
+                    'goalsPerStudent': 5,
+                }),
+                schema_name='rituo_test_goal_seed',
+                schema=build_test_goal_seed_schema(),
+                max_output_tokens=6000,
+            )
+            normalized_seed = normalize_test_goal_seed(raw_seed, student_batch, goals_per_student=5)
+            generated_sets.extend(normalized_seed['studentGoalSets'])
+            warnings.extend(normalized_seed['warnings'])
+            if normalized_seed['summary']:
+                summaries.append(normalized_seed['summary'])
+
+        created_goals = []
+        existing_title_keys = {
+            (goal.student_id, goal.title.strip().lower())
+            for goal in existing_goals
+            if goal.title and goal.title.strip()
+        }
+        for student_set in generated_sets:
+            student_id = int(student_set['studentId'])
+            for goal in student_set['goals']:
+                title_key = (student_id, goal['title'].strip().lower())
+                if title_key in existing_title_keys:
+                    continue
+                goal_record = StudentGoal(
+                    group_id=group.id,
+                    student_id=student_id,
+                    title=goal['title'],
+                    barrier=goal['barrier'] or None,
+                    school_goal=goal['schoolGoal'] or None,
+                    for_self=goal['forSelf'] or None,
+                    for_others=goal['forOthers'] or None,
+                    created_by_id=current_user_id,
+                )
+                db.session.add(goal_record)
+                db.session.flush()
+                created_goals.append(goal_record.to_dict())
+                existing_title_keys.add(title_key)
+
+        log_school_audit(
+            group.id,
+            current_user_id,
+            'ai-test-goals-generated',
+            'student-goals',
+            'AI demonstration goals generated',
+            description=f"Created {len(created_goals)} demonstration goals for {len(student_members)} students.",
+            metadata={
+                'studentIds': [member.id for member in student_members],
+                'goalsCreated': len(created_goals),
+            },
+        )
+        db.session.commit()
+        return jsonify({
+            'summary': ' '.join(summaries)[:600],
+            'studentsProcessed': len(student_members),
+            'goalsCreated': len(created_goals),
+            'goals': created_goals,
+            'warnings': warnings[:12],
+            'contract': structured_contract_metadata('rituo_test_goal_seed'),
+        }), 201
+    except OpenAIResponsesError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+def generate_personalized_habit_draft(school_name, source_text, preset_habits, target_students):
+    system_prompt = (
+        "You design personalised school challenge habits for individual students. "
+        "Return exactly one studentHabitSets entry for every supplied student ID, in the same order, and give every student at least one habit. "
+        "Never omit a student and never return an empty habits array. "
+        "ATTACK means a habit that moves the student toward a goal or a new achievement. "
+        "DEFENCE means a habit that protects an existing positive state, standard, discipline, kindness, health, or achievement. "
+        "Every habit must use exactly attack or defence; never return neutral. "
+        "Use each student's supplied goals to customise wording and choose linkedGoalId only when the habit genuinely supports that goal. "
+        "If a student has no goals, linkedGoalId must be an empty string. Never invent a goal ID. "
+        "Habits must be measurable, age-appropriate, concise, and include realistic schedules and completion times. "
+        + AI_HABIT_TYPE_GUIDANCE
+    )
+    preset_habit_count = max(1, len(preset_habits))
+    initial_batch_size = min(AI_HABIT_STUDENT_BATCH_SIZE, max(1, 24 // preset_habit_count))
+    habits_by_student = {}
+    summaries = []
+    warnings = []
+
+    def generate_batch(student_batch, retry=False):
+        raw_draft = create_structured_response(
+            model=OPENAI_HABIT_DRAFT_MODEL,
+            system_prompt=system_prompt,
+            user_prompt=json.dumps({
+                'task': (
+                    'Adapt every supplied preset habit for every supplied student and match them to goals.'
+                    if preset_habits
+                    else 'Create a customised set of challenge habits for every supplied student.'
+                ),
+                'completionRequirement': (
+                    'This is a retry for omitted students. Return one non-empty studentHabitSets entry for every expectedStudentId.'
+                    if retry
+                    else 'Return one non-empty studentHabitSets entry for every expectedStudentId.'
+                ),
+                'school': school_name,
+                'brief': source_text,
+                'sourcePresetHabits': preset_habits,
+                'expectedStudentIds': [student['id'] for student in student_batch],
+                'expectedStudentCount': len(student_batch),
+                'students': student_batch,
+                'allowedHabitTypes': ['boolean', 'numeric', 'text', 'periodic'],
+                'allowedCombatTypes': ['attack', 'defence'],
+                'allowedDays': list(VALID_WEEKDAYS),
+                'durationRangeMinutes': [5, 120],
+            }),
+            schema_name='rituo_personalized_habit_draft',
+            schema=build_personalized_habit_draft_schema(),
+            max_output_tokens=8000,
+        )
+        return normalize_personalized_habit_draft(raw_draft, student_batch)
+
+    for batch_start in range(0, len(target_students), initial_batch_size):
+        student_batch = target_students[batch_start:batch_start + initial_batch_size]
+        normalized_batch = generate_batch(student_batch)
+        if normalized_batch['summary']:
+            summaries.append(normalized_batch['summary'])
+        warnings.extend(normalized_batch['warnings'])
+        for student_set in normalized_batch['studentHabitSets']:
+            if student_set['habits']:
+                habits_by_student[student_set['studentId']] = student_set
+
+    missing_students = [
+        student for student in target_students
+        if student['id'] not in habits_by_student
+    ]
+    for batch_start in range(0, len(missing_students), AI_HABIT_RETRY_BATCH_SIZE):
+        student_batch = missing_students[batch_start:batch_start + AI_HABIT_RETRY_BATCH_SIZE]
+        normalized_batch = generate_batch(student_batch, retry=True)
+        if normalized_batch['summary']:
+            summaries.append(normalized_batch['summary'])
+        warnings.extend(normalized_batch['warnings'])
+        for student_set in normalized_batch['studentHabitSets']:
+            if student_set['habits']:
+                habits_by_student[student_set['studentId']] = student_set
+
+    still_missing = [
+        student for student in target_students
+        if student['id'] not in habits_by_student
+    ]
+    if still_missing:
+        missing_names = ', '.join(student['name'] for student in still_missing[:8])
+        if len(still_missing) > 8:
+            missing_names += f" and {len(still_missing) - 8} more"
+        raise OpenAIResponsesError(
+            f"AI did not return habits for {missing_names}. No partial habits were applied; please retry."
+        )
+
+    return {
+        'summary': ' '.join(summaries).strip()[:400],
+        'studentHabitSets': [
+            habits_by_student[student['id']]
+            for student in target_students
+        ],
+        'warnings': [
+            warning for warning in warnings
+            if not warning.startswith('No habits were generated for ')
+        ][:8],
+    }
+
+
 @groups_bp.route('/<group_id>/ai-habits', methods=['POST'])
 @jwt_required()
 def draft_habits_from_text(group_id):
@@ -3651,29 +4684,88 @@ def draft_habits_from_text(group_id):
         current_user_id = int(get_jwt_identity())
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
-            return jsonify({'error': 'School not found'}), 404
-        if not can_manage_group(group, current_user_id):
+            return jsonify({'error': 'Workspace not found'}), 404
+        current_user = User.query.get(current_user_id)
+        staff_self_service = is_staff_group_member(group, current_user)
+        if not can_manage_group(group, current_user_id) and not staff_self_service:
             return jsonify({'error': 'Only school admins or legacy owners can generate habits'}), 403
 
-        source_text = str((request.get_json() or {}).get('text') or '').strip()
-        if len(source_text) < 10:
+        data = request.get_json() or {}
+        source_text = str(data.get('text') or '').strip()
+        preset_habits = data.get('presetHabits') or []
+        if len(source_text) < 10 and not preset_habits:
             return jsonify({'error': 'Add a little more detail so habits can be generated'}), 400
         if len(source_text) > 8000:
             return jsonify({'error': 'Habit brief must be 8,000 characters or fewer'}), 400
+        if not isinstance(preset_habits, list) or len(preset_habits) > 30:
+            return jsonify({'error': 'A maximum of 30 preset habits can be adapted at once'}), 400
+
+        requested_member_ids = {
+            int(member_id)
+            for member_id in (data.get('memberIds') or [])
+            if str(member_id).isdigit()
+        }
+        group_members = get_group_members_list(group)
+        target_members = [] if staff_self_service else [
+            member for member in group_members
+            if (member.account_role or 'student') == 'student'
+            and (not requested_member_ids or member.id in requested_member_ids)
+        ]
+        if requested_member_ids and len(target_members) != len(requested_member_ids):
+            return jsonify({'error': 'One or more selected students are not members of this school'}), 400
+        if len(target_members) > 60:
+            return jsonify({'error': 'Generate habits for no more than 60 students at a time'}), 400
+
+        if target_members:
+            goals_by_student = defaultdict(list)
+            goals = StudentGoal.query.filter(
+                StudentGoal.group_id == group.id,
+                StudentGoal.student_id.in_([member.id for member in target_members]),
+            ).order_by(StudentGoal.student_id, StudentGoal.id).all()
+            for goal in goals:
+                goals_by_student[goal.student_id].append({
+                    'id': str(goal.id),
+                    'title': goal.title,
+                    'barrier': goal.barrier or '',
+                    'schoolGoal': goal.school_goal or '',
+                    'forSelf': goal.for_self or '',
+                    'forOthers': goal.for_others or '',
+                })
+            target_students = [
+                {
+                    'id': str(member.id),
+                    'name': member.username,
+                    'goals': goals_by_student[member.id],
+                }
+                for member in target_members
+            ]
+            normalized_draft = generate_personalized_habit_draft(
+                group.name,
+                source_text,
+                preset_habits,
+                target_students,
+            )
+            return jsonify({
+                'draft': normalized_draft,
+                'contract': structured_contract_metadata('rituo_personalized_habit_draft'),
+            }), 200
 
         raw_draft = create_structured_response(
             model=OPENAI_HABIT_DRAFT_MODEL,
             system_prompt=(
-                "You turn a school administrator's free-form brief into clear student habits. "
-                "Every habit must be measurable, age-appropriate, concise, and include a realistic estimated completion time. "
-                "Use boolean habits unless numeric tracking or a written reflection is clearly better. "
-                "Never add student names or sensitive inferences."
+                "You turn a person's free-form personal challenge brief into clear performance habits. "
+                "Every habit must be measurable, practical, concise, and include a realistic estimated completion time. "
+                "ATTACK moves the person toward a goal or new achievement. DEFENCE protects an existing positive state or standard. "
+                "Every habit must be attack or defence, never neutral. "
+                "Never add names or make sensitive inferences. "
+                + AI_HABIT_TYPE_GUIDANCE
             ),
             user_prompt=json.dumps({
-                'task': 'Draft reusable challenge habits from this administrator brief.',
-                'school': group.name,
+                'task': 'Draft personal challenge habits for the requesting staff member.' if staff_self_service else 'Draft reusable challenge habits from this administrator brief.',
+                'workspace': group.name,
                 'brief': source_text,
-                'allowedHabitTypes': ['boolean', 'numeric', 'text'],
+                'allowedHabitTypes': ['boolean', 'numeric', 'text', 'periodic'],
+                'allowedCombatTypes': ['attack', 'defence'],
                 'allowedDays': list(VALID_WEEKDAYS),
                 'durationRangeMinutes': [5, 120],
             }),
@@ -4536,6 +5628,65 @@ def get_school_profiles(group_id):
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 
+@groups_bp.route('/<group_id>/students/<int:student_id>/habit-stats', methods=['GET'])
+@jwt_required()
+def get_student_habit_stats(group_id, student_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'School not found'}), 404
+        if not can_view_student(group, current_user_id, student_id):
+            return jsonify({'error': 'You do not have access to this student'}), 403
+
+        student = next(
+            (member for member in get_group_members_list(group) if member.id == student_id),
+            None,
+        )
+        if not student:
+            return jsonify({'error': 'Student not found in school'}), 404
+
+        challenge = group.active_challenge
+        member_habit = get_member_habit_entry(group, student_id) if challenge else None
+        goals = StudentGoal.query.filter_by(
+            group_id=group.id,
+            student_id=student_id,
+        ).order_by(StudentGoal.created_at.asc()).all()
+        statistics = None
+        challenge_payload = None
+        if challenge:
+            challenge_payload = {
+                'id': challenge.id,
+                'startDate': challenge.start_date.isoformat(),
+                'endDate': challenge.end_date.isoformat(),
+                'status': challenge.status,
+                'memberHabits': [member_habit] if member_habit else [],
+            }
+            if member_habit:
+                student_today = datetime.now(_student_timezone(group, student_id)[1]).date()
+                statistics = _build_group_member_habit_statistics(
+                    group,
+                    challenge,
+                    member_habit,
+                    student_id,
+                    today_value=student_today,
+                    goal_titles={str(goal.id): goal.title for goal in goals},
+                )
+
+        return jsonify({
+            'statistics': statistics,
+            'group': {
+                'groupId': group.group_id,
+                'name': group.name,
+                'members': [student.to_dict()],
+                'activeChallenge': challenge_payload,
+                'viewerCanManage': can_manage_group(group, current_user_id),
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
 @groups_bp.route('/<group_id>/school-dashboard', methods=['GET'])
 @jwt_required()
 def get_school_dashboard(group_id):
@@ -4562,9 +5713,9 @@ def get_school_structure(group_id):
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'Group not found'}), 404
-        if not can_view_school_operations(group, current_user_id):
+        if not user_can_access_group(group, current_user_id):
             return jsonify({'error': 'Unauthorized'}), 403
-        return jsonify({'structure': serialize_school_structure(group)}), 200
+        return jsonify({'structure': serialize_school_structure(group, current_user_id)}), 200
     except Exception as e:
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
@@ -4586,7 +5737,78 @@ def update_school_structure(group_id):
         rooms = data.get('rooms', [])
         classes = data.get('classes', [])
         behaviour_types = data.get('behaviourTypes', [])
+        existing_roles = {
+            assignment.user_id: assignment
+            for assignment in SchoolRoleAssignment.query.filter_by(group_id=group.id).all()
+        }
+        existing_subjects = {
+            subject.id: subject
+            for subject in SchoolSubject.query.filter_by(group_id=group.id).all()
+        }
+        existing_rooms = {
+            room.id: room
+            for room in SchoolRoom.query.filter_by(group_id=group.id).all()
+        }
+        existing_classes = {
+            school_class.id: school_class
+            for school_class in SchoolClass.query.filter_by(group_id=group.id).all()
+        }
+        existing_behaviour_types = {
+            behaviour_type.id: behaviour_type
+            for behaviour_type in SchoolBehaviourType.query.filter_by(group_id=group.id).all()
+        }
+
+        def submitted_existing_ids(items, existing_records, label):
+            result = set()
+            for item in items:
+                raw_id = item.get('id')
+                if raw_id in (None, '') or not str(raw_id).isdigit():
+                    continue
+                record_id = int(raw_id)
+                if record_id not in existing_records:
+                    raise ValueError(f'{label} {record_id} does not belong to this school')
+                if record_id in result:
+                    raise ValueError(f'{label} {record_id} was submitted more than once')
+                result.add(record_id)
+            return result
+
+        def duplicate_name(items):
+            names = [
+                str(item.get('name') or '').strip().lower()
+                for item in items
+                if str(item.get('name') or '').strip()
+            ]
+            return next((name for name in names if names.count(name) > 1), None)
+
+        for label, items in (
+            ('Subject', subjects),
+            ('Room', rooms),
+            ('Class', classes),
+            ('Behaviour type', behaviour_types),
+        ):
+            repeated_name = duplicate_name(items)
+            if repeated_name:
+                return jsonify({'error': f'{label} names must be unique within a school'}), 400
+
+        try:
+            submitted_subject_ids = submitted_existing_ids(subjects, existing_subjects, 'Subject')
+            submitted_room_ids = submitted_existing_ids(rooms, existing_rooms, 'Room')
+            submitted_class_ids = submitted_existing_ids(classes, existing_classes, 'Class')
+            submitted_behaviour_type_ids = submitted_existing_ids(
+                behaviour_types,
+                existing_behaviour_types,
+                'Behaviour type',
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
         submitted_roles = {}
+        school_participant_ids = {
+            member.id for member in get_group_members_list(group)
+        } | {
+            coach.id for coach in (group.coaches.all() if hasattr(group.coaches, 'all') else group.coaches)
+        } | set(existing_roles)
+        school_participant_ids.add(group.leader_id)
         for item in roles:
             try:
                 role_user_id = int(item.get('userId'))
@@ -4594,25 +5816,81 @@ def update_school_structure(group_id):
                 continue
             role = (item.get('role') or '').strip()
             role_user = User.query.get(role_user_id)
-            if not role_user or role not in VALID_SCHOOL_ROLES:
-                continue
-            if role_user.account_role == 'admin' and role not in {'school-admin', 'headteacher'}:
-                continue
-            if role_user.account_role == 'teacher' and role not in {'teacher', 'pastoral-lead', 'coach'}:
-                continue
+            if not role_user or role_user_id not in school_participant_ids:
+                return jsonify({'error': 'Every role assignment must belong to an existing account in this school'}), 400
+            if role not in VALID_SCHOOL_ROLES:
+                return jsonify({'error': f'Invalid school role for {role_user.username}'}), 400
+            if role_user.account_role == 'admin' and role not in FULL_SCHOOL_ACCESS_ROLES:
+                return jsonify({'error': f'{role_user.username} requires an administrator school role'}), 400
+            if role_user.account_role == 'teacher' and role not in (SCHOOL_STAFF_ROLES - {'school-admin'}):
+                return jsonify({'error': f'{role_user.username} requires a teacher school role'}), 400
             if role_user.account_role == 'student' and role != 'student':
-                continue
+                return jsonify({'error': f'{role_user.username} requires the student school role'}), 400
             submitted_roles[role_user_id] = role
-        submitted_roles[current_user_id] = submitted_roles.get(current_user_id, 'school-admin')
+        current_role = get_school_role(group.id, current_user_id)
+        current_user = User.query.get(current_user_id)
+        submitted_roles[current_user_id] = submitted_roles.get(
+            current_user_id,
+            current_role or ('school-admin' if current_user.account_role == 'admin' else 'headteacher')
+        )
 
-        SchoolRoleAssignment.query.filter_by(group_id=group.id).delete()
-        SchoolEnrollment.query.filter_by(group_id=group.id).delete()
-        SchoolTeachingAssignment.query.filter_by(group_id=group.id).delete()
-        SchoolClass.query.filter_by(group_id=group.id).delete()
-        SchoolRoom.query.filter_by(group_id=group.id).delete()
-        SchoolSubject.query.filter_by(group_id=group.id).delete()
-        SchoolBehaviourType.query.filter_by(group_id=group.id).delete()
-        db.session.flush()
+        removed_class_ids = set(existing_classes) - submitted_class_ids
+        removed_subject_ids = set(existing_subjects) - submitted_subject_ids
+        removed_room_ids = set(existing_rooms) - submitted_room_ids
+        removed_behaviour_type_ids = set(existing_behaviour_types) - submitted_behaviour_type_ids
+        timetable = group.school_timetable or []
+        deletion_conflicts = []
+
+        for class_id in removed_class_ids:
+            has_timetable = any(str(entry.get('classId') or '') == str(class_id) for entry in timetable)
+            has_messages = Message.query.filter_by(group_id=group.id, class_id=class_id).first() is not None
+            has_homework = SchoolHomeworkAssignment.query.filter_by(group_id=group.id, class_id=class_id).first() is not None
+            if has_timetable or has_messages or has_homework:
+                deletion_conflicts.append(f"class '{existing_classes[class_id].name}'")
+
+        submitted_subject_references = {
+            str(item.get('subjectId'))
+            for item in classes
+            if item.get('subjectId') not in (None, '')
+        } | {
+            str(assignment.get('subjectId'))
+            for item in classes
+            for assignment in item.get('teachingAssignments', [])
+            if assignment.get('subjectId') not in (None, '')
+        }
+        for subject_id in removed_subject_ids:
+            has_timetable = any(str(entry.get('subjectId') or '') == str(subject_id) for entry in timetable)
+            has_homework = SchoolHomeworkAssignment.query.filter_by(group_id=group.id, subject_id=subject_id).first() is not None
+            if has_timetable or has_homework or str(subject_id) in submitted_subject_references:
+                deletion_conflicts.append(f"subject '{existing_subjects[subject_id].name}'")
+
+        submitted_room_references = {
+            str(item.get('roomId'))
+            for item in classes
+            if item.get('roomId') not in (None, '')
+        }
+        for room_id in removed_room_ids:
+            has_timetable = any(str(entry.get('roomId') or '') == str(room_id) for entry in timetable)
+            if has_timetable or str(room_id) in submitted_room_references:
+                deletion_conflicts.append(f"room '{existing_rooms[room_id].name}'")
+
+        for behaviour_type_id in removed_behaviour_type_ids:
+            has_events = SchoolBehaviourEvent.query.filter_by(
+                group_id=group.id,
+                behaviour_type_id=behaviour_type_id,
+            ).first() is not None
+            if has_events:
+                deletion_conflicts.append(
+                    f"behaviour type '{existing_behaviour_types[behaviour_type_id].name}'"
+                )
+
+        if deletion_conflicts:
+            return jsonify({
+                'error': (
+                    'Cannot remove referenced school data: '
+                    f"{', '.join(deletion_conflicts)}. Remove its timetable, homework, chat, or behaviour references first."
+                )
+            }), 409
 
         subject_id_map = {}
         room_id_map = {}
@@ -4622,10 +5900,16 @@ def update_school_structure(group_id):
             name = (item.get('name') or '').strip()
             if not name:
                 continue
-            subject = SchoolSubject(group_id=group.id, name=name, code=(item.get('code') or '').strip() or None)
-            db.session.add(subject)
+            raw_id = item.get('id')
+            existing_id = int(raw_id) if str(raw_id).isdigit() else None
+            subject = existing_subjects.get(existing_id)
+            if not subject:
+                subject = SchoolSubject(group_id=group.id)
+                db.session.add(subject)
+            subject.name = name
+            subject.code = (item.get('code') or '').strip() or None
             db.session.flush()
-            subject_id_map[str(item.get('id') or f"subject-{subject.id}")] = subject.id
+            subject_id_map[str(raw_id or f"subject-{subject.id}")] = subject.id
 
         for item in rooms:
             name = (item.get('name') or '').strip()
@@ -4636,10 +5920,17 @@ def update_school_structure(group_id):
                 capacity = int(capacity) if capacity not in (None, '') else None
             except (TypeError, ValueError):
                 capacity = None
-            room = SchoolRoom(group_id=group.id, name=name, block=(item.get('block') or '').strip() or None, capacity=capacity)
-            db.session.add(room)
+            raw_id = item.get('id')
+            existing_id = int(raw_id) if str(raw_id).isdigit() else None
+            room = existing_rooms.get(existing_id)
+            if not room:
+                room = SchoolRoom(group_id=group.id)
+                db.session.add(room)
+            room.name = name
+            room.block = (item.get('block') or '').strip() or None
+            room.capacity = capacity
             db.session.flush()
-            room_id_map[str(item.get('id') or f"room-{room.id}")] = room.id
+            room_id_map[str(raw_id or f"room-{room.id}")] = room.id
 
         for item in behaviour_types:
             name = (item.get('name') or '').strip()
@@ -4651,30 +5942,52 @@ def update_school_structure(group_id):
                 default_points = int(item.get('defaultPoints') or 0)
             except (TypeError, ValueError):
                 default_points = 0
-            db.session.add(SchoolBehaviourType(
-                group_id=group.id,
-                name=name,
-                kind=kind,
-                severity=severity,
-                default_points=default_points,
-                note_type=(item.get('noteType') or '').strip() or None
-            ))
+            raw_id = item.get('id')
+            existing_id = int(raw_id) if str(raw_id).isdigit() else None
+            behaviour_type = existing_behaviour_types.get(existing_id)
+            if not behaviour_type:
+                behaviour_type = SchoolBehaviourType(group_id=group.id)
+                db.session.add(behaviour_type)
+            behaviour_type.name = name
+            behaviour_type.kind = kind
+            behaviour_type.severity = severity
+            behaviour_type.default_points = default_points
+            behaviour_type.note_type = (item.get('noteType') or '').strip() or None
 
         for item in classes:
             name = (item.get('name') or '').strip()
             if not name:
                 continue
             room_key = str(item.get('roomId')) if item.get('roomId') is not None else None
-            school_class = SchoolClass(
-                group_id=group.id,
-                name=name,
-                tutor_group=(item.get('tutorGroup') or '').strip() or None,
-                year_group=(item.get('yearGroup') or '').strip() or None,
-                room_id=room_id_map.get(room_key) if room_key else None
-            )
-            db.session.add(school_class)
+            subject_key = str(item.get('subjectId')) if item.get('subjectId') is not None else None
+            try:
+                weekly_lessons = max(1, min(20, int(item.get('weeklyLessons') or 5)))
+            except (TypeError, ValueError):
+                weekly_lessons = 5
+            raw_id = item.get('id')
+            existing_id = int(raw_id) if str(raw_id).isdigit() else None
+            school_class = existing_classes.get(existing_id)
+            if not school_class:
+                school_class = SchoolClass(group_id=group.id)
+                db.session.add(school_class)
+            school_class.name = name
+            school_class.tutor_group = (item.get('tutorGroup') or '').strip() or None
+            school_class.year_group = (item.get('yearGroup') or '').strip() or None
+            school_class.description = (item.get('description') or '').strip() or None
+            school_class.subject_id = subject_id_map.get(subject_key) if subject_key else None
+            school_class.room_id = room_id_map.get(room_key) if room_key else None
+            school_class.weekly_lessons = weekly_lessons
             db.session.flush()
-            class_id_map[str(item.get('id') or f"class-{school_class.id}")] = school_class.id
+            class_id_map[str(raw_id or f"class-{school_class.id}")] = school_class.id
+
+            SchoolEnrollment.query.filter_by(
+                group_id=group.id,
+                class_id=school_class.id,
+            ).delete(synchronize_session=False)
+            SchoolTeachingAssignment.query.filter_by(
+                group_id=group.id,
+                class_id=school_class.id,
+            ).delete(synchronize_session=False)
 
             for enrollment in item.get('enrollments', []):
                 student_id = enrollment.get('studentId')
@@ -4682,7 +5995,7 @@ def update_school_structure(group_id):
                     student_id = int(student_id)
                 except (TypeError, ValueError):
                     continue
-                if not any(member.id == student_id for member in group.members):
+                if submitted_roles.get(student_id) != 'student':
                     continue
                 db.session.add(SchoolEnrollment(group_id=group.id, class_id=school_class.id, student_id=student_id))
 
@@ -4693,15 +6006,49 @@ def update_school_structure(group_id):
                     teacher_id = int(teacher_id)
                 except (TypeError, ValueError):
                     continue
-                if submitted_roles.get(teacher_id) not in {'teacher', 'headteacher', 'pastoral-lead', 'school-admin', 'coach'}:
+                if submitted_roles.get(teacher_id) not in SCHOOL_STAFF_ROLES:
                     continue
                 subject_id = subject_id_map.get(subject_key)
                 if not subject_id:
                     continue
-                db.session.add(SchoolTeachingAssignment(group_id=group.id, class_id=school_class.id, subject_id=subject_id, teacher_id=teacher_id))
+                assignment_role = (assignment.get('assignmentRole') or 'lead-teacher').strip()
+                if assignment_role not in VALID_TEACHING_ASSIGNMENT_ROLES:
+                    assignment_role = 'lead-teacher'
+                db.session.add(SchoolTeachingAssignment(
+                    group_id=group.id,
+                    class_id=school_class.id,
+                    subject_id=subject_id,
+                    teacher_id=teacher_id,
+                    assignment_role=assignment_role
+                ))
+
+        for class_id in removed_class_ids:
+            SchoolEnrollment.query.filter_by(
+                group_id=group.id,
+                class_id=class_id,
+            ).delete(synchronize_session=False)
+            SchoolTeachingAssignment.query.filter_by(
+                group_id=group.id,
+                class_id=class_id,
+            ).delete(synchronize_session=False)
+            db.session.delete(existing_classes[class_id])
+
+        for subject_id in removed_subject_ids:
+            db.session.delete(existing_subjects[subject_id])
+        for room_id in removed_room_ids:
+            db.session.delete(existing_rooms[room_id])
+        for behaviour_type_id in removed_behaviour_type_ids:
+            db.session.delete(existing_behaviour_types[behaviour_type_id])
 
         for role_user_id, role in submitted_roles.items():
-            db.session.add(SchoolRoleAssignment(group_id=group.id, user_id=role_user_id, role=role))
+            assignment = existing_roles.get(role_user_id)
+            if assignment:
+                assignment.role = role
+            else:
+                db.session.add(SchoolRoleAssignment(group_id=group.id, user_id=role_user_id, role=role))
+        for role_user_id, assignment in existing_roles.items():
+            if role_user_id not in submitted_roles:
+                db.session.delete(assignment)
 
         log_school_audit(
             group.id,
@@ -4719,7 +6066,231 @@ def update_school_structure(group_id):
             }
         )
         db.session.commit()
-        return jsonify({'structure': serialize_school_structure(group)}), 200
+        return jsonify({'structure': serialize_school_structure(group, current_user_id)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/classes/<int:class_id>', methods=['PATCH'])
+@jwt_required()
+def update_school_class(group_id, class_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        school_class = SchoolClass.query.filter_by(id=class_id, group_id=group.id if group else None).first()
+        if not group or not school_class:
+            return jsonify({'error': 'Class not found'}), 404
+        if not can_manage_class_staff(group, current_user_id, school_class.id):
+            return jsonify({'error': 'You cannot edit this class'}), 403
+
+        data = request.get_json() or {}
+        if 'name' in data:
+            name = str(data.get('name') or '').strip()
+            if not name:
+                return jsonify({'error': 'Class name is required'}), 400
+            school_class.name = name[:120]
+        if 'tutorGroup' in data:
+            school_class.tutor_group = str(data.get('tutorGroup') or '').strip()[:120] or None
+        if 'yearGroup' in data:
+            school_class.year_group = str(data.get('yearGroup') or '').strip()[:40] or None
+        if 'description' in data:
+            school_class.description = str(data.get('description') or '').strip()[:2000] or None
+        if 'weeklyLessons' in data:
+            try:
+                school_class.weekly_lessons = max(1, min(20, int(data.get('weeklyLessons') or 5)))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'weeklyLessons must be a number between 1 and 20'}), 400
+        if 'subjectId' in data:
+            try:
+                subject_id = int(data.get('subjectId')) if data.get('subjectId') not in (None, '') else None
+            except (TypeError, ValueError):
+                subject_id = None
+            if subject_id and not SchoolSubject.query.filter_by(id=subject_id, group_id=group.id).first():
+                return jsonify({'error': 'Subject not found in this school'}), 400
+            school_class.subject_id = subject_id
+        if 'roomId' in data:
+            try:
+                room_id = int(data.get('roomId')) if data.get('roomId') not in (None, '') else None
+            except (TypeError, ValueError):
+                room_id = None
+            if room_id and not SchoolRoom.query.filter_by(id=room_id, group_id=group.id).first():
+                return jsonify({'error': 'Room not found in this school'}), 400
+            school_class.room_id = room_id
+
+        log_school_audit(
+            group.id,
+            current_user_id,
+            'updated',
+            'class',
+            f'Updated class {school_class.name}',
+            metadata={'classId': school_class.id}
+        )
+        db.session.commit()
+        return jsonify({'structure': serialize_school_structure(group, current_user_id)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/classes/<int:class_id>/available-students', methods=['GET'])
+@jwt_required()
+def get_available_class_students(group_id, class_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        school_class = SchoolClass.query.filter_by(id=class_id, group_id=group.id if group else None).first()
+        if not group or not school_class:
+            return jsonify({'error': 'Class not found'}), 404
+        if not can_manage_class_roster(group, current_user_id, school_class.id):
+            return jsonify({'error': 'You cannot manage this class roster'}), 403
+
+        query = str(request.args.get('query') or '').strip().lower()
+        students = [
+            member for member in get_group_members_list(group)
+            if member.account_role == 'student'
+            and (
+                not query
+                or query in (member.username or '').lower()
+                or query in (member.email or '').lower()
+            )
+        ]
+        enrolled_ids = {
+            enrollment.student_id
+            for enrollment in SchoolEnrollment.query.filter_by(group_id=group.id, class_id=school_class.id).all()
+        }
+        return jsonify({
+            'students': [
+                {
+                    **serialize_school_user_brief(student),
+                    'enrolled': student.id in enrolled_ids,
+                }
+                for student in sorted(students, key=lambda item: (item.username or '').lower())[:250]
+            ]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/classes/<int:class_id>/roster', methods=['PUT'])
+@jwt_required()
+def update_school_class_roster(group_id, class_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        school_class = SchoolClass.query.filter_by(id=class_id, group_id=group.id if group else None).first()
+        if not group or not school_class:
+            return jsonify({'error': 'Class not found'}), 404
+        if not can_manage_class_roster(group, current_user_id, school_class.id):
+            return jsonify({'error': 'You cannot manage this class roster'}), 403
+
+        data = request.get_json() or {}
+        requested_ids = set()
+        for value in data.get('studentIds') or []:
+            try:
+                requested_ids.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        valid_student_ids = {
+            member.id
+            for member in get_group_members_list(group)
+            if member.account_role == 'student'
+        }
+        invalid_ids = requested_ids - valid_student_ids
+        if invalid_ids:
+            return jsonify({'error': 'One or more students do not belong to this school'}), 400
+
+        SchoolEnrollment.query.filter_by(group_id=group.id, class_id=school_class.id).delete()
+        for student_id in sorted(requested_ids):
+            db.session.add(SchoolEnrollment(
+                group_id=group.id,
+                class_id=school_class.id,
+                student_id=student_id
+            ))
+
+        timetable = []
+        for entry in group.school_timetable or []:
+            if str(entry.get('classId') or '') == str(school_class.id):
+                entry = {**entry, 'studentIds': sorted(requested_ids)}
+            timetable.append(entry)
+        group.school_timetable = timetable
+        flag_modified(group, 'school_timetable')
+        log_school_audit(
+            group.id,
+            current_user_id,
+            'updated',
+            'class-roster',
+            f'Updated roster for {school_class.name}',
+            description=f'{len(requested_ids)} student(s) assigned.',
+            metadata={'classId': school_class.id, 'studentCount': len(requested_ids)}
+        )
+        db.session.commit()
+        return jsonify({'structure': serialize_school_structure(group, current_user_id)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/classes/<int:class_id>/staff', methods=['PUT'])
+@jwt_required()
+def update_school_class_staff(group_id, class_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        school_class = SchoolClass.query.filter_by(id=class_id, group_id=group.id if group else None).first()
+        if not group or not school_class:
+            return jsonify({'error': 'Class not found'}), 404
+        if not can_manage_class_staff(group, current_user_id, school_class.id):
+            return jsonify({'error': 'You cannot manage staff for this class'}), 403
+
+        assignments = request.get_json().get('assignments', []) if request.get_json() else []
+        valid_staff_ids = {
+            assignment.user_id
+            for assignment in SchoolRoleAssignment.query.filter(
+                SchoolRoleAssignment.group_id == group.id,
+                SchoolRoleAssignment.role.in_(tuple(SCHOOL_STAFF_ROLES))
+            ).all()
+        }
+        valid_subject_ids = {
+            subject.id for subject in SchoolSubject.query.filter_by(group_id=group.id).all()
+        }
+        normalized_assignments = []
+        seen = set()
+        for item in assignments:
+            try:
+                teacher_id = int(item.get('teacherId'))
+                subject_id = int(item.get('subjectId'))
+            except (TypeError, ValueError):
+                continue
+            assignment_role = str(item.get('assignmentRole') or 'lead-teacher').strip()
+            if assignment_role not in VALID_TEACHING_ASSIGNMENT_ROLES:
+                assignment_role = 'lead-teacher'
+            key = (teacher_id, subject_id)
+            if teacher_id not in valid_staff_ids or subject_id not in valid_subject_ids or key in seen:
+                continue
+            normalized_assignments.append((teacher_id, subject_id, assignment_role))
+            seen.add(key)
+
+        SchoolTeachingAssignment.query.filter_by(group_id=group.id, class_id=school_class.id).delete()
+        for teacher_id, subject_id, assignment_role in normalized_assignments:
+            db.session.add(SchoolTeachingAssignment(
+                group_id=group.id,
+                class_id=school_class.id,
+                subject_id=subject_id,
+                teacher_id=teacher_id,
+                assignment_role=assignment_role
+            ))
+        log_school_audit(
+            group.id,
+            current_user_id,
+            'updated',
+            'class-staff',
+            f'Updated teaching team for {school_class.name}',
+            description=f'{len(normalized_assignments)} staff assignment(s) saved.',
+            metadata={'classId': school_class.id, 'staffCount': len(normalized_assignments)}
+        )
+        db.session.commit()
+        return jsonify({'structure': serialize_school_structure(group, current_user_id)}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
@@ -4741,7 +6312,12 @@ def get_teacher_register(group_id):
         weekday = target_date.strftime('%A')
         slots = [entry for entry in (group.school_timetable or []) if entry.get('weekday') == weekday]
         if not can_manage_group(group, current_user_id):
-            slots = [entry for entry in slots if str(entry.get('teacherId') or '') == str(current_user_id)]
+            accessible_class_ids = get_accessible_class_ids(group, current_user_id)
+            slots = [
+                entry for entry in slots
+                if str(entry.get('classId') or '').isdigit()
+                and int(entry.get('classId')) in accessible_class_ids
+            ]
 
         all_members = get_group_members_list(group)
         member_map = {member.id: member for member in all_members}
@@ -5116,6 +6692,14 @@ def create_school_homework(group_id):
             subject_id = int(subject_id) if subject_id not in (None, '') else None
         except (TypeError, ValueError):
             subject_id = None
+        if class_id:
+            school_class = SchoolClass.query.filter_by(id=class_id, group_id=group.id).first()
+            if not school_class:
+                return jsonify({'error': 'Class not found'}), 404
+            if class_id not in get_accessible_class_ids(group, current_user_id):
+                return jsonify({'error': 'You can only set homework for classes within your assigned scope'}), 403
+        if subject_id and not SchoolSubject.query.filter_by(id=subject_id, group_id=group.id).first():
+            return jsonify({'error': 'Subject not found'}), 404
         due_date_raw = data.get('dueDate')
         if not due_date_raw:
             return jsonify({'error': 'dueDate is required'}), 400
@@ -5778,9 +7362,10 @@ def generate_ai_student_goal_plan(group_id, student_id):
             "Turn teacher notes into a practical student goal plan. "
             "Create 2 to 4 concise goals and 3 to 6 habits when the notes support them. "
             "Every habit must clearly support one goal through linkedGoalKey. "
+            "Classify goal-building habits as attack and habits protecting an existing positive state or standard as defence. "
             "Keep suggestions school-safe, realistic, and easy to act on this week. "
-            "Prefer boolean habits unless numeric or text tracking is clearly useful. "
-            "Use the provided student context, and if context is missing, say so in warnings instead of inventing facts."
+            "Use the provided student context, and if context is missing, say so in warnings instead of inventing facts. "
+            + AI_HABIT_TYPE_GUIDANCE
         )
         user_prompt = json.dumps(
             {
@@ -6098,9 +7683,76 @@ def _minutes_between(start_time, end_time):
         return 30
 
 
+def _planner_time_to_minutes(time_value):
+    try:
+        hours, minutes = [int(value) for value in str(time_value).split(':')]
+        if not 0 <= hours <= 23 or not 0 <= minutes <= 59:
+            return None
+        return (hours * 60) + minutes
+    except (TypeError, ValueError):
+        return None
+
+
+def _planner_time_with_offset(time_value, offset_minutes):
+    try:
+        hours, minutes = [int(value) for value in str(time_value).split(':')]
+        total_minutes = max(0, min((23 * 60) + 59, (hours * 60) + minutes + int(offset_minutes)))
+        return f'{total_minutes // 60:02d}:{total_minutes % 60:02d}'
+    except (TypeError, ValueError):
+        return str(time_value or '')
+
+
+def _planner_school_day_context(group, weekday, settings=None):
+    if getattr(group, 'group_type', 'school') != 'school' or not (group.school_day_config or {}):
+        return {}, []
+    has_school_day = weekday in VALID_WEEKDAYS[:5] or any(
+        entry.get('weekday') == weekday for entry in (group.school_timetable or [])
+    )
+    if not has_school_day:
+        return {}, []
+    day_config = normalize_school_day_config(group.school_day_config)
+    commute_minutes = max(0, min(180, int(getattr(settings, 'school_commute_minutes', 0) or 0)))
+    context = {
+        'weekday': weekday,
+        'startTime': day_config['startTime'],
+        'endTime': day_config['endTime'],
+        'breaks': day_config['breaks'],
+        'commuteMinutesEachWay': commute_minutes,
+    }
+    if not commute_minutes:
+        return context, []
+    commute_items = [
+        {
+            'id': 'school-commute-in',
+            'title': 'Travel to school',
+            'itemType': 'school',
+            'habitIndex': -1,
+            'startTime': _planner_time_with_offset(day_config['startTime'], -commute_minutes),
+            'endTime': day_config['startTime'],
+            'durationMinutes': commute_minutes,
+            'locked': True,
+            'reason': f'{commute_minutes} minute school commute',
+            'source': 'school-commute',
+        },
+        {
+            'id': 'school-commute-home',
+            'title': 'Travel home',
+            'itemType': 'school',
+            'habitIndex': -1,
+            'startTime': day_config['endTime'],
+            'endTime': _planner_time_with_offset(day_config['endTime'], commute_minutes),
+            'durationMinutes': commute_minutes,
+            'locked': True,
+            'reason': f'{commute_minutes} minute school commute',
+            'source': 'school-commute',
+        },
+    ]
+    return context, commute_items
+
+
 def _normalize_saved_schedule_items(items):
     normalized = []
-    allowed_types = {'habit', 'manual', 'school', 'break'}
+    allowed_types = {'habit', 'manual', 'school', 'break', 'sleep', 'routine', 'google'}
     for index, raw_item in enumerate((items or [])[:60]):
         title = str((raw_item or {}).get('title') or '').strip()
         start_time = str((raw_item or {}).get('startTime') or '').strip()
@@ -6114,7 +7766,14 @@ def _normalize_saved_schedule_items(items):
             habit_index = int((raw_item or {}).get('habitIndex', -1))
         except (TypeError, ValueError):
             habit_index = -1
-        normalized.append({
+        source = str((raw_item or {}).get('source') or 'manual').strip()[:20]
+        routine_id = str((raw_item or {}).get('routineId') or '').strip()[:80]
+        routine_override = bool(
+            item_type == 'routine'
+            and routine_id
+            and (raw_item or {}).get('routineOverride')
+        )
+        normalized_item = {
             'id': str((raw_item or {}).get('id') or f"item-{index + 1}")[:80],
             'title': title[:120],
             'itemType': item_type,
@@ -6122,12 +7781,3376 @@ def _normalize_saved_schedule_items(items):
             'startTime': start_time,
             'endTime': end_time,
             'durationMinutes': _minutes_between(start_time, end_time),
-            'locked': bool((raw_item or {}).get('locked') or item_type == 'school'),
+            'locked': bool(
+                (raw_item or {}).get('locked')
+                or item_type in {'school', 'sleep', 'google'}
+                or (item_type == 'routine' and not routine_override)
+            ),
+            'allowOverlap': bool((raw_item or {}).get('allowOverlap')),
             'reason': str((raw_item or {}).get('reason') or '').strip()[:240],
-            'source': str((raw_item or {}).get('source') or 'manual').strip()[:20],
-        })
+            'source': 'routine-override' if routine_override else source,
+        }
+        if item_type == 'routine':
+            normalized_item['routineId'] = routine_id
+            normalized_item['routineOverride'] = routine_override
+        normalized.append(normalized_item)
     normalized.sort(key=lambda item: (item['startTime'], item['endTime']))
     return normalized
+
+
+def _planner_ai_layout_context(items):
+    context = []
+    for item in items or []:
+        item_type = item.get('itemType') or 'manual'
+        routine_override = bool(item.get('routineOverride') or item.get('source') == 'routine-override')
+        recurrence = (
+            'weekly'
+            if item_type == 'routine' and not routine_override
+            else 'one-off'
+            if item_type in {'manual', 'routine'}
+            else 'daily-boundary'
+            if item_type == 'sleep'
+            else 'authoritative-timetable'
+            if item_type == 'school'
+            else 'external-calendar'
+            if item_type == 'google'
+            else 'challenge-schedule'
+            if item_type == 'habit'
+            else 'flexible'
+        )
+        context.append({
+            'id': item.get('id') or '',
+            'title': item.get('title') or '',
+            'itemType': item_type,
+            'habitIndex': item.get('habitIndex', -1),
+            'startTime': item.get('startTime') or '',
+            'endTime': item.get('endTime') or '',
+            'durationMinutes': item.get('durationMinutes') or 0,
+            'locked': bool(item.get('locked')),
+            'allowOverlap': bool(item.get('allowOverlap')),
+            'reason': item.get('reason') or '',
+            'recurrence': recurrence,
+            'movableByPlanner': bool(not item.get('locked') and item_type in {'habit', 'break'}),
+        })
+    return context
+
+
+def _filter_generated_breaks_against_fixed_items(items, fixed_items):
+    fixed_ranges = []
+    for fixed_item in fixed_items or []:
+        start_minutes = _planner_time_to_minutes(fixed_item.get('startTime'))
+        end_minutes = _planner_time_to_minutes(fixed_item.get('endTime'))
+        if start_minutes is None or end_minutes is None or end_minutes <= start_minutes:
+            continue
+        fixed_ranges.append((start_minutes, end_minutes))
+    filtered = []
+    for item in items or []:
+        if item.get('itemType') != 'break':
+            filtered.append(item)
+            continue
+        start_minutes = _planner_time_to_minutes(item.get('startTime'))
+        end_minutes = _planner_time_to_minutes(item.get('endTime'))
+        overlaps_fixed = (
+            start_minutes is not None
+            and end_minutes is not None
+            and any(start_minutes < fixed_end and end_minutes > fixed_start for fixed_start, fixed_end in fixed_ranges)
+        )
+        if not overlaps_fixed:
+            filtered.append(item)
+    return filtered
+
+
+def _planner_travel_clarification(constraints_text, current_layout):
+    layout_text = ' '.join(
+        f"{item.get('title') or ''} {item.get('reason') or ''}"
+        for item in current_layout or []
+    )
+    combined_text = f'{constraints_text or ""} {layout_text}'.lower()
+    place_patterns = (
+        (r'\bgym\b', 'gym'),
+        (r'\btraining\b', 'training venue'),
+        (r'\bpitch\b', 'pitch'),
+        (r'\bclub\b', 'club'),
+        (r'\boffice\b', 'workplace'),
+        (r'\bwork\b', 'workplace'),
+        (r'\bdoctor\b', 'appointment'),
+        (r'\bhospital\b', 'appointment'),
+        (r'\bappointment\b', 'appointment'),
+    )
+    place_match = next(
+        ((pattern, label, re.search(pattern, combined_text)) for pattern, label in place_patterns if re.search(pattern, combined_text)),
+        None,
+    )
+    if not place_match:
+        return None
+    travel_terms = ('travel', 'commute', 'journey', 'drive to', 'walk to', 'cycle to', 'bus to', 'train to')
+    if any(
+        any(term in f"{item.get('title') or ''} {item.get('reason') or ''}".lower() for term in travel_terms)
+        for item in current_layout or []
+    ):
+        return None
+    _, place_label, match = place_match
+    nearby_text = combined_text[max(0, match.start() - 80):match.end() + 100]
+    if re.search(r'\b\d{1,3}\s*(?:min|mins|minute|minutes|hour|hours)\b', nearby_text):
+        return None
+    return {
+        'id': 'travel-time',
+        'question': f'Does going to the {place_label} require travel? If so, how many minutes should I allow each way?',
+        'placeholder': 'Example: 20 minutes each way, or no travel needed',
+    }
+
+
+def _add_planner_clarification_question(clarification, question):
+    if not question:
+        return clarification
+    existing_questions = list((clarification or {}).get('questions') or [])
+    travel_words = ('travel', 'commute', 'journey')
+    already_asked = any(
+        item.get('id') == question['id']
+        or any(word in str(item.get('question') or '').lower() for word in travel_words)
+        for item in existing_questions
+    )
+    if not already_asked:
+        existing_questions.insert(0, question)
+    return {
+        **(clarification or {}),
+        'needsClarification': True,
+        'questions': existing_questions[:3],
+        'readyMessage': 'A few practical details will make this plan realistic.',
+    }
+
+
+def _planner_schedule_coverage_issues(items, habits):
+    required_counts = {
+        int(habit['habitIndex']): (
+            max(2, int(habit.get('periodicOccurrences') or 4))
+            if habit.get('habitType') == 'periodic'
+            else 1
+        )
+        for habit in habits or []
+    }
+    actual_counts = defaultdict(int)
+    for item in items or []:
+        if item.get('itemType') != 'habit':
+            continue
+        try:
+            actual_counts[int(item.get('habitIndex'))] += 1
+        except (TypeError, ValueError):
+            continue
+    return [
+        {
+            'habitIndex': habit_index,
+            'requiredCount': required_count,
+            'actualCount': actual_counts.get(habit_index, 0),
+        }
+        for habit_index, required_count in required_counts.items()
+        if actual_counts.get(habit_index, 0) != required_count
+    ]
+
+
+def _is_valid_planner_time(value):
+    try:
+        hours, minutes = [int(part) for part in str(value).split(':')]
+        return 0 <= hours <= 23 and 0 <= minutes <= 59 and len(str(value)) == 5
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_recurring_reminders(reminders, default_created_date=None):
+    normalized = []
+    fallback_created_date = str(default_created_date or date.today().isoformat())[:10]
+    for index, raw_reminder in enumerate((reminders or [])[:30]):
+        title = str((raw_reminder or {}).get('title') or '').strip()[:120]
+        start_time = str((raw_reminder or {}).get('startTime') or '').strip()
+        end_time = str((raw_reminder or {}).get('endTime') or '').strip()
+        weekdays = [
+            day for day in ((raw_reminder or {}).get('weekdays') or [])
+            if day in VALID_WEEKDAYS
+        ]
+        if (
+            not title
+            or not weekdays
+            or not _is_valid_planner_time(start_time)
+            or not _is_valid_planner_time(end_time)
+            or start_time >= end_time
+        ):
+            continue
+        created_date = str((raw_reminder or {}).get('createdDate') or fallback_created_date)[:10]
+        try:
+            created_date = date.fromisoformat(created_date).isoformat()
+        except ValueError:
+            created_date = fallback_created_date
+        normalized.append({
+            'id': str((raw_reminder or {}).get('id') or f"routine-{uuid.uuid4().hex[:12]}")[:80],
+            'title': title,
+            'startTime': start_time,
+            'endTime': end_time,
+            'weekdays': list(dict.fromkeys(weekdays)),
+            'createdDate': created_date,
+        })
+    return normalized
+
+
+def _normalize_ai_weekly_templates(templates):
+    if not isinstance(templates, dict):
+        return {}
+    normalized = {}
+    for weekday in VALID_WEEKDAYS:
+        items = [
+            item for item in _normalize_saved_schedule_items(templates.get(weekday))
+            if item.get('itemType') in {'habit', 'break'}
+        ]
+        if items:
+            normalized[weekday] = items[:40]
+    return normalized
+
+
+def normalize_staff_challenge_habits(raw_habits, existing_habits=None):
+    if not isinstance(raw_habits, list) or not raw_habits:
+        raise ValueError('Add at least one habit to your personal challenge')
+    if len(raw_habits) > 12:
+        raise ValueError('A personal challenge can contain no more than 12 habits')
+
+    existing_by_id = {
+        str(habit.get('id')): habit
+        for habit in (existing_habits or [])
+        if isinstance(habit, dict) and habit.get('id')
+    }
+    normalized = []
+    for index, raw_habit in enumerate(raw_habits):
+        if not isinstance(raw_habit, dict):
+            raise ValueError(f'Habit {index + 1} must be an object')
+        name = str(raw_habit.get('name') or '').strip()[:120]
+        if not name:
+            raise ValueError(f'Habit {index + 1} needs a name')
+        habit_type = str(raw_habit.get('habitType') or 'boolean').strip().lower()
+        if habit_type not in {'boolean', 'numeric', 'text', 'periodic'}:
+            raise ValueError(f'{name} has an unsupported habit type')
+        combat_type = str(raw_habit.get('combatType') or 'attack').strip().lower()
+        if combat_type not in {'attack', 'defence'}:
+            combat_type = 'attack'
+        schedule_days = list(dict.fromkeys(
+            day for day in (raw_habit.get('scheduleDays') or []) if day in VALID_WEEKDAYS
+        ))
+        if not schedule_days:
+            raise ValueError(f'{name} needs at least one scheduled day')
+        schedule_time = str(raw_habit.get('scheduleTime') or '17:00').strip()
+        if not _is_valid_planner_time(schedule_time):
+            raise ValueError(f'{name} needs a valid start time')
+        try:
+            duration_minutes = max(5, min(240, int(raw_habit.get('durationMinutes') or 30)))
+            minimum_value = int(raw_habit.get('minValue') or 0)
+            maximum_value = int(raw_habit.get('maxValue') or 10)
+            periodic_occurrences = max(2, min(12, int(raw_habit.get('periodicOccurrences') or 4)))
+            periodic_interval_hours = max(1, min(12, int(raw_habit.get('periodicIntervalHours') or 4)))
+        except (TypeError, ValueError):
+            raise ValueError(f'{name} contains invalid numeric settings')
+        if maximum_value <= minimum_value:
+            maximum_value = minimum_value + 1
+        habit_id = str(raw_habit.get('id') or f'staff-habit-{uuid.uuid4().hex[:12]}')[:80]
+        previous = existing_by_id.get(habit_id) or {}
+        progress = previous.get('progress') if isinstance(previous.get('progress'), list) else []
+        normalized.append({
+            'id': habit_id,
+            'name': name,
+            'description': str(raw_habit.get('description') or '').strip()[:500],
+            'habitType': habit_type,
+            'combatType': combat_type,
+            'scheduleDays': schedule_days,
+            'scheduleTime': schedule_time,
+            'durationMinutes': duration_minutes,
+            'minValue': minimum_value,
+            'maxValue': maximum_value,
+            'prompt': str(raw_habit.get('prompt') or '').strip()[:300],
+            'periodicOccurrences': periodic_occurrences,
+            'periodicIntervalHours': periodic_interval_hours,
+            'allowOverlap': bool(raw_habit.get('allowOverlap')),
+            'progress': progress,
+        })
+    return normalized
+
+
+def _staff_challenge_member_entry(challenge):
+    created_at = challenge.created_at
+    if created_at and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return {
+        'member': challenge.member_id,
+        'joinedAt': challenge.start_date.date().isoformat(),
+        'activationAt': created_at.isoformat() if created_at else None,
+        'habits': challenge.habits or [],
+    }
+
+
+def _planner_challenge_context(group, member_id, challenge_id=None):
+    if getattr(group, 'group_type', 'school') == 'staff':
+        query = StaffPersonalChallenge.query.filter_by(
+            group_id=group.id,
+            member_id=member_id,
+            status='active',
+        )
+        if challenge_id not in (None, ''):
+            try:
+                query = query.filter_by(id=int(challenge_id))
+            except (TypeError, ValueError):
+                return None, None
+        challenge = query.order_by(StaffPersonalChallenge.created_at.desc()).first()
+        return challenge, _staff_challenge_member_entry(challenge) if challenge else None
+    return group.active_challenge, get_member_habit_entry(group, member_id)
+
+
+def _staff_habit_completion_access(group, challenge, member_id, habit, habit_index, current_time):
+    return _habit_completion_access(
+        group,
+        member_id,
+        habit,
+        habit_index,
+        now=current_time,
+        challenge=challenge,
+        member_habit=_staff_challenge_member_entry(challenge),
+    )
+
+
+def build_staff_slacker_callout(member_rows):
+    active_rows = [row for row in member_rows if row.get('challenge')]
+    missing_rows = [row for row in member_rows if not row.get('challenge')]
+    if active_rows and missing_rows:
+        slacker = sorted(missing_rows, key=lambda row: (row['name'].lower(), row['memberId']))[0]
+        return {
+            'active': True,
+            'memberId': slacker['memberId'],
+            'name': slacker['name'],
+            'rate': 0,
+            'headline': f"ACCOUNTABILITY KLAXON: {slacker['name']} is still in spectator mode",
+            'message': 'Everyone else has put a challenge on the board. The group chat is now accepting motivational allegations.',
+            'reason': 'no-challenge',
+        }
+
+    eligible = [
+        row for row in active_rows
+        if int((row.get('stats') or {}).get('summary', {}).get('possibleUnits') or 0) >= 2
+    ]
+    if not eligible:
+        return {
+            'active': False,
+            'headline': 'Slacker radar is warming up',
+            'message': 'Complete a few scheduled habits and the accountability department will have enough evidence.',
+        }
+
+    ranked = sorted(eligible, key=lambda row: (row['score'], row['name'].lower(), row['memberId']))
+    slacker = ranked[0]
+    leader_score = max(row['score'] for row in eligible)
+    if slacker['score'] >= 85 and leader_score - slacker['score'] < 12:
+        return {
+            'active': False,
+            'headline': 'No exposé today. Standards are annoyingly high.',
+            'message': 'The accountability department searched for a slacker and found an administrative error instead.',
+        }
+
+    messages = (
+        'The consistency spreadsheet has requested a formal explanation and possibly a strong coffee.',
+        'Sources close to the leaderboard describe the current effort level as “under active investigation”.',
+        'A late surge is still possible. Unfortunately, so are screenshots from the rest of the group.',
+        'The standards committee has opened the curtains. Time to put some completions on the board.',
+    )
+    message_index = (slacker['memberId'] + date.today().toordinal()) % len(messages)
+    return {
+        'active': True,
+        'memberId': slacker['memberId'],
+        'name': slacker['name'],
+        'rate': slacker['score'],
+        'headline': f"SLACKER WATCH: {slacker['name']} is holding the table upside down",
+        'message': messages[message_index],
+        'reason': 'lowest-consistency',
+    }
+
+
+IP_BUCKS_FIBONACCI_CAP = 55
+IP_AVATAR_DEFAULTS = {
+    'coreColor': 'violet',
+    'skinTone': 'warm-medium',
+    'faceShape': 'oval',
+    'eyeColor': 'deep-brown',
+    'eyebrowStyle': 'natural',
+    'facialHairStyle': 'none',
+    'glassesStyle': 'none',
+    'bodyStyle': 'balanced',
+    'hairStyle': 'textured-crop',
+    'hairColor': 'espresso',
+    'outfitStyle': 'protocol-jacket',
+    'pose': 'ready',
+    'expression': 'focused',
+    'aura': 'aura-classic',
+    'headwear': 'none',
+    'accessory': 'none',
+    'backdrop': 'backdrop-grid',
+    'companion': 'none',
+}
+IP_AVATAR_FREE_CHOICES = {
+    'coreColors': [
+        {'id': 'violet', 'name': 'Protocol Violet', 'color': '#7c3aed'},
+        {'id': 'cyan', 'name': 'Clarity Cyan', 'color': '#06b6d4'},
+        {'id': 'emerald', 'name': 'Growth Emerald', 'color': '#10b981'},
+        {'id': 'amber', 'name': 'Energy Amber', 'color': '#f59e0b'},
+        {'id': 'rose', 'name': 'Courage Rose', 'color': '#f43f5e'},
+        {'id': 'slate', 'name': 'Focus Slate', 'color': '#475569'},
+    ],
+    'skinTones': [
+        {'id': 'porcelain', 'name': 'Porcelain', 'color': '#f5d0b5'},
+        {'id': 'warm-light', 'name': 'Warm Light', 'color': '#e8b98f'},
+        {'id': 'warm-medium', 'name': 'Warm Medium', 'color': '#c8895f'},
+        {'id': 'golden-brown', 'name': 'Golden Brown', 'color': '#a9673f'},
+        {'id': 'deep-brown', 'name': 'Deep Brown', 'color': '#75442e'},
+        {'id': 'rich-deep', 'name': 'Rich Deep', 'color': '#4b2a20'},
+    ],
+    'faceShapes': [
+        {'id': 'oval', 'name': 'Oval'},
+        {'id': 'round', 'name': 'Round'},
+        {'id': 'square', 'name': 'Square'},
+        {'id': 'heart', 'name': 'Heart'},
+        {'id': 'angular', 'name': 'Angular'},
+    ],
+    'eyeColors': [
+        {'id': 'deep-brown', 'name': 'Deep Brown', 'color': '#3f2416'},
+        {'id': 'hazel', 'name': 'Hazel', 'color': '#8a6a35'},
+        {'id': 'blue', 'name': 'Blue', 'color': '#3b82f6'},
+        {'id': 'green', 'name': 'Green', 'color': '#4d7c55'},
+        {'id': 'grey', 'name': 'Grey', 'color': '#64748b'},
+    ],
+    'eyebrowStyles': [
+        {'id': 'natural', 'name': 'Natural'},
+        {'id': 'straight', 'name': 'Straight'},
+        {'id': 'arched', 'name': 'Arched'},
+        {'id': 'bold', 'name': 'Bold'},
+    ],
+    'facialHairStyles': [
+        {'id': 'none', 'name': 'Clean Shaven'},
+        {'id': 'stubble', 'name': 'Stubble'},
+        {'id': 'moustache', 'name': 'Moustache'},
+        {'id': 'short-beard', 'name': 'Short Beard'},
+    ],
+    'glassesStyles': [
+        {'id': 'none', 'name': 'No Glasses'},
+        {'id': 'round', 'name': 'Round Frames'},
+        {'id': 'square', 'name': 'Square Frames'},
+        {'id': 'aviator', 'name': 'Aviator Frames'},
+    ],
+    'bodyStyles': [
+        {'id': 'balanced', 'name': 'Balanced'},
+        {'id': 'athletic', 'name': 'Athletic'},
+        {'id': 'broad', 'name': 'Broad'},
+        {'id': 'slim', 'name': 'Slim'},
+    ],
+    'hairStyles': [
+        {'id': 'textured-crop', 'name': 'Textured Crop'},
+        {'id': 'soft-curls', 'name': 'Soft Curls'},
+        {'id': 'high-top', 'name': 'High Top'},
+        {'id': 'side-sweep', 'name': 'Side Sweep'},
+        {'id': 'tied-back', 'name': 'Tied Back'},
+        {'id': 'locs', 'name': 'Short Locs'},
+        {'id': 'none', 'name': 'No Hair'},
+    ],
+    'hairColors': [
+        {'id': 'midnight', 'name': 'Midnight', 'color': '#111827'},
+        {'id': 'espresso', 'name': 'Espresso', 'color': '#3f251a'},
+        {'id': 'chestnut', 'name': 'Chestnut', 'color': '#7c3f24'},
+        {'id': 'golden', 'name': 'Golden', 'color': '#d6a84b'},
+        {'id': 'silver', 'name': 'Silver', 'color': '#cbd5e1'},
+        {'id': 'protocol-violet', 'name': 'Protocol Violet', 'color': '#7c3aed'},
+    ],
+    'outfitStyles': [
+        {'id': 'protocol-jacket', 'name': 'Protocol Jacket'},
+        {'id': 'varsity', 'name': 'IP Varsity'},
+        {'id': 'performance-hoodie', 'name': 'Performance Hoodie'},
+        {'id': 'training-kit', 'name': 'Training Kit'},
+    ],
+    'poses': [
+        {'id': 'ready', 'name': 'Ready'},
+        {'id': 'confident', 'name': 'Confident'},
+        {'id': 'victory', 'name': 'Victory'},
+    ],
+    'expressions': [
+        {'id': 'focused', 'name': 'Focused'},
+        {'id': 'smile', 'name': 'Positive'},
+        {'id': 'determined', 'name': 'Determined'},
+    ],
+}
+IP_SHOP_CATALOG = (
+    {'id': 'aura-pulse', 'name': 'Focus Pulse', 'description': 'A cyan pulse around your IP Core.', 'kind': 'avatar', 'slot': 'aura', 'price': 5, 'rarity': 'common'},
+    {'id': 'backdrop-midnight', 'name': 'Midnight Grid', 'description': 'A deep focus grid for your avatar card.', 'kind': 'avatar', 'slot': 'backdrop', 'price': 5, 'rarity': 'common'},
+    {'id': 'headwear-focus-band', 'name': 'Focus Band', 'description': 'A clean performance headband.', 'kind': 'avatar', 'slot': 'headwear', 'price': 8, 'rarity': 'common'},
+    {'id': 'accessory-book', 'name': 'Knowledge Book', 'description': 'Carry the symbol of deliberate learning.', 'kind': 'avatar', 'slot': 'accessory', 'price': 8, 'rarity': 'common'},
+    {'id': 'aura-sunrise', 'name': 'Sunrise Aura', 'description': 'Warm energy for an early start.', 'kind': 'avatar', 'slot': 'aura', 'price': 13, 'rarity': 'rare'},
+    {'id': 'headwear-headphones', 'name': 'Deep Focus Headphones', 'description': 'Built for distraction-free sessions.', 'kind': 'avatar', 'slot': 'headwear', 'price': 13, 'rarity': 'rare'},
+    {'id': 'accessory-shield', 'name': 'Discipline Shield', 'description': 'Protect the standards you have built.', 'kind': 'avatar', 'slot': 'accessory', 'price': 13, 'rarity': 'rare'},
+    {'id': 'backdrop-sunrise', 'name': 'Sunrise Protocol', 'description': 'A bright gradient for momentum.', 'kind': 'avatar', 'slot': 'backdrop', 'price': 13, 'rarity': 'rare'},
+    {'id': 'accessory-lightning', 'name': 'Attack Lightning', 'description': 'Show that you move toward your goals.', 'kind': 'avatar', 'slot': 'accessory', 'price': 21, 'rarity': 'epic'},
+    {'id': 'companion-mind', 'name': 'Mind Orb', 'description': 'A small focus companion beside your avatar.', 'kind': 'avatar', 'slot': 'companion', 'price': 21, 'rarity': 'epic'},
+    {'id': 'headwear-crown', 'name': 'Consistency Crown', 'description': 'A crown earned through patient repetition.', 'kind': 'avatar', 'slot': 'headwear', 'price': 34, 'rarity': 'legendary'},
+    {'id': 'backdrop-nebula', 'name': 'Protocol Nebula', 'description': 'A premium cosmic IP backdrop.', 'kind': 'avatar', 'slot': 'backdrop', 'price': 34, 'rarity': 'legendary'},
+    {'id': 'companion-triad', 'name': 'Mind Heart Gut Triad', 'description': 'Three orbiting protocol companions.', 'kind': 'avatar', 'slot': 'companion', 'price': 55, 'rarity': 'legendary'},
+    {'id': 'feature-pomodoro', 'toolId': 'pomodoro', 'name': 'Protocol Focus Timer', 'description': 'Custom Pomodoro rounds with guided focus and recovery intervals.', 'kind': 'feature', 'slot': 'feature', 'price': 34, 'rarity': 'rare'},
+    {'id': 'feature-meditation', 'toolId': 'meditation', 'name': 'Guided Meditation', 'description': 'Immersive school-safe guided sessions with breathing visuals and music.', 'kind': 'feature', 'slot': 'feature', 'price': 55, 'rarity': 'epic'},
+    {'id': 'feature-study-planner-pro', 'toolId': 'study-planner', 'name': 'Study Planner Pro', 'description': 'AI revision plans, exam checkpoints and realistic weekly study blocks.', 'kind': 'feature', 'slot': 'feature', 'price': 89, 'rarity': 'epic'},
+    {'id': 'feature-ai-fitness-coach', 'toolId': 'fitness-coach', 'name': 'AI Fitness Coach', 'description': 'Age-appropriate movement plans based on goals, time and available equipment.', 'kind': 'feature', 'slot': 'feature', 'price': 144, 'rarity': 'legendary'},
+    {'id': 'feature-gcse-spanish-tutor', 'toolId': 'spanish-tutor', 'name': 'GCSE Spanish Tutor', 'description': 'Interactive Spanish practice across topics, tenses and irregular verbs.', 'kind': 'feature', 'slot': 'feature', 'price': 89, 'rarity': 'epic'},
+    {'id': 'feature-gcse-french-tutor', 'toolId': 'french-tutor', 'name': 'GCSE French Tutor', 'description': 'Interactive French practice across topics, tenses and irregular verbs.', 'kind': 'feature', 'slot': 'feature', 'price': 89, 'rarity': 'epic'},
+    {'id': 'feature-focus-soundscapes', 'toolId': 'soundscapes', 'name': 'Focus Soundscapes', 'description': 'Adaptive audio for deep work sessions.', 'kind': 'feature', 'slot': 'feature', 'price': 55, 'rarity': 'future', 'comingSoon': True},
+)
+
+FOOTBALL_IP_SHOP_CATALOG = (
+    {'id': 'outfit-ip-home-kit', 'name': 'IP Home Kit', 'description': 'The signature violet and cyan Inner Performance football top.', 'kind': 'avatar', 'slot': 'outfitStyle', 'price': 13, 'rarity': 'rare'},
+    {'id': 'outfit-ip-away-kit', 'name': 'IP Away Kit', 'description': 'A clean ice-white away strip with IP performance detailing.', 'kind': 'avatar', 'slot': 'outfitStyle', 'price': 21, 'rarity': 'epic'},
+    {'id': 'outfit-goalkeeper-kit', 'name': 'Goalkeeper Kit', 'description': 'A bold emerald goalkeeper strip for players who own the box.', 'kind': 'avatar', 'slot': 'outfitStyle', 'price': 34, 'rarity': 'legendary'},
+    {'id': 'accessory-captain-armband', 'name': "Captain's Armband", 'description': 'Show leadership, standards and responsibility on your avatar.', 'kind': 'avatar', 'slot': 'accessory', 'price': 13, 'rarity': 'rare'},
+    {'id': 'accessory-match-ball', 'name': 'IP Match Ball', 'description': 'A match-ready IP football beside your player avatar.', 'kind': 'avatar', 'slot': 'accessory', 'price': 21, 'rarity': 'epic'},
+    {'id': 'backdrop-floodlights', 'name': 'Floodlit Pitch', 'description': 'Put your player under the lights on a night-match pitch.', 'kind': 'avatar', 'slot': 'backdrop', 'price': 21, 'rarity': 'epic'},
+    {'id': 'backdrop-stadium-tunnel', 'name': 'Stadium Tunnel', 'description': 'A premium matchday tunnel backdrop before the walkout.', 'kind': 'avatar', 'slot': 'backdrop', 'price': 34, 'rarity': 'legendary'},
+    {'id': 'companion-football', 'name': 'Orbit Football', 'description': 'A mini IP football that travels with your player avatar.', 'kind': 'avatar', 'slot': 'companion', 'price': 34, 'rarity': 'legendary'},
+    {'id': 'feature-pre-match-visualiser', 'toolId': 'pre-match-visualiser', 'name': 'Pre-Match Visualiser', 'description': 'Build a calm, confident matchday routine with guided visualisation.', 'kind': 'feature', 'slot': 'feature', 'price': 55, 'rarity': 'future', 'comingSoon': True},
+    {'id': 'feature-recovery-room', 'toolId': 'recovery-room', 'name': 'Recovery Room', 'description': 'Log soreness, energy and sleep to receive a simple recovery focus.', 'kind': 'feature', 'slot': 'feature', 'price': 55, 'rarity': 'future', 'comingSoon': True},
+    {'id': 'feature-match-review', 'toolId': 'match-review', 'name': 'Match Review Journal', 'description': 'Reflect on decisions, confidence and key moments after each match.', 'kind': 'feature', 'slot': 'feature', 'price': 89, 'rarity': 'future', 'comingSoon': True},
+    {'id': 'feature-solo-session-builder', 'toolId': 'solo-session-builder', 'name': 'Solo Session Builder', 'description': 'Create technical ball-work sessions around your position and available space.', 'kind': 'feature', 'slot': 'feature', 'price': 89, 'rarity': 'future', 'comingSoon': True},
+)
+
+FOOTBALL_SHARED_SHOP_ITEM_IDS = {
+    'aura-pulse',
+    'backdrop-midnight',
+    'headwear-focus-band',
+    'aura-sunrise',
+    'headwear-headphones',
+    'accessory-shield',
+    'backdrop-sunrise',
+    'accessory-lightning',
+    'companion-mind',
+    'headwear-crown',
+    'backdrop-nebula',
+    'companion-triad',
+    'feature-pomodoro',
+    'feature-meditation',
+    'feature-ai-fitness-coach',
+    'feature-focus-soundscapes',
+}
+
+
+def _ip_shop_catalog_for_group(group):
+    group_type = getattr(group, 'group_type', 'school')
+    if group_type == 'staff':
+        return tuple(item for item in IP_SHOP_CATALOG if item['kind'] == 'avatar')
+    if group_type != 'football':
+        return IP_SHOP_CATALOG
+    shared_items = []
+    for item in IP_SHOP_CATALOG:
+        if item['id'] not in FOOTBALL_SHARED_SHOP_ITEM_IDS:
+            continue
+        football_item = dict(item)
+        if item['id'] == 'feature-ai-fitness-coach':
+            football_item.update({
+                'name': 'AI Personal Trainer',
+                'description': 'Build safe football-focused strength, speed, mobility and conditioning sessions.',
+            })
+        elif item['id'] == 'feature-meditation':
+            football_item.update({
+                'name': 'Matchday Mindset Sessions',
+                'description': 'Guided focus, confidence and recovery sessions for training and matchdays.',
+            })
+        elif item['id'] == 'feature-pomodoro':
+            football_item.update({
+                'name': 'Performance Focus Timer',
+                'description': 'Focused work and recovery rounds for analysis, study or individual practice.',
+            })
+        shared_items.append(football_item)
+    return tuple(shared_items) + FOOTBALL_IP_SHOP_CATALOG
+
+
+def _ip_bucks_for_streak(streak_length):
+    try:
+        streak_length = int(streak_length)
+    except (TypeError, ValueError):
+        return 0
+    if streak_length < 2:
+        return 0
+    reward, next_reward = 1, 2
+    for _ in range(streak_length - 2):
+        reward, next_reward = next_reward, reward + next_reward
+    return min(reward, IP_BUCKS_FIBONACCI_CAP)
+
+
+def _ip_bucks_streak_restore_cost(streak_length):
+    try:
+        streak_length = int(streak_length)
+    except (TypeError, ValueError):
+        return 0
+    if streak_length < 1:
+        return 0
+    return max(1, _ip_bucks_for_streak(streak_length + 1))
+
+
+def _habit_full_streak_before_date(habit, target_date, minimum_date=None):
+    cursor = target_date - timedelta(days=1)
+    streak = 0
+    scanned_days = 0
+    while scanned_days < 3660 and (minimum_date is None or cursor >= minimum_date):
+        if _habit_is_scheduled_on(habit, cursor):
+            progress_entry = _habit_progress_for_date(habit, cursor)
+            if habit_progress_fraction(habit, progress_entry) >= 1:
+                streak += 1
+            elif (progress_entry or {}).get('streakRestored'):
+                pass
+            else:
+                break
+        cursor -= timedelta(days=1)
+        scanned_days += 1
+    return streak
+
+
+def _habit_streak_restore_quote(challenge, member_habit, habit, habit_index, target_date, completion_access):
+    progress_entry = _habit_progress_for_date(habit, target_date)
+    at_risk_streak = _habit_full_streak_before_date(
+        habit,
+        target_date,
+        minimum_date=effective_challenge_start(challenge, member_habit),
+    )
+    already_restored = bool((progress_entry or {}).get('streakRestored'))
+    progress_fraction = habit_progress_fraction(habit, progress_entry)
+    is_closed = completion_access.get('status') == 'closed'
+    has_eligible_window = int(completion_access.get('eligibleOccurrenceCount') or 0) > 0
+    eligible = bool(
+        is_closed
+        and has_eligible_window
+        and progress_fraction < 1
+        and at_risk_streak > 0
+        and not already_restored
+    )
+    return {
+        'eligible': eligible,
+        'alreadyRestored': already_restored,
+        'atRiskStreak': at_risk_streak,
+        'cost': _ip_bucks_streak_restore_cost(at_risk_streak),
+        'habitIndex': habit_index,
+        'date': target_date.isoformat(),
+        'progressPercent': round(progress_fraction * 100, 1),
+    }
+
+
+def _habit_streak_awards_for_challenge(challenge, member_habit, student_id, today_value, group=None):
+    statistics = (
+        _build_group_member_habit_statistics(
+            group,
+            challenge,
+            member_habit,
+            student_id,
+            today_value=today_value,
+        )
+        if group is not None
+        else build_member_habit_statistics(challenge, member_habit, today_value=today_value)
+    )
+    awards = []
+    challenge_id = getattr(challenge, 'id', None)
+    group_id = getattr(challenge, 'group_id', None)
+    reference_prefix = 'habit-streak:staff:v1' if isinstance(challenge, StaffPersonalChallenge) else 'habit-streak:v1'
+    for habit in statistics['habits']:
+        streak = 0
+        for row in habit['dailyData']:
+            if row['status'] == 'complete':
+                streak += 1
+                amount = _ip_bucks_for_streak(streak)
+                if amount:
+                    awards.append({
+                        'referenceKey': f"{reference_prefix}:g{group_id}:c{challenge_id}:s{student_id}:h{habit['index']}:d{row['date']}",
+                        'amount': amount,
+                        'date': row['date'],
+                        'streak': streak,
+                        'habitIndex': habit['index'],
+                        'habitName': habit['name'],
+                        'challengeId': challenge_id,
+                    })
+            elif row.get('streakRestored'):
+                continue
+            elif row['status'] != 'pending':
+                streak = 0
+    return awards
+
+
+def _get_or_create_ip_wallet(student_id):
+    wallet = StudentIpWallet.query.filter_by(student_id=student_id).with_for_update().first()
+    if not wallet:
+        wallet = StudentIpWallet(student_id=student_id, balance=0, lifetime_earned=0, lifetime_spent=0)
+        db.session.add(wallet)
+        db.session.flush()
+    return wallet
+
+
+def _sync_student_ip_bucks(group, student_id, today_value=None):
+    today_value = today_value or datetime.now(_student_timezone(group, student_id)[1]).date()
+    wallet = _get_or_create_ip_wallet(student_id)
+    if getattr(group, 'group_type', 'school') == 'staff':
+        challenges = StaffPersonalChallenge.query.filter_by(
+            group_id=group.id,
+            member_id=student_id,
+        ).order_by(StaffPersonalChallenge.start_date.asc()).all()
+    else:
+        challenges = GroupChallenge.query.filter_by(group_id=group.id).order_by(GroupChallenge.start_date.asc()).all()
+    expected_awards = []
+    for challenge in challenges:
+        member_habit = (
+            _staff_challenge_member_entry(challenge)
+            if isinstance(challenge, StaffPersonalChallenge)
+            else next((entry for entry in (challenge.member_habits or []) if str((entry.get('member') or {}).get('id') if isinstance(entry.get('member'), dict) else entry.get('member')) == str(student_id)), None)
+        )
+        if not member_habit:
+            continue
+        challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+        stats_date = min(today_value, challenge_end) if challenge_end else today_value
+        expected_awards.extend(_habit_streak_awards_for_challenge(
+            challenge,
+            member_habit,
+            student_id,
+            stats_date,
+            group=group,
+        ))
+
+    existing_transactions = {
+        row.reference_key: row
+        for row in StudentIpTransaction.query.filter_by(wallet_id=wallet.id, kind='habit_streak').all()
+    }
+    credited = []
+    for award in expected_awards:
+        existing_transaction = existing_transactions.get(award['referenceKey'])
+        if existing_transaction:
+            corrected_amount = int(award['amount'])
+            previous_amount = int(existing_transaction.amount or 0)
+            if corrected_amount <= previous_amount:
+                continue
+            adjustment = corrected_amount - previous_amount
+            existing_transaction.amount = corrected_amount
+            existing_transaction.description = f"{award['habitName']} reached a {award['streak']}-occasion full streak"
+            existing_transaction.details = {
+                **(existing_transaction.details or {}),
+                'habitIndex': award['habitIndex'],
+                'habitName': award['habitName'],
+                'streak': award['streak'],
+                'completionDate': award['date'],
+                'challengeId': award['challengeId'],
+                'rewardAdjusted': True,
+            }
+            wallet.balance = (wallet.balance or 0) + adjustment
+            wallet.lifetime_earned = (wallet.lifetime_earned or 0) + adjustment
+            wallet.updated_at = datetime.utcnow()
+            credited.append({**award, 'amount': adjustment, 'rewardAdjusted': True})
+            continue
+        db.session.add(StudentIpTransaction(
+            wallet_id=wallet.id,
+            group_id=group.id,
+            amount=award['amount'],
+            kind='habit_streak',
+            reference_key=award['referenceKey'],
+            description=f"{award['habitName']} reached a {award['streak']}-occasion full streak",
+            details={
+                'habitIndex': award['habitIndex'],
+                'habitName': award['habitName'],
+                'streak': award['streak'],
+                'completionDate': award['date'],
+                'challengeId': award['challengeId'],
+            },
+        ))
+        wallet.balance = (wallet.balance or 0) + award['amount']
+        wallet.lifetime_earned = (wallet.lifetime_earned or 0) + award['amount']
+        wallet.updated_at = datetime.utcnow()
+        credited.append(award)
+    if credited:
+        db.session.flush()
+    return wallet, credited
+
+
+@groups_bp.route('/ip-wallet', methods=['GET'])
+@jwt_required()
+def current_user_ip_wallet():
+    try:
+        current_user_id = int(get_jwt_identity())
+        credited_total = 0
+        eligible_groups = [
+            group for group in Group.query.all()
+            if is_planner_member(group, current_user_id)
+        ]
+        wallet = None
+        for group in eligible_groups:
+            wallet, credited = _sync_student_ip_bucks(group, current_user_id)
+            credited_total += sum(int(item.get('amount') or 0) for item in credited)
+        if wallet is None:
+            wallet = _get_or_create_ip_wallet(current_user_id)
+        db.session.commit()
+        return jsonify({
+            'wallet': wallet.to_dict(),
+            'newEarnings': credited_total,
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+def _normalize_ip_avatar(raw_avatar, owned_item_ids, catalog=None):
+    raw_avatar = raw_avatar if isinstance(raw_avatar, dict) else {}
+    avatar = dict(IP_AVATAR_DEFAULTS)
+    catalog = catalog or IP_SHOP_CATALOG
+    free_choice_fields = {
+        'coreColor': 'coreColors',
+        'skinTone': 'skinTones',
+        'faceShape': 'faceShapes',
+        'eyeColor': 'eyeColors',
+        'eyebrowStyle': 'eyebrowStyles',
+        'facialHairStyle': 'facialHairStyles',
+        'glassesStyle': 'glassesStyles',
+        'bodyStyle': 'bodyStyles',
+        'hairStyle': 'hairStyles',
+        'hairColor': 'hairColors',
+        'outfitStyle': 'outfitStyles',
+        'pose': 'poses',
+        'expression': 'expressions',
+    }
+    for field, choices_key in free_choice_fields.items():
+        valid_values = {item['id'] for item in IP_AVATAR_FREE_CHOICES[choices_key]}
+        if raw_avatar.get(field) in valid_values:
+            avatar[field] = raw_avatar[field]
+
+    catalog_map = {item['id']: item for item in catalog if item['kind'] == 'avatar'}
+    for slot in ('outfitStyle', 'aura', 'headwear', 'accessory', 'backdrop', 'companion'):
+        requested = str(raw_avatar.get(slot) or IP_AVATAR_DEFAULTS[slot])
+        if requested == IP_AVATAR_DEFAULTS[slot]:
+            avatar[slot] = requested
+            continue
+        if slot == 'outfitStyle' and requested in {
+            item['id'] for item in IP_AVATAR_FREE_CHOICES['outfitStyles']
+        }:
+            avatar[slot] = requested
+            continue
+        item = catalog_map.get(requested)
+        if item and item['slot'] == slot and requested in owned_item_ids:
+            avatar[slot] = requested
+    return avatar
+
+
+def _build_ip_economy(group, student_id, settings, habit_momentum):
+    wallet, credited = _sync_student_ip_bucks(group, student_id)
+    purchases = StudentIpPurchase.query.filter_by(wallet_id=wallet.id).order_by(StudentIpPurchase.purchased_at.desc()).all()
+    owned_item_ids = {purchase.item_id for purchase in purchases}
+    preferences = (settings.reward_preferences if settings else None) or {}
+    catalog = _ip_shop_catalog_for_group(group)
+    avatar = _normalize_ip_avatar(preferences.get('avatar'), owned_item_ids, catalog)
+    shop = [{
+        **item,
+        'owned': item['id'] in owned_item_ids,
+        'equipped': item.get('slot') != 'feature' and avatar.get(item.get('slot')) == item['id'],
+        'purchasable': not item.get('comingSoon', False),
+    } for item in catalog]
+    activity = StudentIpTransaction.query.filter_by(wallet_id=wallet.id).order_by(StudentIpTransaction.created_at.desc()).limit(16).all()
+    return {
+        'wallet': wallet.to_dict(),
+        'newEarnings': sum(item['amount'] for item in credited),
+        'avatar': avatar,
+        'avatarChoices': IP_AVATAR_FREE_CHOICES,
+        'shop': shop,
+        'purchases': [purchase.to_dict() for purchase in purchases],
+        'activity': [transaction.to_dict() for transaction in activity],
+        'habitMomentum': habit_momentum,
+        'fibonacci': {
+            'ladder': [{'streak': streak, 'reward': _ip_bucks_for_streak(streak)} for streak in range(2, 11)],
+            'startsAt': 2,
+            'awardCap': IP_BUCKS_FIBONACCI_CAP,
+            'rule': 'A habit must reach 100% on consecutive scheduled occasions. The first completion starts the streak; rewards begin on the second.',
+        },
+        'entitlements': [purchase.item_id for purchase in purchases if purchase.item_type == 'feature'],
+    }
+
+
+def _student_reward_metrics(group, student_id, today_value=None, impact_records=None, recovered_today=None):
+    today_value = today_value or datetime.now(_student_timezone(group, student_id)[1]).date()
+    if getattr(group, 'group_type', 'school') == 'staff':
+        challenge = StaffPersonalChallenge.query.filter_by(
+            group_id=group.id,
+            member_id=student_id,
+            status='active',
+        ).order_by(StaffPersonalChallenge.created_at.desc()).first()
+        member_habit = _staff_challenge_member_entry(challenge) if challenge else None
+    else:
+        member_habit = get_member_habit_entry(group, student_id)
+        challenge = group.active_challenge
+    successful_dates = set()
+    bounceback_dates = set()
+    total_completions = 0.0
+    longest_streak = 0
+    habit_momentum = []
+
+    if member_habit and challenge:
+        statistics = _build_group_member_habit_statistics(
+            group,
+            challenge,
+            member_habit,
+            student_id,
+            today_value=today_value,
+        )
+        total_completions = statistics['summary']['earnedUnits']
+        successful_dates = {
+            datetime.fromisoformat(row['date']).date()
+            for row in statistics['daily']
+            if row['completionRate'] > 0
+        }
+        for habit in statistics['habits']:
+            longest_streak = max(longest_streak, habit['longestFullStreak'])
+            next_streak = max(2, habit['currentFullStreak'] + 1)
+            habit_momentum.append({
+                'habitIndex': habit['index'],
+                'habitName': habit['name'],
+                'currentStreak': habit['currentFullStreak'],
+                'nextStreak': next_streak,
+                'nextReward': _ip_bucks_for_streak(next_streak),
+            })
+            has_progress = False
+            missed_since_progress = False
+            for row in habit['dailyData']:
+                target_date = datetime.fromisoformat(row['date']).date()
+                if row['progressFraction'] > 0:
+                    if has_progress and missed_since_progress:
+                        bounceback_dates.add(target_date)
+                    has_progress = True
+                    missed_since_progress = False
+                elif target_date < today_value:
+                    if has_progress:
+                        missed_since_progress = True
+
+    if impact_records is None and getattr(group, 'group_type', 'school') == 'school':
+        impact_records = SchoolImpactRecord.query.filter_by(
+            group_id=group.id,
+            student_id=student_id,
+        ).order_by(SchoolImpactRecord.week_ending.asc()).all()
+    weekly_scores = [
+        (record.positive_points or 0)
+        - (record.negative_points or 0)
+        - ((record.truancy_incidents or 0) * 2)
+        for record in impact_records or []
+    ]
+    improvement_steps = sum(
+        1 for index in range(1, len(weekly_scores))
+        if weekly_scores[index] > weekly_scores[index - 1]
+    )
+
+    if recovered_today is None and getattr(group, 'group_type', 'school') == 'school':
+        recovered_today = build_daily_points_summary(group, student_id).get('status') == 'recovered'
+    if recovered_today:
+        bounceback_dates.add(today_value)
+
+    successful_days = len(successful_dates)
+    bouncebacks = len(bounceback_dates)
+    growth_score = round(successful_days + (bouncebacks * 3) + (improvement_steps * 3) + min(longest_streak, 10), 2)
+    return {
+        'successfulDays': successful_days,
+        'totalCompletions': round(total_completions, 2),
+        'longestStreak': longest_streak,
+        'bouncebacks': bouncebacks,
+        'improvementSteps': improvement_steps,
+        'growthScore': growth_score,
+        'habitMomentum': habit_momentum,
+    }
+
+
+def _student_reward_catalog(metrics, group_type='school'):
+    def successful_days_reward(reward_id, name, description, target):
+        value = metrics['successfulDays']
+        return {
+            'id': reward_id,
+            'name': name,
+            'description': description,
+            'unlocked': value >= target,
+            'unlockText': f'Show up on {target} different days',
+            'progress': min(value, target),
+            'target': target,
+        }
+
+    def metric_reward(reward_id, name, description, metric_key, target, unlock_text):
+        value = metrics[metric_key]
+        return {
+            'id': reward_id,
+            'name': name,
+            'description': description,
+            'unlocked': value >= target,
+            'unlockText': unlock_text,
+            'progress': min(value, target),
+            'target': target,
+        }
+
+    themes = [
+        {
+            'id': 'ip-classic',
+            'name': 'IP Classic',
+            'description': 'The original violet and cyan Inner Performance look.',
+            'unlocked': True,
+            'unlockText': 'Unlocked from the start',
+            'progress': 1,
+            'target': 1,
+        },
+        successful_days_reward('focus-blue', 'Focus Blue', 'A calm blue workspace for focused days.', 2),
+        metric_reward('growth-green', 'Growth Green', 'A fresh green theme earned by getting back on track.', 'bouncebacks', 1, 'Complete a habit after a missed scheduled day'),
+        successful_days_reward('momentum-violet', 'Momentum Violet', 'A deeper violet theme for sustained momentum.', 7),
+        {
+            'id': 'sunrise-gold',
+            'name': 'Sunrise Gold',
+            'description': 'A warm gold theme for consistency or clear improvement.',
+            'unlocked': metrics['longestStreak'] >= 7 or metrics['improvementSteps'] >= 2,
+            'unlockText': 'Reach a 7-day scheduled streak or improve twice',
+            'progress': max(min(metrics['longestStreak'], 7) / 7, min(metrics['improvementSteps'], 2) / 2),
+            'target': 1,
+        },
+    ]
+    titles = [
+        {
+            'id': 'steady-starter',
+            'name': 'Steady Starter',
+            'description': 'Ready to begin and build at your own pace.',
+            'unlocked': True,
+            'unlockText': 'Unlocked from the start',
+            'progress': 1,
+            'target': 1,
+        },
+        successful_days_reward('first-step', 'First Step', 'You showed up and completed something meaningful.', 1),
+        successful_days_reward('momentum-maker', 'Momentum Maker', 'You are building progress across different days.', 5),
+        metric_reward('comeback-builder', 'Comeback Builder', 'You returned after a difficult or missed day.', 'bouncebacks', 1, 'Complete a habit after a missed scheduled day'),
+        metric_reward('consistency-crafter', 'Consistency Crafter', 'You protected a five-day scheduled streak.', 'longestStreak', 5, 'Reach a 5-day scheduled streak'),
+        (
+            metric_reward('training-standard', 'Training Standard', 'You protected a high standard across eight scheduled occasions.', 'longestStreak', 8, 'Reach an 8-occasion scheduled streak')
+            if group_type == 'football'
+            else metric_reward('growth-navigator', 'Growth Navigator', 'Your school impact improved more than once.', 'improvementSteps', 2, 'Improve your impact score twice')
+        ),
+    ]
+    return {'themes': themes, 'titles': titles}
+
+
+def _build_student_rewards(group, student_id, settings=None):
+    metrics = _student_reward_metrics(group, student_id)
+    catalog = _student_reward_catalog(metrics, getattr(group, 'group_type', 'school'))
+    preferences = (settings.reward_preferences if settings else None) or {}
+    unlocked_theme_ids = {item['id'] for item in catalog['themes'] if item['unlocked']}
+    unlocked_title_ids = {item['id'] for item in catalog['titles'] if item['unlocked']}
+    selected_theme_id = preferences.get('selectedThemeId')
+    selected_title_id = preferences.get('selectedTitleId')
+    if selected_theme_id not in unlocked_theme_ids:
+        selected_theme_id = 'ip-classic'
+    if selected_title_id not in unlocked_title_ids:
+        selected_title_id = 'steady-starter'
+    locked_rewards = [
+        {**item, 'kind': kind}
+        for kind in ('themes', 'titles')
+        for item in catalog[kind]
+        if not item['unlocked']
+    ]
+    locked_rewards.sort(
+        key=lambda item: -(float(item['progress']) / max(float(item['target']), 1))
+    )
+    economy = _build_ip_economy(group, student_id, settings, metrics.get('habitMomentum') or [])
+    return {
+        'metrics': metrics,
+        'preferences': {
+            'selectedThemeId': selected_theme_id,
+            'selectedTitleId': selected_title_id,
+        },
+        'themes': catalog['themes'],
+        'titles': catalog['titles'],
+        'earnedCount': len(unlocked_theme_ids) + len(unlocked_title_ids),
+        'totalCount': len(catalog['themes']) + len(catalog['titles']),
+        'nextUnlock': locked_rewards[0] if locked_rewards else None,
+        'economy': economy,
+    }
+
+
+def _get_student_planner_settings(group_id, student_id, create=False):
+    settings = StudentPlannerSettings.query.filter_by(group_id=group_id, student_id=student_id).first()
+    if not settings and create:
+        settings = StudentPlannerSettings(group_id=group_id, student_id=student_id)
+        db.session.add(settings)
+    return settings
+
+
+def _group_school_timezone(group):
+    configured_timezone = (group.school_day_config or {}).get('timezone')
+    fallback_timezone = os.getenv('SCHOOL_TIMEZONE', DEFAULT_SCHOOL_TIMEZONE)
+    return resolve_timezone(configured_timezone or fallback_timezone)
+
+
+def _student_timezone(group, student_id, settings=None):
+    settings = settings if settings is not None else _get_student_planner_settings(group.id, student_id)
+    timezone_name = getattr(settings, 'timezone_name', None) if settings else None
+    if timezone_name:
+        return resolve_timezone(timezone_name)
+    return _group_school_timezone(group)
+
+
+def _habit_is_scheduled_on(habit, target_date):
+    schedule_days = habit.get('scheduleDays') or []
+    return not schedule_days or target_date.strftime('%A') in schedule_days
+
+
+def _habit_progress_for_date(habit, target_date):
+    target_key = target_date.isoformat()
+    return next(
+        (entry for entry in (habit.get('progress') or []) if str(entry.get('date') or '')[:10] == target_key),
+        None,
+    )
+
+
+def _habit_correction_snapshot(habit, progress_entry):
+    progress_entry = progress_entry or {}
+    habit_type = habit.get('habitType') or 'boolean'
+    snapshot = {
+        'habitType': habit_type,
+        'completed': bool(progress_entry.get('completed')),
+        'progressPercent': round(habit_progress_fraction(habit, progress_entry) * 100, 1),
+    }
+    if habit_type == 'numeric':
+        snapshot['numericValue'] = progress_entry.get('numericValue')
+    elif habit_type == 'text':
+        snapshot['textValue'] = progress_entry.get('textValue') or ''
+    elif habit_type == 'periodic':
+        completed, target = periodic_progress_counts(habit, progress_entry)
+        snapshot.update({'periodicCompleted': completed, 'periodicTarget': target})
+    return snapshot
+
+
+def _apply_admin_habit_correction(
+    habit,
+    progress_entry,
+    data,
+    periodic_target_override=None,
+    periodic_max_completed=None,
+):
+    habit_type = habit.get('habitType') or 'boolean'
+    if habit_type == 'numeric':
+        try:
+            numeric_value = float(data.get('numericValue'))
+        except (TypeError, ValueError):
+            raise ValueError('A numeric result is required for this habit')
+        if not math.isfinite(numeric_value):
+            raise ValueError('The numeric result must be finite')
+        minimum = float(habit.get('minValue') if habit.get('minValue') is not None else 0)
+        maximum = float(habit.get('maxValue') if habit.get('maxValue') is not None else 10)
+        if numeric_value < minimum or numeric_value > maximum:
+            raise ValueError(f'Numeric result must be between {minimum:g} and {maximum:g}')
+        progress_entry['numericValue'] = int(numeric_value) if numeric_value.is_integer() else numeric_value
+        progress_entry['completed'] = numeric_value >= maximum
+    elif habit_type == 'text':
+        if data.get('completed') is False:
+            progress_entry.pop('textValue', None)
+            progress_entry['completed'] = False
+            progress_entry.pop('completedAt', None)
+            return _habit_correction_snapshot(habit, progress_entry)
+        text_value = str(data.get('textValue') or '').strip()
+        if not text_value:
+            raise ValueError('A verified written response is required for this habit')
+        progress_entry['textValue'] = text_value[:2000]
+        progress_entry['completed'] = True
+    elif habit_type == 'periodic':
+        target = max(1, int(periodic_target_override or habit.get('periodicOccurrences') or 4))
+        raw_completed = data.get('periodicCompleted')
+        if isinstance(raw_completed, bool):
+            raise ValueError('Periodic progress must be a whole number')
+        try:
+            completed_occurrences = int(raw_completed)
+        except (TypeError, ValueError):
+            raise ValueError('Periodic progress must be a whole number')
+        maximum_completed = min(target, int(periodic_max_completed)) if periodic_max_completed is not None else target
+        if completed_occurrences < 0 or completed_occurrences > maximum_completed:
+            raise ValueError(f'Periodic progress must be between 0 and {maximum_completed} for this point in the day')
+        progress_entry['periodicCompleted'] = completed_occurrences
+        progress_entry['periodicTarget'] = target
+        progress_entry['periodicLoggedOccurrences'] = list(range(completed_occurrences))
+        progress_entry['completed'] = completed_occurrences >= target
+    else:
+        completed = data.get('completed')
+        if not isinstance(completed, bool):
+            raise ValueError('Choose whether this habit was completed')
+        progress_entry['completed'] = completed
+
+    if progress_entry.get('completed'):
+        progress_entry['completedAt'] = datetime.now(timezone.utc).isoformat()
+    else:
+        progress_entry.pop('completedAt', None)
+    return _habit_correction_snapshot(habit, progress_entry)
+
+
+def _completion_schedule_items(group, student_id, target_date, habit, habit_index, plan=None, settings=None):
+    if plan is None:
+        plan = StudentSchedulePlan.query.filter_by(
+            group_id=group.id,
+            student_id=student_id,
+            plan_date=target_date,
+        ).first()
+    source_items = list(plan.items or []) if plan and plan.items else []
+    if not source_items:
+        settings = settings if settings is not None else _get_student_planner_settings(group.id, student_id)
+        weekday = target_date.strftime('%A')
+        source_items = list(((settings.ai_weekly_templates or {}).get(weekday) or [])) if settings else []
+    return normalize_habit_schedule_items(source_items, habit, habit_index)
+
+
+def _challenge_activation_at(challenge, member_habit, member_timezone):
+    if not challenge:
+        return None
+    challenge_start = getattr(challenge, 'start_date', None)
+    if isinstance(challenge_start, datetime):
+        challenge_start_date = challenge_start.date()
+    elif isinstance(challenge_start, date):
+        challenge_start_date = challenge_start
+    else:
+        try:
+            challenge_start_date = datetime.fromisoformat(str(challenge_start).replace('Z', '+00:00')).date()
+        except (TypeError, ValueError):
+            return None
+    candidates = [datetime.combine(challenge_start_date, datetime.min.time(), tzinfo=member_timezone)]
+
+    created_at = getattr(challenge, 'created_at', None)
+    if created_at:
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            except ValueError:
+                created_at = None
+        if isinstance(created_at, datetime):
+            created_at = created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at
+            candidates.append(created_at.astimezone(member_timezone))
+
+    joined_at = (member_habit or {}).get('activationAt') or (member_habit or {}).get('joinedAt')
+    if joined_at:
+        joined_text = str(joined_at).strip()
+        try:
+            if len(joined_text) <= 10:
+                joined_value = datetime.combine(
+                    datetime.fromisoformat(joined_text[:10]).date(),
+                    datetime.min.time(),
+                    tzinfo=member_timezone,
+                )
+            else:
+                joined_value = datetime.fromisoformat(joined_text.replace('Z', '+00:00'))
+                if joined_value.tzinfo is None:
+                    joined_value = joined_value.replace(tzinfo=timezone.utc)
+                joined_value = joined_value.astimezone(member_timezone)
+            candidates.append(joined_value)
+        except (TypeError, ValueError):
+            pass
+    return max(candidates)
+
+
+def _first_day_habit_eligibility(group, challenge, member_habit, student_id):
+    exact_activation = (member_habit or {}).get('activationAt') or getattr(challenge, 'created_at', None)
+    if not exact_activation:
+        return None
+    timezone_name, member_timezone = _student_timezone(group, student_id)
+    activation_at = _challenge_activation_at(challenge, member_habit, member_timezone)
+    if not activation_at:
+        return None
+    activation_date = activation_at.date()
+    settings = _get_student_planner_settings(group.id, student_id)
+    plan = StudentSchedulePlan.query.filter_by(
+        group_id=group.id,
+        student_id=student_id,
+        plan_date=activation_date,
+    ).first()
+
+    habits = {}
+    for habit_index, habit in enumerate((member_habit or {}).get('habits') or []):
+        if not _habit_is_scheduled_on(habit, activation_date):
+            continue
+        schedule_items = _completion_schedule_items(
+            group,
+            student_id,
+            activation_date,
+            habit,
+            habit_index,
+            plan=plan,
+            settings=settings,
+        )
+        access = build_completion_window_access(
+            activation_date,
+            schedule_items,
+            activation_at,
+            timezone_name=timezone_name,
+            periodic=habit.get('habitType') == 'periodic',
+            eligible_after=activation_at,
+        )
+        habits[str(habit_index)] = {
+            'eligibleOccurrenceCount': access.get('eligibleOccurrenceCount', len(schedule_items)),
+            'eligibleOccurrenceIndexes': access.get('eligibleOccurrenceIndexes', []),
+            'scheduledOccurrenceCount': len(schedule_items),
+        }
+    return {
+        'date': activation_date.isoformat(),
+        'activationAt': activation_at.isoformat(),
+        'timezone': timezone_name,
+        'habits': habits,
+    }
+
+
+def _build_group_member_habit_statistics(
+    group,
+    challenge,
+    member_habit,
+    student_id,
+    today_value=None,
+    goal_titles=None,
+):
+    return build_member_habit_statistics(
+        challenge,
+        member_habit,
+        today_value=today_value,
+        goal_titles=goal_titles,
+        first_day_eligibility=_first_day_habit_eligibility(
+            group,
+            challenge,
+            member_habit,
+            student_id,
+        ),
+    )
+
+
+def _habit_completion_access(
+    group,
+    student_id,
+    habit,
+    habit_index,
+    now=None,
+    preferred_date=None,
+    plan=None,
+    settings=None,
+    challenge=None,
+    member_habit=None,
+):
+    settings = settings if settings is not None else _get_student_planner_settings(group.id, student_id)
+    timezone_name, school_timezone = _student_timezone(group, student_id, settings)
+    current_time = now or datetime.now(school_timezone)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=school_timezone)
+    else:
+        current_time = current_time.astimezone(school_timezone)
+    if challenge is None and member_habit is None:
+        challenge, member_habit = _planner_challenge_context(group, student_id)
+    activation_at = _challenge_activation_at(challenge, member_habit, school_timezone)
+    target_dates = [preferred_date] if preferred_date else [current_time.date(), current_time.date() - timedelta(days=1)]
+    accesses = []
+
+    for target_date in target_dates:
+        if not _habit_is_scheduled_on(habit, target_date):
+            continue
+        target_plan = plan if plan and plan.plan_date == target_date else None
+        schedule_items = _completion_schedule_items(
+            group,
+            student_id,
+            target_date,
+            habit,
+            habit_index,
+            plan=target_plan,
+            settings=settings,
+        )
+        progress_entry = _habit_progress_for_date(habit, target_date)
+        periodic = habit.get('habitType') == 'periodic'
+        logged_occurrences = list((progress_entry or {}).get('periodicLoggedOccurrences') or [])
+        if periodic and not logged_occurrences:
+            legacy_count = max(0, int((progress_entry or {}).get('periodicCompleted') or 0))
+            logged_occurrences = list(range(min(legacy_count, len(schedule_items))))
+        access = build_completion_window_access(
+            target_date,
+            schedule_items,
+            current_time,
+            timezone_name=timezone_name,
+            completed=bool((progress_entry or {}).get('completed')),
+            periodic=periodic,
+            logged_occurrence_indexes=logged_occurrences,
+            eligible_after=activation_at,
+        )
+        access['challengeActivationAt'] = activation_at.isoformat() if activation_at else None
+        accesses.append(access)
+
+    active_access = next((access for access in accesses if access.get('windowOpen')), None)
+    if active_access:
+        return active_access
+    if accesses:
+        return accesses[0]
+    target_date = preferred_date or current_time.date()
+    return {
+        'date': target_date.isoformat(),
+        'timezone': timezone_name,
+        'status': 'not-scheduled',
+        'windowOpen': False,
+        'canComplete': False,
+        'activeOccurrenceIndex': None,
+        'eligibleOccurrenceIndexes': [],
+        'eligibleOccurrenceCount': 0,
+        'exemptOccurrenceCount': 0,
+        'activeWindow': None,
+        'nextWindow': None,
+        'windows': [],
+        'challengeActivationAt': activation_at.isoformat() if activation_at else None,
+    }
+
+
+def _completion_window_error(access):
+    if access.get('status') == 'upcoming' and access.get('nextWindow'):
+        next_window = access['nextWindow']
+        message = (
+            f"This habit opens at {next_window['opensTime']} and can be completed until "
+            f"{next_window['closesTime']}."
+        )
+    elif access.get('status') == 'not-scheduled':
+        message = 'This habit is not scheduled for today.'
+    elif access.get('status') == 'not-applicable':
+        message = 'This habit happened before your challenge began and is not counted today.'
+    else:
+        message = 'The completion window for this habit has closed.'
+    return jsonify({
+        'error': message,
+        'code': 'HABIT_COMPLETION_WINDOW_CLOSED',
+        'completionWindow': access,
+    }), 403
+
+
+def _validate_same_day_habit_schedule_changes(
+    group,
+    student_id,
+    target_date,
+    proposed_source_items,
+    existing_plan=None,
+    existing_settings=None,
+    now=None,
+):
+    timezone_name, school_timezone = _student_timezone(group, student_id, existing_settings)
+    school_now = now or datetime.now(school_timezone)
+    if school_now.tzinfo is None:
+        school_now = school_now.replace(tzinfo=school_timezone)
+    else:
+        school_now = school_now.astimezone(school_timezone)
+    if target_date < school_now.date():
+        return 'Past planner days cannot be changed.'
+    if target_date > school_now.date():
+        return None
+
+    challenge, member_habit = _planner_challenge_context(group, student_id)
+    activation_at = _challenge_activation_at(challenge, member_habit, school_now.tzinfo)
+    for habit_index, habit in enumerate((member_habit or {}).get('habits') or []):
+        if not _habit_is_scheduled_on(habit, target_date):
+            continue
+        existing_items = _completion_schedule_items(
+            group,
+            student_id,
+            target_date,
+            habit,
+            habit_index,
+            plan=existing_plan,
+            settings=existing_settings,
+        )
+        proposed_items = normalize_habit_schedule_items(proposed_source_items, habit, habit_index)
+        existing_access = build_completion_window_access(
+            target_date,
+            existing_items,
+            school_now,
+            timezone_name=timezone_name,
+            periodic=habit.get('habitType') == 'periodic',
+            eligible_after=activation_at,
+        )
+        proposed_access = build_completion_window_access(
+            target_date,
+            proposed_items,
+            school_now,
+            timezone_name=timezone_name,
+            periodic=habit.get('habitType') == 'periodic',
+            eligible_after=activation_at,
+        )
+        if (
+            proposed_access.get('eligibleOccurrenceCount', 0)
+            < existing_access.get('eligibleOccurrenceCount', 0)
+        ):
+            return 'A habit cannot be moved before the challenge began to remove it from today.'
+        for occurrence_index, existing_window in enumerate(existing_access.get('windows') or []):
+            if existing_window.get('eligible') is False:
+                continue
+            existing_signature = (
+                existing_window.get('startTime'),
+                existing_window.get('endTime'),
+            )
+            proposed_signature = (
+                proposed_items[occurrence_index].get('startTime'),
+                proposed_items[occurrence_index].get('endTime'),
+            ) if occurrence_index < len(proposed_items) else None
+            window_opened_at = datetime.fromisoformat(existing_window['opensAt'])
+            if proposed_signature != existing_signature and school_now >= window_opened_at:
+                habit_name = str(habit.get('name') or f'Habit {habit_index + 1}')
+                return (
+                    f"{habit_name} can no longer be rescheduled today because its completion "
+                    f"window opened at {existing_window['opensTime']}."
+                )
+    return None
+
+
+def _google_calendar_can_list_calendars(settings):
+    granted_scopes = set(str(settings.google_calendar_scopes or '').split()) if settings else set()
+    return bool(granted_scopes.intersection({
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/calendar.calendarlist',
+        'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+    }))
+
+
+def _planner_settings_response(settings):
+    payload = settings.to_dict() if settings else {
+        'wakeTime': '07:00',
+        'bedtime': '22:00',
+        'schoolCommuteMinutes': 0,
+        'timezone': 'Europe/London',
+        'recurringReminders': [],
+        'aiWeeklyTemplates': {},
+        'rewardPreferences': {},
+        'googleCalendarConnected': False,
+        'googleCalendarHiddenEventCount': 0,
+    }
+    payload['googleCalendarConfigured'] = bool(
+        os.getenv('GOOGLE_CALENDAR_CLIENT_ID')
+        and os.getenv('GOOGLE_CALENDAR_CLIENT_SECRET')
+        and os.getenv('GOOGLE_CALENDAR_REDIRECT_URI')
+    )
+    payload['googleCalendarNeedsReconnect'] = bool(
+        payload.get('googleCalendarConnected')
+        and not _google_calendar_can_list_calendars(settings)
+    )
+    return payload
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/planner-settings', methods=['GET', 'PUT'])
+@jwt_required()
+def student_planner_settings(group_id, student_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'School not found'}), 404
+        if current_user_id != student_id:
+            return jsonify({'error': 'Students can only manage their own planner settings'}), 403
+        if not is_planner_member(group, student_id):
+            return jsonify({'error': 'Account not found in workspace'}), 404
+
+        settings = _get_student_planner_settings(group.id, student_id, create=request.method == 'PUT')
+        if request.method == 'GET':
+            if settings and any(
+                not (reminder or {}).get('createdDate')
+                for reminder in (settings.recurring_reminders or [])
+            ):
+                _, student_timezone = _student_timezone(group, student_id, settings)
+                settings.recurring_reminders = _normalize_recurring_reminders(
+                    settings.recurring_reminders,
+                    default_created_date=datetime.now(student_timezone).date().isoformat(),
+                )
+                flag_modified(settings, 'recurring_reminders')
+                settings.updated_at = datetime.utcnow()
+                db.session.commit()
+            return jsonify({'settings': _planner_settings_response(settings)}), 200
+
+        data = request.get_json() or {}
+        wake_time = str(data.get('wakeTime') or settings.wake_time or '07:00').strip()
+        bedtime = str(data.get('bedtime') or settings.bedtime or '22:00').strip()
+        if not _is_valid_planner_time(wake_time) or not _is_valid_planner_time(bedtime):
+            return jsonify({'error': 'Wake time and bedtime must use HH:MM format'}), 400
+        settings.wake_time = wake_time
+        settings.bedtime = bedtime
+        if 'schoolCommuteMinutes' in data:
+            try:
+                settings.school_commute_minutes = max(0, min(180, int(data.get('schoolCommuteMinutes') or 0)))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'School commute must be a number of minutes between 0 and 180'}), 400
+        if 'timezone' in data:
+            requested_timezone = str(data.get('timezone') or '').strip()
+            timezone_name, _ = resolve_timezone(requested_timezone)
+            if not requested_timezone or timezone_name != requested_timezone:
+                return jsonify({'error': 'A valid IANA device timezone is required'}), 400
+            settings.timezone_name = timezone_name
+        if 'recurringReminders' in data:
+            _, student_timezone = _student_timezone(group, student_id, settings)
+            settings.recurring_reminders = _normalize_recurring_reminders(
+                data.get('recurringReminders'),
+                default_created_date=datetime.now(student_timezone).date().isoformat(),
+            )
+            flag_modified(settings, 'recurring_reminders')
+        if 'aiWeeklyTemplates' in data:
+            next_templates = _normalize_ai_weekly_templates(data.get('aiWeeklyTemplates'))
+            _, school_timezone = _student_timezone(group, student_id, settings)
+            today_value = datetime.now(school_timezone).date()
+            today_plan = StudentSchedulePlan.query.filter_by(
+                group_id=group.id,
+                student_id=student_id,
+                plan_date=today_value,
+            ).first()
+            if not today_plan or not today_plan.items:
+                schedule_error = _validate_same_day_habit_schedule_changes(
+                    group,
+                    student_id,
+                    today_value,
+                    next_templates.get(today_value.strftime('%A')) or [],
+                    existing_plan=today_plan,
+                    existing_settings=settings,
+                )
+                if schedule_error:
+                    return jsonify({'error': schedule_error, 'code': 'HABIT_SCHEDULE_WINDOW_LOCKED'}), 403
+            settings.ai_weekly_templates = next_templates
+            flag_modified(settings, 'ai_weekly_templates')
+        settings.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'settings': _planner_settings_response(settings)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/rewards', methods=['GET', 'PUT'])
+@jwt_required()
+def student_rewards(group_id, student_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Workspace not found'}), 404
+        if current_user_id != student_id:
+            return jsonify({'error': 'Clients can only customise their own rewards'}), 403
+        current_user = User.query.get(current_user_id)
+        if not any(member.id == student_id for member in get_group_members_list(group)) and not is_staff_group_member(group, current_user):
+            return jsonify({'error': 'Client not found in workspace'}), 404
+
+        settings = _get_student_planner_settings(group.id, student_id, create=request.method == 'PUT')
+        rewards = _build_student_rewards(group, student_id, settings)
+        if request.method == 'GET':
+            db.session.commit()
+            return jsonify({'rewards': rewards}), 200
+
+        data = request.get_json() or {}
+        selected_theme_id = str(
+            data.get('selectedThemeId') or rewards['preferences']['selectedThemeId']
+        ).strip()
+        selected_title_id = str(
+            data.get('selectedTitleId') or rewards['preferences']['selectedTitleId']
+        ).strip()
+        unlocked_theme_ids = {item['id'] for item in rewards['themes'] if item['unlocked']}
+        unlocked_title_ids = {item['id'] for item in rewards['titles'] if item['unlocked']}
+        if selected_theme_id not in unlocked_theme_ids:
+            return jsonify({'error': 'That theme has not been unlocked yet'}), 400
+        if selected_title_id not in unlocked_title_ids:
+            return jsonify({'error': 'That title has not been unlocked yet'}), 400
+
+        current_preferences = dict(settings.reward_preferences or {})
+        owned_item_ids = {
+            purchase.get('itemId')
+            for purchase in rewards.get('economy', {}).get('purchases', [])
+        }
+        requested_avatar = data.get('avatar') if 'avatar' in data else current_preferences.get('avatar')
+        current_preferences.update({
+            'selectedThemeId': selected_theme_id,
+            'selectedTitleId': selected_title_id,
+            'avatar': _normalize_ip_avatar(requested_avatar, owned_item_ids, _ip_shop_catalog_for_group(group)),
+        })
+        settings.reward_preferences = current_preferences
+        flag_modified(settings, 'reward_preferences')
+        settings.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'rewards': _build_student_rewards(group, student_id, settings)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/rewards/shop/purchase', methods=['POST'])
+@jwt_required()
+def purchase_student_reward(group_id, student_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'Workspace not found'}), 404
+        if current_user_id != student_id:
+            return jsonify({'error': 'Students can only spend their own IP Bucks'}), 403
+        current_user = User.query.get(current_user_id)
+        if not any(member.id == student_id for member in get_group_members_list(group)) and not is_staff_group_member(group, current_user):
+            return jsonify({'error': 'Client not found in workspace'}), 404
+
+        data = request.get_json() or {}
+        item_id = str(data.get('itemId') or '').strip()
+        item = next((catalog_item for catalog_item in _ip_shop_catalog_for_group(group) if catalog_item['id'] == item_id), None)
+        if not item:
+            return jsonify({'error': 'Shop item not found'}), 404
+        if item.get('comingSoon'):
+            return jsonify({'error': 'This reward is coming soon and cannot be purchased yet'}), 409
+
+        wallet, _ = _sync_student_ip_bucks(group, student_id)
+        existing_purchase = StudentIpPurchase.query.filter_by(wallet_id=wallet.id, item_id=item_id).first()
+        if existing_purchase:
+            settings = _get_student_planner_settings(group.id, student_id)
+            db.session.commit()
+            return jsonify({'rewards': _build_student_rewards(group, student_id, settings), 'alreadyOwned': True}), 200
+        price = int(item['price'])
+        if (wallet.balance or 0) < price:
+            return jsonify({
+                'error': f"You need {price - (wallet.balance or 0)} more IP Bucks for {item['name']}",
+                'balance': wallet.balance or 0,
+                'price': price,
+            }), 400
+
+        wallet.balance -= price
+        wallet.lifetime_spent = (wallet.lifetime_spent or 0) + price
+        wallet.updated_at = datetime.utcnow()
+        db.session.add(StudentIpPurchase(
+            wallet_id=wallet.id,
+            item_id=item['id'],
+            item_type=item['kind'],
+            price=price,
+        ))
+        db.session.add(StudentIpTransaction(
+            wallet_id=wallet.id,
+            group_id=group.id,
+            amount=-price,
+            kind='shop_purchase',
+            reference_key=f"shop-purchase:v1:s{student_id}:i{item['id']}",
+            description=f"Purchased {item['name']}",
+            details={'itemId': item['id'], 'itemName': item['name'], 'itemType': item['kind']},
+        ))
+        db.session.commit()
+        settings = _get_student_planner_settings(group.id, student_id)
+        return jsonify({
+            'message': f"{item['name']} added to your collection",
+            'rewards': _build_student_rewards(group, student_id, settings),
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+STUDENT_TOOL_FEATURE_ITEMS = {
+    'pomodoro': 'feature-pomodoro',
+    'meditation': 'feature-meditation',
+    'study-planner': 'feature-study-planner-pro',
+    'fitness-coach': 'feature-ai-fitness-coach',
+    'spanish-tutor': 'feature-gcse-spanish-tutor',
+    'french-tutor': 'feature-gcse-french-tutor',
+}
+MEDITATION_MUSIC_EXTENSIONS = {'mp3', 'wav', 'm4a', 'ogg'}
+MEDITATION_DEFAULT_MUSIC_FILENAME = 'ip-meditation-background-15min.mp3'
+
+
+def _student_tool_media_dir():
+    configured_dir = os.getenv('MEDITATION_MEDIA_DIR')
+    media_dir = configured_dir or os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads', 'meditations')
+    os.makedirs(media_dir, exist_ok=True)
+    return media_dir
+
+
+def _default_meditation_music_filename():
+    return secure_filename(os.getenv('MEDITATION_DEFAULT_MUSIC_FILENAME', MEDITATION_DEFAULT_MUSIC_FILENAME)) or MEDITATION_DEFAULT_MUSIC_FILENAME
+
+
+def _default_meditation_music_path():
+    return os.path.join(_student_tool_media_dir(), _default_meditation_music_filename())
+
+
+def _default_meditation_music_available():
+    music_path = _default_meditation_music_path()
+    return os.path.isfile(music_path) and os.path.getsize(music_path) <= 15 * 1024 * 1024
+
+
+def _owned_student_feature_ids(student_id):
+    wallet = StudentIpWallet.query.filter_by(student_id=student_id).first()
+    if not wallet:
+        return set()
+    return {
+        purchase.item_id
+        for purchase in StudentIpPurchase.query.filter_by(wallet_id=wallet.id, item_type='feature').all()
+    }
+
+
+def _get_or_create_student_tool_state(group_id, student_id):
+    state = StudentToolState.query.filter_by(group_id=group_id, student_id=student_id).first()
+    if not state:
+        state = StudentToolState(group_id=group_id, student_id=student_id)
+        db.session.add(state)
+        db.session.flush()
+    return state
+
+
+def _student_tool_state_payload(state):
+    payload = state.to_dict()
+    study_library = normalize_study_plan_library(state.study_plan)
+    payload['studyPlan'] = active_study_plan(study_library)
+    payload['studyPlans'] = study_library['plans']
+    payload['activeStudyPlanId'] = study_library['activePlanId']
+    return payload
+
+
+def _student_tutor_timezone(group, student_id, requested_timezone=None):
+    candidate = str(requested_timezone or '').strip()
+    if candidate:
+        timezone_name, timezone_value = resolve_timezone(candidate)
+        if timezone_name == candidate:
+            return timezone_name, timezone_value
+    return _student_timezone(group, student_id)
+
+
+def _student_tutor_usage(group, state, tool_id, requested_timezone=None):
+    timezone_name, timezone_value = _student_tutor_timezone(group, state.student_id, requested_timezone)
+    today_key = datetime.now(timezone_value).date().isoformat()
+    return build_tutor_daily_usage(state.tutor_progress, tool_id, today_key, timezone_name)
+
+
+def _is_feature_lab_admin(group, user):
+    return bool(user and user.account_role == 'admin' and can_manage_group(group, user.id))
+
+
+def _student_tool_request_context(group_id):
+    current_user_id = int(get_jwt_identity())
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not group:
+        return None, None, (jsonify({'error': 'Workspace not found'}), 404)
+    user = User.query.get(current_user_id)
+    if not user or not user.is_active or not user_can_access_group(group, current_user_id):
+        return None, None, (jsonify({'error': 'Workspace access denied'}), 403)
+    return group, user, None
+
+
+def _student_has_tool_access(student_id, tool_id):
+    feature_item_id = STUDENT_TOOL_FEATURE_ITEMS.get(tool_id)
+    return bool(feature_item_id and feature_item_id in _owned_student_feature_ids(student_id))
+
+
+def _can_use_performance_tools(group, user):
+    return bool(user and (user.account_role == 'student' or is_staff_group_member(group, user)))
+
+
+def _user_has_performance_tool_access(group, user, tool_id):
+    if is_staff_group_member(group, user):
+        return tool_id in STUDENT_TOOL_FEATURE_ITEMS
+    return bool(user and user.account_role == 'student' and _student_has_tool_access(user.id, tool_id))
+
+
+def _meditation_media_serializer():
+    return URLSafeTimedSerializer(os.getenv('JWT_SECRET_KEY', 'dev-secret-key'), salt='meditation-media')
+
+
+def _meditation_media_url(group, filename):
+    if not filename:
+        return None
+    group_id = group.id if group else None
+    token = _meditation_media_serializer().dumps({'groupId': group_id, 'filename': filename})
+    media_path = (
+        f'/api/groups/{group.group_id}/student-tools/media/{filename}'
+        if group
+        else f'/api/groups/global-feature-lab/media/{filename}'
+    )
+    return f"{request.host_url.rstrip('/')}{media_path}?token={quote(token, safe='')}"
+
+
+def _serialize_meditation_session(group, session):
+    payload = session.to_dict()
+    alignment = session.alignment or {}
+    end_times = alignment.get('character_end_times_seconds') or []
+    media_group = None if payload['isGlobal'] else group
+    return {
+        'id': payload['id'],
+        'sessionKey': payload['sessionKey'],
+        'session': payload['session'],
+        'narrationUrl': _meditation_media_url(media_group, payload['narrationFilename']),
+        'musicUrl': _meditation_media_url(media_group, payload['musicFilename']),
+        'narrationDurationSeconds': round(float(end_times[-1]), 2) if end_times else None,
+        'durationEstimate': estimate_meditation_duration(payload['session']),
+        'isPublished': payload['isPublished'],
+        'isGlobal': payload['isGlobal'],
+        'createdAt': payload['createdAt'],
+    }
+
+
+def _elevenlabs_break(seconds):
+    seconds = max(0, min(3, float(seconds or 0)))
+    return f' <break time="{seconds:.1f}s" /> ' if seconds else ' '
+
+
+def _elevenlabs_meditation_audio(session_payload, group):
+    api_key = os.getenv('ELEVENLABS_API_KEY')
+    voice_id = os.getenv('ELEVENLABS_VOICE_ID')
+    if not api_key or not voice_id:
+        raise RuntimeError('ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID must be configured on the server.')
+    narration = session_payload['narration']
+    opening = narration['opening']
+    closing = narration['closing']
+    spoken_parts = [html.escape(opening['text'], quote=False), _elevenlabs_break(opening['pauseAfterSeconds'])]
+    for segment in narration['segments']:
+        spoken_parts.extend([
+            _elevenlabs_break(segment['pauseBeforeSeconds']),
+            html.escape(segment['text'], quote=False),
+            _elevenlabs_break(segment['pauseAfterSeconds']),
+        ])
+    spoken_parts.extend([html.escape(closing['text'], quote=False), _elevenlabs_break(closing['pauseAfterSeconds'])])
+    spoken_text = ''.join(spoken_parts)
+    voice_direction = session_payload['voiceDirection']
+    request_payload = {
+        'text': spoken_text,
+        'model_id': os.getenv('ELEVENLABS_MODEL_ID', 'eleven_multilingual_v2'),
+        'voice_settings': {
+            'stability': voice_direction['stability'],
+            'similarity_boost': voice_direction['similarityBoost'],
+            'style': voice_direction['style'],
+            'use_speaker_boost': voice_direction['useSpeakerBoost'],
+            'speed': voice_direction['speed'],
+        },
+    }
+    request_url = (
+        f'https://api.elevenlabs.io/v1/text-to-speech/{quote(voice_id, safe="")}/with-timestamps'
+        '?output_format=mp3_44100_128'
+    )
+    request_obj = UrlRequest(
+        request_url,
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers={'xi-api-key': api_key, 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urlopen(request_obj, timeout=120) as response:
+            response_payload = json.loads(response.read().decode('utf-8'))
+    except HTTPError as exc:
+        error_body = exc.read().decode('utf-8', errors='replace')
+        raise RuntimeError(f'ElevenLabs rejected the narration request: {error_body[:600]}') from exc
+    except URLError as exc:
+        raise RuntimeError(f'ElevenLabs could not be reached: {exc.reason}') from exc
+
+    encoded_audio = response_payload.get('audio_base64')
+    if not encoded_audio:
+        raise RuntimeError('ElevenLabs returned no narration audio.')
+    try:
+        audio_bytes = base64.b64decode(encoded_audio, validate=True)
+    except ValueError as exc:
+        raise RuntimeError('ElevenLabs returned invalid audio data.') from exc
+    if not audio_bytes:
+        raise RuntimeError('ElevenLabs returned an empty narration file.')
+    filename = f'{group.id if group else "global"}-{uuid.uuid4().hex}.mp3'
+    with open(os.path.join(_student_tool_media_dir(), filename), 'wb') as audio_file:
+        audio_file.write(audio_bytes)
+    return filename, response_payload.get('alignment') or {}
+
+
+@groups_bp.route('/<group_id>/student-tools/state', methods=['GET'])
+@jwt_required()
+def get_student_tool_state(group_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        if not _can_use_performance_tools(group, user):
+            return jsonify({'error': 'Performance tools are unavailable for this account in this workspace'}), 403
+        state = _get_or_create_student_tool_state(group.id, user.id)
+        requested_timezone = request.args.get('timezone')
+        staff_access = is_staff_group_member(group, user)
+        owned_item_ids = (
+            {item_id for item_id in STUDENT_TOOL_FEATURE_ITEMS.values()}
+            if staff_access
+            else _owned_student_feature_ids(user.id)
+        )
+        source_catalog = IP_SHOP_CATALOG if staff_access else _ip_shop_catalog_for_group(group)
+        feature_catalog = [
+            {
+                **item,
+                'owned': item['id'] in owned_item_ids,
+            }
+            for item in source_catalog
+            if item['kind'] == 'feature'
+        ]
+        db.session.commit()
+        return jsonify({
+            'state': _student_tool_state_payload(state),
+            'features': feature_catalog,
+            'entitlements': sorted(owned_item_ids),
+            'allToolsIncluded': staff_access,
+            'aiConfigured': bool(os.getenv('OPENAI_API_KEY')),
+            'tutorConfig': build_tutor_config_payload(),
+            'tutorUsage': {
+                tool_id: _student_tutor_usage(group, state, tool_id, requested_timezone)
+                for tool_id in ('spanish-tutor', 'french-tutor')
+            },
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/study-plans', methods=['PUT'])
+@jwt_required()
+def save_student_study_plan(group_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        if not _can_use_performance_tools(group, user):
+            return jsonify({'error': 'Study plans are unavailable for this account'}), 403
+        if not _user_has_performance_tool_access(group, user, 'study-planner'):
+            return jsonify({'error': 'Unlock Study Planner Pro in the IP Shop first', 'code': 'FEATURE_LOCKED'}), 403
+        data = request.get_json() or {}
+        if len(json.dumps(data.get('plan') or {})) > 30000:
+            return jsonify({'error': 'Study plan is too large'}), 400
+        plan = validate_structured_output(data.get('plan'), build_study_plan_schema())
+        state = _get_or_create_student_tool_state(group.id, user.id)
+        library = normalize_study_plan_library(state.study_plan)
+        requested_plan_id = str(data.get('planId') or '').strip()[:80]
+        now_iso = datetime.utcnow().isoformat()
+        existing = next((item for item in library['plans'] if item['id'] == requested_plan_id), None)
+        plan_id = existing['id'] if existing else uuid.uuid4().hex
+        entry = {
+            'id': plan_id,
+            'name': str(data.get('name') or plan.get('title') or 'Study plan').strip()[:120] or 'Study plan',
+            'createdAt': existing.get('createdAt') if existing else now_iso,
+            'updatedAt': now_iso,
+            'plan': plan,
+        }
+        library['plans'] = [item for item in library['plans'] if item['id'] != plan_id]
+        library['plans'].append(entry)
+        library['plans'] = library['plans'][-STUDY_PLAN_LIBRARY_LIMIT:]
+        library['activePlanId'] = plan_id
+        state.study_plan = library
+        state.updated_at = datetime.utcnow()
+        flag_modified(state, 'study_plan')
+        db.session.commit()
+        return jsonify({
+            'message': 'Study plan saved',
+            'entry': entry,
+            'state': _student_tool_state_payload(state),
+        }), 200
+    except OpenAIResponsesError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 422
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/study-plans/<plan_id>/active', methods=['PUT'])
+@jwt_required()
+def select_student_study_plan(group_id, plan_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        if not _can_use_performance_tools(group, user):
+            return jsonify({'error': 'Study plans are unavailable for this account'}), 403
+        state = _get_or_create_student_tool_state(group.id, user.id)
+        library = normalize_study_plan_library(state.study_plan)
+        if plan_id not in {item['id'] for item in library['plans']}:
+            return jsonify({'error': 'Study plan not found'}), 404
+        library['activePlanId'] = plan_id
+        state.study_plan = library
+        state.updated_at = datetime.utcnow()
+        flag_modified(state, 'study_plan')
+        db.session.commit()
+        return jsonify({'state': _student_tool_state_payload(state)}), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/study-plans/<plan_id>', methods=['DELETE'])
+@jwt_required()
+def delete_student_study_plan(group_id, plan_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        if not _can_use_performance_tools(group, user):
+            return jsonify({'error': 'Study plans are unavailable for this account'}), 403
+        state = _get_or_create_student_tool_state(group.id, user.id)
+        library = normalize_study_plan_library(state.study_plan)
+        if plan_id not in {item['id'] for item in library['plans']}:
+            return jsonify({'error': 'Study plan not found'}), 404
+        library['plans'] = [item for item in library['plans'] if item['id'] != plan_id]
+        if library['activePlanId'] == plan_id:
+            library['activePlanId'] = library['plans'][-1]['id'] if library['plans'] else ''
+        state.study_plan = library
+        state.updated_at = datetime.utcnow()
+        flag_modified(state, 'study_plan')
+        db.session.commit()
+        return jsonify({'message': 'Study plan deleted', 'state': _student_tool_state_payload(state)}), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/fitness-plan', methods=['PUT'])
+@jwt_required()
+def save_student_fitness_plan(group_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        if not _can_use_performance_tools(group, user):
+            return jsonify({'error': 'Fitness plans are unavailable for this account'}), 403
+        if not _user_has_performance_tool_access(group, user, 'fitness-coach'):
+            return jsonify({'error': 'Unlock AI Fitness Coach in the IP Shop first', 'code': 'FEATURE_LOCKED'}), 403
+        data = request.get_json() or {}
+        if len(json.dumps(data.get('plan') or {})) > 24000:
+            return jsonify({'error': 'Fitness plan is too large'}), 400
+        plan = validate_structured_output(data.get('plan'), build_fitness_plan_schema())
+        state = _get_or_create_student_tool_state(group.id, user.id)
+        state.fitness_plan = plan
+        state.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({
+            'message': 'Fitness plan saved',
+            'fitnessPlan': state.fitness_plan,
+            'updatedAt': state.updated_at.isoformat(),
+        }), 200
+    except OpenAIResponsesError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 422
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/ai', methods=['POST'])
+@jwt_required()
+def generate_student_tool_content(group_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        data = request.get_json() or {}
+        tool_id = str(data.get('toolId') or '').strip()
+        admin_test = bool(data.get('testMode')) and _is_feature_lab_admin(group, user)
+        if tool_id not in STUDENT_TOOL_FEATURE_ITEMS:
+            return jsonify({'error': 'Unknown student tool'}), 400
+        if not admin_test:
+            if not _can_use_performance_tools(group, user):
+                return jsonify({'error': 'This tool is unavailable for this account'}), 403
+            if not _user_has_performance_tool_access(group, user, tool_id):
+                return jsonify({'error': 'Unlock this tool in the IP Shop first', 'code': 'FEATURE_LOCKED'}), 403
+        inputs = data.get('inputs') if isinstance(data.get('inputs'), dict) else {}
+        if len(json.dumps(inputs)) > 12000:
+            return jsonify({'error': 'Tool inputs are too large'}), 400
+
+        state = None
+        tutor_usage = None
+        if not admin_test and tool_id in {'spanish-tutor', 'french-tutor'}:
+            state = _get_or_create_student_tool_state(group.id, user.id)
+            tutor_usage = _student_tutor_usage(group, state, tool_id, inputs.get('deviceTimezone'))
+            if tutor_usage['remaining'] <= 0:
+                return jsonify({
+                    'error': f"You have used today's {tutor_usage['limit']} {tool_id.split('-')[0].capitalize()} tutor messages. Come back tomorrow for a fresh session.",
+                    'code': 'DAILY_TUTOR_LIMIT',
+                    'tutorUsage': tutor_usage,
+                }), 429
+
+        schema = None
+        schema_name = None
+        max_output_tokens = 3000
+        if tool_id == 'study-planner':
+            schema = build_study_plan_schema()
+            schema_name = 'ip_study_plan_v1'
+            system_prompt, user_prompt = build_study_plan_prompts(inputs)
+            max_output_tokens = 5200
+        elif tool_id == 'fitness-coach':
+            schema = build_fitness_plan_schema()
+            schema_name = 'ip_youth_fitness_plan_v1'
+            system_prompt, user_prompt = build_fitness_plan_prompts(inputs)
+            max_output_tokens = 4800
+        elif tool_id in {'spanish-tutor', 'french-tutor'}:
+            language = tool_id.split('-')[0]
+            if language not in GCSE_LANGUAGES:
+                return jsonify({'error': 'Unsupported tutor language'}), 400
+            schema = build_tutor_response_schema()
+            schema_name = f'ip_gcse_{language}_tutor_v2'
+            history = data.get('history') if isinstance(data.get('history'), list) else []
+            previous_activity = data.get('previousActivity') if isinstance(data.get('previousActivity'), dict) else {}
+            system_prompt, user_prompt = build_tutor_prompts(
+                language,
+                inputs,
+                history,
+                str(data.get('answer') or '')[:1200],
+                previous_activity,
+            )
+            max_output_tokens = 3200
+        else:
+            return jsonify({'error': 'This tool does not use AI generation'}), 400
+
+        result = create_structured_response(
+            model=OPENAI_STUDENT_TOOLS_MODEL,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema_name=schema_name,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        )
+        if not admin_test and tool_id in {'spanish-tutor', 'french-tutor'}:
+            state = state or _get_or_create_student_tool_state(group.id, user.id)
+            tutor_progress = dict(state.tutor_progress or {})
+            previous_progress = tutor_progress.get(tool_id) if isinstance(tutor_progress.get(tool_id), dict) else {}
+            tutor_usage = tutor_usage or _student_tutor_usage(group, state, tool_id, inputs.get('deviceTimezone'))
+            tutor_usage = {
+                **tutor_usage,
+                'used': min(tutor_usage['limit'], tutor_usage['used'] + 1),
+                'remaining': max(0, tutor_usage['remaining'] - 1),
+            }
+            tutor_progress[tool_id] = {
+                **previous_progress,
+                'lastScore': result.get('score', 0),
+                'lastSkillTag': result.get('activity', {}).get('skillTag', ''),
+                'examBoard': inputs.get('examBoard', ''),
+                'topic': inputs.get('topic', ''),
+                'dailyDate': tutor_usage['date'],
+                'dailyCount': tutor_usage['used'],
+                'dailyTimezone': tutor_usage['timezone'],
+                'updatedAt': datetime.utcnow().isoformat(),
+            }
+            state.tutor_progress = tutor_progress
+            flag_modified(state, 'tutor_progress')
+            state.updated_at = datetime.utcnow()
+            db.session.commit()
+        return jsonify({
+            'result': result,
+            'contract': structured_contract_metadata(schema_name),
+            'testMode': admin_test,
+            'saved': bool(not admin_test and tool_id in {'spanish-tutor', 'french-tutor'}),
+            'tutorUsage': tutor_usage,
+        }), 200
+    except OpenAIResponsesError as exc:
+        db.session.rollback()
+        status_code = 503 if 'OPENAI_API_KEY' in str(exc) else 502
+        return jsonify({'error': str(exc)}), status_code
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/meditations', methods=['GET'])
+@jwt_required()
+def get_student_meditations(group_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        admin_test = _is_feature_lab_admin(group, user)
+        if not admin_test and not _user_has_performance_tool_access(group, user, 'meditation'):
+            return jsonify({'error': 'Unlock Guided Meditation in the IP Shop first', 'code': 'FEATURE_LOCKED'}), 403
+        sessions = MeditationSession.query.filter(
+            MeditationSession.is_published.is_(True),
+            or_(MeditationSession.group_id == group.id, MeditationSession.is_global.is_(True)),
+        ).order_by(MeditationSession.created_at.desc()).all()
+        return jsonify({'sessions': [_serialize_meditation_session(group, session) for session in sessions]}), 200
+    except Exception as exc:
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/student-tools/media/<path:filename>', methods=['GET'])
+def get_student_tool_media(group_id, filename):
+    group = Group.query.filter_by(group_id=group_id).first()
+    safe_name = secure_filename(filename)
+    allowed_name = bool(group and (safe_name.startswith(f'{group.id}-') or safe_name == _default_meditation_music_filename()))
+    if not group or safe_name != filename or not allowed_name:
+        return jsonify({'error': 'Media not found'}), 404
+    try:
+        token_payload = _meditation_media_serializer().loads(request.args.get('token') or '', max_age=6 * 60 * 60)
+    except (BadSignature, SignatureExpired):
+        return jsonify({'error': 'Media link is invalid or has expired'}), 403
+    if token_payload.get('groupId') != group.id or token_payload.get('filename') != safe_name:
+        return jsonify({'error': 'Media link is invalid'}), 403
+    return send_from_directory(_student_tool_media_dir(), safe_name, conditional=True)
+
+
+@groups_bp.route('/global-feature-lab/media/<path:filename>', methods=['GET'])
+def get_global_student_tool_media(filename):
+    safe_name = secure_filename(filename)
+    if safe_name != filename:
+        return jsonify({'error': 'Media not found'}), 404
+    try:
+        token_payload = _meditation_media_serializer().loads(request.args.get('token') or '', max_age=6 * 60 * 60)
+    except (BadSignature, SignatureExpired):
+        return jsonify({'error': 'Media link is invalid or has expired'}), 403
+    if token_payload.get('groupId') is not None or token_payload.get('filename') != safe_name:
+        return jsonify({'error': 'Media link is invalid'}), 403
+    session_owns_media = MeditationSession.query.filter(
+        MeditationSession.is_global.is_(True),
+        or_(
+            MeditationSession.narration_filename == safe_name,
+            MeditationSession.music_filename == safe_name,
+        ),
+    ).first()
+    allowed_name = bool(
+        safe_name.startswith('global-')
+        or safe_name == _default_meditation_music_filename()
+        or session_owns_media
+    )
+    if not allowed_name:
+        return jsonify({'error': 'Media not found'}), 404
+    return send_from_directory(_student_tool_media_dir(), safe_name, conditional=True)
+
+
+@groups_bp.route('/<group_id>/feature-lab/config', methods=['GET'])
+@jwt_required()
+def get_feature_lab_config(group_id):
+    group, user, error = _student_tool_request_context(group_id)
+    if error:
+        return error
+    if not _is_feature_lab_admin(group, user):
+        return jsonify({'error': 'Admin Feature Lab access required'}), 403
+    default_music_path = _default_meditation_music_path()
+    return jsonify({
+        'openAiConfigured': bool(os.getenv('OPENAI_API_KEY')),
+        'elevenLabsConfigured': bool(os.getenv('ELEVENLABS_API_KEY') and os.getenv('ELEVENLABS_VOICE_ID')),
+        'studentToolsModel': OPENAI_STUDENT_TOOLS_MODEL,
+        'tutorConfig': build_tutor_config_payload(),
+        'meditationRequirements': [
+            'ELEVENLABS_API_KEY in the backend environment',
+            'ELEVENLABS_VOICE_ID copied from ElevenLabs My Voices',
+            f'One loopable MP3 background track named {_default_meditation_music_filename()}',
+        ],
+        'meditationDurations': list(MEDITATION_DURATION_MINUTES),
+        'meditationFocuses': [
+            {'key': key, **details}
+            for key, details in MEDITATION_FOCUS_OPTIONS.items()
+        ],
+        'defaultMusic': {
+            'filename': _default_meditation_music_filename(),
+            'path': os.path.abspath(default_music_path),
+            'available': _default_meditation_music_available(),
+            'sizeMb': round(os.path.getsize(default_music_path) / (1024 * 1024), 2) if os.path.isfile(default_music_path) else None,
+            'maxSizeMb': 15,
+        },
+        'meditationContract': structured_contract_metadata('ip_meditation_session_v1'),
+    }), 200
+
+
+@groups_bp.route('/<group_id>/feature-lab/meditation/prompt', methods=['POST'])
+@jwt_required()
+def create_meditation_manual_prompt(group_id):
+    group, user, error = _student_tool_request_context(group_id)
+    if error:
+        return error
+    if not _is_feature_lab_admin(group, user):
+        return jsonify({'error': 'Admin Feature Lab access required'}), 403
+    data = request.get_json() or {}
+    try:
+        duration_minutes = int(data.get('durationMinutes') or 10)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Duration must be 5, 10, 15, 20 or 30 minutes'}), 400
+    focus_key = str(data.get('focusKey') or 'deep-study-focus').strip()
+    try:
+        prompt = build_meditation_manual_prompt(
+            focus_key,
+            duration_minutes,
+            str(data.get('audience') or 'UK secondary school students aged 14 to 18')[:220],
+            str(data.get('notes') or '')[:1000],
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'prompt': prompt, 'contract': structured_contract_metadata('ip_meditation_session_v1')}), 200
+
+
+@groups_bp.route('/<group_id>/feature-lab/meditation/validate', methods=['POST'])
+@jwt_required()
+def validate_meditation_json(group_id):
+    group, user, error = _student_tool_request_context(group_id)
+    if error:
+        return error
+    if not _is_feature_lab_admin(group, user):
+        return jsonify({'error': 'Admin Feature Lab access required'}), 403
+    try:
+        data = request.get_json() or {}
+        session_payload = validate_meditation_payload(data.get('sessionJson') or data.get('session'))
+        duration_estimate = estimate_meditation_duration(session_payload)
+        return jsonify({
+            'session': session_payload,
+            'contract': structured_contract_metadata('ip_meditation_session_v1'),
+            'narrationCharacters': sum(
+                len(block['text'])
+                for block in [session_payload['narration']['opening'], *session_payload['narration']['segments'], session_payload['narration']['closing']]
+            ),
+            'durationEstimate': duration_estimate,
+        }), 200
+    except OpenAIResponsesError as exc:
+        return jsonify({'error': str(exc)}), 422
+
+
+@groups_bp.route('/<group_id>/feature-lab/meditation/music', methods=['POST'])
+@jwt_required()
+def upload_meditation_music(group_id):
+    group, user, error = _student_tool_request_context(group_id)
+    if error:
+        return error
+    if not _is_feature_lab_admin(group, user):
+        return jsonify({'error': 'Admin Feature Lab access required'}), 403
+    upload = request.files.get('file')
+    if not upload or not upload.filename:
+        return jsonify({'error': 'Choose a background audio file'}), 400
+    if request.content_length and request.content_length > 15 * 1024 * 1024:
+        return jsonify({'error': 'Background audio must be under 15 MB'}), 413
+    extension = upload.filename.rsplit('.', 1)[-1].lower() if '.' in upload.filename else ''
+    if extension not in MEDITATION_MUSIC_EXTENSIONS:
+        return jsonify({'error': 'Use MP3, WAV, M4A or OGG audio'}), 400
+    filename = f'{group.id}-{uuid.uuid4().hex}.{extension}'
+    upload.save(os.path.join(_student_tool_media_dir(), filename))
+    return jsonify({'filename': filename, 'url': _meditation_media_url(group, filename)}), 201
+
+
+@groups_bp.route('/<group_id>/feature-lab/meditations', methods=['POST'])
+@jwt_required()
+def create_meditation_session(group_id):
+    try:
+        group, user, error = _student_tool_request_context(group_id)
+        if error:
+            return error
+        if not _is_feature_lab_admin(group, user):
+            return jsonify({'error': 'Admin Feature Lab access required'}), 403
+        data = request.get_json() or {}
+        session_payload = validate_meditation_payload(data.get('sessionJson') or data.get('session'))
+        duration_estimate = estimate_meditation_duration(session_payload)
+        if duration_estimate['fitStatus'] == 'off-target':
+            return jsonify({
+                'error': 'The estimated narration length is too far from the planned session length. Regenerate or adjust the JSON before using ElevenLabs credits.',
+                'durationEstimate': duration_estimate,
+            }), 422
+        music_filename = secure_filename(str(data.get('musicFilename') or '')) or None
+        if not music_filename and _default_meditation_music_available():
+            music_filename = _default_meditation_music_filename()
+        if music_filename:
+            music_path = os.path.join(_student_tool_media_dir(), music_filename)
+            valid_music_name = music_filename.startswith(f'{group.id}-') or music_filename == _default_meditation_music_filename()
+            if not valid_music_name or not os.path.isfile(music_path):
+                return jsonify({'error': 'Uploaded background audio could not be found'}), 400
+        narration_filename, alignment = _elevenlabs_meditation_audio(session_payload, group)
+        session = MeditationSession(
+            group_id=group.id,
+            created_by_id=user.id,
+            session_key=uuid.uuid4().hex,
+            session_data=session_payload,
+            alignment=alignment,
+            narration_filename=narration_filename,
+            music_filename=music_filename,
+            is_published=bool(data.get('publish', True)),
+        )
+        db.session.add(session)
+        db.session.commit()
+        return jsonify({
+            'message': 'Guided meditation generated and published',
+            'session': _serialize_meditation_session(group, session),
+        }), 201
+    except OpenAIResponsesError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 422
+    except RuntimeError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 503
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+def _global_feature_lab_user():
+    current_user_id = int(get_jwt_identity())
+    user = User.query.get(current_user_id)
+    if not user or not user.is_active or user.account_role != 'admin':
+        return None, (jsonify({'error': 'Platform admin Feature Lab access required'}), 403)
+    return user, None
+
+
+def _global_feature_lab_config_payload():
+    default_music_path = _default_meditation_music_path()
+    return {
+        'openAiConfigured': bool(os.getenv('OPENAI_API_KEY')),
+        'elevenLabsConfigured': bool(os.getenv('ELEVENLABS_API_KEY') and os.getenv('ELEVENLABS_VOICE_ID')),
+        'studentToolsModel': OPENAI_STUDENT_TOOLS_MODEL,
+        'tutorConfig': build_tutor_config_payload(),
+        'meditationRequirements': [
+            'ELEVENLABS_API_KEY in the backend environment',
+            'ELEVENLABS_VOICE_ID copied from ElevenLabs My Voices',
+            f'One loopable MP3 background track named {_default_meditation_music_filename()}',
+        ],
+        'meditationDurations': list(MEDITATION_DURATION_MINUTES),
+        'meditationFocuses': [
+            {'key': key, **details}
+            for key, details in MEDITATION_FOCUS_OPTIONS.items()
+        ],
+        'defaultMusic': {
+            'filename': _default_meditation_music_filename(),
+            'path': os.path.abspath(default_music_path),
+            'available': _default_meditation_music_available(),
+            'sizeMb': round(os.path.getsize(default_music_path) / (1024 * 1024), 2) if os.path.isfile(default_music_path) else None,
+            'maxSizeMb': 15,
+        },
+        'meditationContract': structured_contract_metadata('ip_meditation_session_v1'),
+        'publishingScope': 'global',
+    }
+
+
+@groups_bp.route('/global-feature-lab/config', methods=['GET'])
+@jwt_required()
+def get_global_feature_lab_config():
+    _, error = _global_feature_lab_user()
+    if error:
+        return error
+    return jsonify(_global_feature_lab_config_payload()), 200
+
+
+@groups_bp.route('/global-feature-lab/ai', methods=['POST'])
+@jwt_required()
+def generate_global_feature_lab_ai():
+    try:
+        _, error = _global_feature_lab_user()
+        if error:
+            return error
+        data = request.get_json() or {}
+        tool_id = str(data.get('toolId') or '').strip()
+        inputs = data.get('inputs') if isinstance(data.get('inputs'), dict) else {}
+        if len(json.dumps(inputs)) > 12000:
+            return jsonify({'error': 'Tool inputs are too large'}), 400
+
+        if tool_id == 'study-planner':
+            schema = build_study_plan_schema()
+            schema_name = 'ip_study_plan_v1'
+            system_prompt, user_prompt = build_study_plan_prompts(inputs)
+            max_output_tokens = 5200
+        elif tool_id == 'fitness-coach':
+            schema = build_fitness_plan_schema()
+            schema_name = 'ip_youth_fitness_plan_v1'
+            system_prompt, user_prompt = build_fitness_plan_prompts(inputs)
+            max_output_tokens = 4800
+        elif tool_id in {'spanish-tutor', 'french-tutor'}:
+            language = tool_id.split('-')[0]
+            schema = build_tutor_response_schema()
+            schema_name = f'ip_gcse_{language}_tutor_v2'
+            history = data.get('history') if isinstance(data.get('history'), list) else []
+            previous_activity = data.get('previousActivity') if isinstance(data.get('previousActivity'), dict) else {}
+            system_prompt, user_prompt = build_tutor_prompts(
+                language,
+                inputs,
+                history,
+                str(data.get('answer') or '')[:1200],
+                previous_activity,
+            )
+            max_output_tokens = 3200
+        else:
+            return jsonify({'error': 'This Feature Lab tool does not use AI generation'}), 400
+
+        result = create_structured_response(
+            model=OPENAI_STUDENT_TOOLS_MODEL,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema_name=schema_name,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        )
+        return jsonify({
+            'result': result,
+            'contract': structured_contract_metadata(schema_name),
+            'testMode': True,
+            'publishingScope': 'global',
+        }), 200
+    except OpenAIResponsesError as exc:
+        status_code = 503 if 'OPENAI_API_KEY' in str(exc) else 502
+        return jsonify({'error': str(exc)}), status_code
+    except Exception as exc:
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/global-feature-lab/meditation/prompt', methods=['POST'])
+@jwt_required()
+def create_global_meditation_manual_prompt():
+    _, error = _global_feature_lab_user()
+    if error:
+        return error
+    data = request.get_json() or {}
+    try:
+        prompt = build_meditation_manual_prompt(
+            str(data.get('focusKey') or 'deep-study-focus').strip(),
+            int(data.get('durationMinutes') or 10),
+            str(data.get('audience') or 'UK secondary school students aged 14 to 18')[:220],
+            str(data.get('notes') or '')[:1000],
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'prompt': prompt, 'contract': structured_contract_metadata('ip_meditation_session_v1')}), 200
+
+
+@groups_bp.route('/global-feature-lab/meditation/validate', methods=['POST'])
+@jwt_required()
+def validate_global_meditation_json():
+    _, error = _global_feature_lab_user()
+    if error:
+        return error
+    try:
+        data = request.get_json() or {}
+        session_payload = validate_meditation_payload(data.get('sessionJson') or data.get('session'))
+        return jsonify({
+            'session': session_payload,
+            'contract': structured_contract_metadata('ip_meditation_session_v1'),
+            'narrationCharacters': sum(
+                len(block['text'])
+                for block in [session_payload['narration']['opening'], *session_payload['narration']['segments'], session_payload['narration']['closing']]
+            ),
+            'durationEstimate': estimate_meditation_duration(session_payload),
+        }), 200
+    except OpenAIResponsesError as exc:
+        return jsonify({'error': str(exc)}), 422
+
+
+@groups_bp.route('/global-feature-lab/meditation/music', methods=['POST'])
+@jwt_required()
+def upload_global_meditation_music():
+    _, error = _global_feature_lab_user()
+    if error:
+        return error
+    upload = request.files.get('file')
+    if not upload or not upload.filename:
+        return jsonify({'error': 'Choose a background audio file'}), 400
+    if request.content_length and request.content_length > 15 * 1024 * 1024:
+        return jsonify({'error': 'Background audio must be under 15 MB'}), 413
+    extension = upload.filename.rsplit('.', 1)[-1].lower() if '.' in upload.filename else ''
+    if extension not in MEDITATION_MUSIC_EXTENSIONS:
+        return jsonify({'error': 'Use MP3, WAV, M4A or OGG audio'}), 400
+    filename = f'global-{uuid.uuid4().hex}.{extension}'
+    upload.save(os.path.join(_student_tool_media_dir(), filename))
+    return jsonify({'filename': filename, 'url': _meditation_media_url(None, filename)}), 201
+
+
+@groups_bp.route('/global-feature-lab/meditations', methods=['GET', 'POST'])
+@jwt_required()
+def global_meditation_sessions():
+    user, error = _global_feature_lab_user()
+    if error:
+        return error
+    if request.method == 'GET':
+        sessions = MeditationSession.query.filter_by(is_global=True, is_published=True).order_by(MeditationSession.created_at.desc()).all()
+        return jsonify({'sessions': [_serialize_meditation_session(None, session) for session in sessions]}), 200
+    try:
+        data = request.get_json() or {}
+        session_payload = validate_meditation_payload(data.get('sessionJson') or data.get('session'))
+        duration_estimate = estimate_meditation_duration(session_payload)
+        if duration_estimate['fitStatus'] == 'off-target':
+            return jsonify({
+                'error': 'The estimated narration length is too far from the planned session length. Regenerate or adjust the JSON before using ElevenLabs credits.',
+                'durationEstimate': duration_estimate,
+            }), 422
+        music_filename = secure_filename(str(data.get('musicFilename') or '')) or None
+        if not music_filename and _default_meditation_music_available():
+            music_filename = _default_meditation_music_filename()
+        if music_filename:
+            music_path = os.path.join(_student_tool_media_dir(), music_filename)
+            valid_music_name = music_filename.startswith('global-') or music_filename == _default_meditation_music_filename()
+            if not valid_music_name or not os.path.isfile(music_path):
+                return jsonify({'error': 'Uploaded background audio could not be found'}), 400
+        narration_filename, alignment = _elevenlabs_meditation_audio(session_payload, None)
+        session = MeditationSession(
+            group_id=None,
+            created_by_id=user.id,
+            session_key=uuid.uuid4().hex,
+            session_data=session_payload,
+            alignment=alignment,
+            narration_filename=narration_filename,
+            music_filename=music_filename,
+            is_published=bool(data.get('publish', True)),
+            is_global=True,
+        )
+        db.session.add(session)
+        db.session.commit()
+        return jsonify({
+            'message': 'Guided meditation generated and published globally',
+            'session': _serialize_meditation_session(None, session),
+        }), 201
+    except OpenAIResponsesError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 422
+    except RuntimeError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 503
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+def _google_calendar_state_serializer():
+    return URLSafeTimedSerializer(os.getenv('JWT_SECRET_KEY', 'dev-secret-key'), salt='google-calendar-link')
+
+
+def _google_calendar_popup_response(status, message):
+    frontend_origin = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+    event_payload = json.dumps({'source': 'rituo-google-calendar', 'status': status, 'message': message})
+    response = make_response(f"""<!doctype html><html><body style="font-family:sans-serif;padding:32px;background:#081024;color:white"><h2>{'Google Calendar connected' if status == 'connected' else 'Connection unsuccessful'}</h2><p>You can close this window and return to your planner.</p><script>if(window.opener){{window.opener.postMessage({event_payload},{json.dumps(frontend_origin)});window.close();}}</script></body></html>""")
+    response.headers['Content-Type'] = 'text/html; charset=utf-8'
+    return response
+
+
+class GoogleCalendarApiError(RuntimeError):
+    def __init__(self, message, status_code=502):
+        super().__init__(message)
+        self.status_code = 409 if status_code == 401 else status_code
+
+
+def _google_calendar_access_token(settings, force_refresh=False):
+    if not settings or not settings.google_calendar_refresh_token:
+        raise GoogleCalendarApiError('Google Calendar is not connected', 409)
+    expiry = settings.google_calendar_token_expiry
+    if (
+        not force_refresh
+        and settings.google_calendar_access_token
+        and expiry
+        and expiry > datetime.utcnow() + timedelta(seconds=60)
+    ):
+        return settings.google_calendar_access_token
+    initial_access_token = settings.google_calendar_access_token
+    with _google_calendar_refresh_locks[settings.id or f'{settings.group_id}:{settings.student_id}']:
+        db.session.refresh(settings)
+        expiry = settings.google_calendar_token_expiry
+        token_is_current = bool(
+            settings.google_calendar_access_token
+            and expiry
+            and expiry > datetime.utcnow() + timedelta(seconds=60)
+        )
+        if token_is_current and (
+            not force_refresh
+            or settings.google_calendar_access_token != initial_access_token
+        ):
+            return settings.google_calendar_access_token
+        token_request = UrlRequest(
+            'https://oauth2.googleapis.com/token',
+            data=urlencode({
+                'client_id': os.getenv('GOOGLE_CALENDAR_CLIENT_ID', ''),
+                'client_secret': os.getenv('GOOGLE_CALENDAR_CLIENT_SECRET', ''),
+                'refresh_token': settings.google_calendar_refresh_token,
+                'grant_type': 'refresh_token',
+            }).encode('utf-8'),
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            method='POST',
+        )
+        try:
+            with urlopen(token_request, timeout=20) as token_response:
+                token_payload = json.loads(token_response.read().decode('utf-8'))
+        except HTTPError as exc:
+            try:
+                error_payload = json.loads(exc.read().decode('utf-8'))
+                detail = error_payload.get('error_description') or error_payload.get('error')
+            except (ValueError, AttributeError):
+                detail = None
+            raise GoogleCalendarApiError(detail or 'Google Calendar authorization expired. Reconnect your calendar.', 409) from exc
+        except (OSError, ValueError) as exc:
+            raise GoogleCalendarApiError('Google Calendar could not be reached') from exc
+        access_token = token_payload.get('access_token')
+        if not access_token:
+            raise GoogleCalendarApiError('Google did not return a calendar access token')
+        settings.google_calendar_access_token = access_token
+        settings.google_calendar_token_expiry = datetime.utcnow() + timedelta(seconds=max(0, int(token_payload.get('expires_in') or 0)))
+        settings.updated_at = datetime.utcnow()
+        db.session.commit()
+        return access_token
+
+
+def _google_calendar_api_request(settings, method, path, query=None, payload=None, retry_auth=True, rate_limit_retries=4):
+    query_string = urlencode(query or {}, doseq=True)
+    url = f"https://www.googleapis.com/calendar/v3{path}"
+    if query_string:
+        url += f'?{query_string}'
+    access_token = _google_calendar_access_token(settings)
+    request_data = json.dumps(payload).encode('utf-8') if payload is not None else None
+    calendar_request = UrlRequest(
+        url,
+        data=request_data,
+        headers={
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json',
+            **({'Content-Type': 'application/json'} if payload is not None else {}),
+        },
+        method=method,
+    )
+    try:
+        with urlopen(calendar_request, timeout=25) as calendar_response:
+            response_body = calendar_response.read().decode('utf-8')
+            return json.loads(response_body) if response_body else {}
+    except HTTPError as exc:
+        if exc.code == 401 and retry_auth:
+            _google_calendar_access_token(settings, force_refresh=True)
+            return _google_calendar_api_request(
+                settings,
+                method,
+                path,
+                query=query,
+                payload=payload,
+                retry_auth=False,
+                rate_limit_retries=rate_limit_retries,
+            )
+        try:
+            error_payload = json.loads(exc.read().decode('utf-8'))
+            detail = ((error_payload.get('error') or {}).get('message') or '').strip()
+            reasons = {
+                str(error.get('reason') or '')
+                for error in ((error_payload.get('error') or {}).get('errors') or [])
+            }
+        except (ValueError, AttributeError):
+            detail = ''
+            reasons = set()
+        is_rate_limit = exc.code == 429 or bool(
+            reasons.intersection({'rateLimitExceeded', 'userRateLimitExceeded'})
+            or 'rate limit' in detail.lower()
+        )
+        if is_rate_limit and rate_limit_retries > 0:
+            retry_after = exc.headers.get('Retry-After') if exc.headers else None
+            try:
+                wait_seconds = max(1.0, min(12.0, float(retry_after)))
+            except (TypeError, ValueError):
+                wait_seconds = min(12.0, 2 ** (5 - rate_limit_retries))
+            time.sleep(wait_seconds)
+            return _google_calendar_api_request(
+                settings,
+                method,
+                path,
+                query=query,
+                payload=payload,
+                retry_auth=retry_auth,
+                rate_limit_retries=rate_limit_retries - 1,
+            )
+        raise GoogleCalendarApiError(detail or 'Google Calendar rejected the request', exc.code) from exc
+    except (OSError, ValueError) as exc:
+        raise GoogleCalendarApiError('Google Calendar could not be reached') from exc
+
+
+def _list_google_calendar_events(settings, query, calendar_id='primary'):
+    events = []
+    next_page_token = None
+    while True:
+        page_query = {**query}
+        if next_page_token:
+            page_query['pageToken'] = next_page_token
+        payload = _google_calendar_api_request(
+            settings,
+            'GET',
+            f"/calendars/{quote(str(calendar_id), safe='')}/events",
+            query=page_query,
+        )
+        events.extend(payload.get('items') or [])
+        next_page_token = payload.get('nextPageToken')
+        if not next_page_token or len(events) >= 2500:
+            return events[:2500]
+
+
+def _delete_google_workspace_events(settings, group_id, batch_size=20):
+    managed_events = _list_google_calendar_events(settings, {
+        'privateExtendedProperty': f'ipkpWorkspace={group_id}',
+        'showDeleted': 'false',
+        'maxResults': 2500,
+    })
+    removable_events = managed_events[:max(1, min(40, int(batch_size or 20)))]
+    removed = 0
+    for event in removable_events:
+        event_id = str((event or {}).get('id') or '').strip()
+        if not event_id:
+            continue
+        try:
+            _google_calendar_api_request(
+                settings,
+                'DELETE',
+                f"/calendars/primary/events/{quote(event_id, safe='')}",
+            )
+            removed += 1
+            time.sleep(0.25)
+        except GoogleCalendarApiError as exc:
+            if exc.status_code not in {404, 410}:
+                raise
+    return {
+        'removed': removed,
+        'remaining': max(0, len(managed_events) - removed),
+        'complete': len(managed_events) <= removed,
+    }
+
+
+def _list_google_calendars(settings):
+    calendars = []
+    next_page_token = None
+    while True:
+        query = {
+            'maxResults': 250,
+            'showDeleted': 'false',
+            'showHidden': 'false',
+        }
+        if next_page_token:
+            query['pageToken'] = next_page_token
+        payload = _google_calendar_api_request(
+            settings,
+            'GET',
+            '/users/me/calendarList',
+            query=query,
+        )
+        calendars.extend(payload.get('items') or [])
+        next_page_token = payload.get('nextPageToken')
+        if not next_page_token or len(calendars) >= 1000:
+            return calendars[:1000]
+
+
+def _list_visible_google_calendar_events(settings, query):
+    calendars = _list_google_calendars(settings)
+    visible_calendars = [
+        calendar for calendar in calendars
+        if (
+            calendar.get('primary') is True
+            or calendar.get('selected') is True
+        ) and calendar.get('accessRole') in {'reader', 'writer', 'owner'}
+    ]
+    events = []
+    seen_calendar_ids = set()
+    for calendar in visible_calendars:
+        calendar_id = str(calendar.get('id') or '').strip()
+        if not calendar_id or calendar_id in seen_calendar_ids:
+            continue
+        seen_calendar_ids.add(calendar_id)
+        calendar_name = str(calendar.get('summaryOverride') or calendar.get('summary') or 'Google Calendar')
+        calendar_color = str(calendar.get('backgroundColor') or '')
+        for event in _list_google_calendar_events(settings, query, calendar_id=calendar_id):
+            events.append({
+                **event,
+                '_ipkpCalendarId': calendar_id,
+                '_ipkpCalendarName': calendar_name,
+                '_ipkpCalendarColor': calendar_color,
+            })
+            if len(events) >= 5000:
+                return events
+    return events
+
+
+def _google_calendar_range_query(start_date, end_date, member_timezone):
+    return {
+        'timeMin': datetime.combine(start_date, datetime.min.time(), tzinfo=member_timezone).isoformat(),
+        'timeMax': datetime.combine(end_date + timedelta(days=1), datetime.min.time(), tzinfo=member_timezone).isoformat(),
+        'singleEvents': 'true',
+        'orderBy': 'startTime',
+        'maxResults': 2500,
+    }
+
+
+def _google_calendar_member_context(group_id, student_id):
+    current_user_id = int(get_jwt_identity())
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not group:
+        raise GoogleCalendarApiError('Workspace not found', 404)
+    if current_user_id != student_id:
+        raise GoogleCalendarApiError('Accounts can only manage their own Google Calendar', 403)
+    if not is_planner_member(group, student_id):
+        raise GoogleCalendarApiError('Account not found in workspace', 404)
+    settings = _get_student_planner_settings(group.id, student_id)
+    if not settings or not settings.google_calendar_refresh_token:
+        raise GoogleCalendarApiError('Google Calendar is not connected', 409)
+    return group, settings
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/google-calendar/events', methods=['GET'])
+@jwt_required()
+def get_google_calendar_events(group_id, student_id):
+    try:
+        group, settings = _google_calendar_member_context(group_id, student_id)
+        start_date = _parse_plan_date(request.args.get('start'))
+        end_date = _parse_plan_date(request.args.get('end'))
+        if end_date < start_date or (end_date - start_date).days > 62:
+            return jsonify({'error': 'Choose a Google Calendar range of 63 days or fewer'}), 400
+        timezone_name, member_timezone = _student_timezone(group, student_id, settings)
+        range_query = _google_calendar_range_query(start_date, end_date, member_timezone)
+        can_list_calendars = _google_calendar_can_list_calendars(settings)
+        events = (
+            _list_visible_google_calendar_events(settings, range_query)
+            if can_list_calendars
+            else _list_google_calendar_events(settings, range_query)
+        )
+        normalized = normalize_external_google_events(
+            events,
+            member_timezone,
+            start_date,
+            end_date,
+            settings.google_calendar_hidden_event_ids or [],
+        )
+        return jsonify({
+            'events': normalized,
+            'timezone': timezone_name,
+            'hiddenCount': len(settings.google_calendar_hidden_event_ids or []),
+            'needsReconnect': not can_list_calendars,
+        }), 200
+    except GoogleCalendarApiError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+    except Exception as exc:
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/google-calendar/sync', methods=['POST'])
+@jwt_required()
+def sync_google_calendar_events(group_id, student_id):
+    try:
+        group, settings = _google_calendar_member_context(group_id, student_id)
+        data = request.get_json() or {}
+        days = data.get('days') or []
+        if not isinstance(days, list) or not days or len(days) > GOOGLE_SYNC_MAX_DAYS:
+            return jsonify({'error': f'Sync between 1 and {GOOGLE_SYNC_MAX_DAYS} planner days at a time'}), 400
+        valid_dates = []
+        for raw_day in days:
+            try:
+                valid_dates.append(date.fromisoformat(str((raw_day or {}).get('date') or '')[:10]))
+            except ValueError:
+                continue
+        if not valid_dates:
+            return jsonify({'error': 'No valid planner dates were supplied'}), 400
+        timezone_name, member_timezone = _student_timezone(group, student_id, settings)
+        if data.get('includeChallengeHorizon'):
+            challenge, member_habit = _planner_challenge_context(group, student_id)
+            if challenge and member_habit:
+                raw_start = challenge.start_date if hasattr(challenge, 'start_date') else (challenge or {}).get('startDate') or (challenge or {}).get('start_date')
+                raw_end = challenge.end_date if hasattr(challenge, 'end_date') else (challenge or {}).get('endDate') or (challenge or {}).get('end_date')
+                try:
+                    challenge_start = raw_start.date() if isinstance(raw_start, datetime) else date.fromisoformat(str(raw_start)[:10])
+                    challenge_end = raw_end.date() if isinstance(raw_end, datetime) else date.fromisoformat(str(raw_end)[:10])
+                    joined_at = str(member_habit.get('joinedAt') or '')[:10]
+                    if joined_at:
+                        challenge_start = max(challenge_start, date.fromisoformat(joined_at))
+                    today_value = datetime.now(member_timezone).date()
+                    horizon_end = min(challenge_end, today_value + timedelta(days=30))
+                    saved_plans = StudentSchedulePlan.query.filter(
+                        StudentSchedulePlan.group_id == group.id,
+                        StudentSchedulePlan.student_id == student_id,
+                        StudentSchedulePlan.plan_date >= today_value,
+                        StudentSchedulePlan.plan_date <= horizon_end,
+                    ).all()
+                    days = build_google_challenge_horizon_days(
+                        days,
+                        member_habit.get('habits') or [],
+                        [{
+                            'date': plan.plan_date.isoformat(),
+                            'constraintsText': plan.constraints_text or '',
+                            'items': plan.items or [],
+                        } for plan in saved_plans],
+                        settings.recurring_reminders or [],
+                        settings.ai_weekly_templates or {},
+                        challenge_start,
+                        challenge_end,
+                        today_value,
+                    )
+                    valid_dates = [
+                        date.fromisoformat(str((raw_day or {}).get('date') or '')[:10])
+                        for raw_day in days
+                    ]
+                except (TypeError, ValueError):
+                    pass
+        managed_events = build_managed_google_events(group.id, student_id, days, timezone_name)
+        range_query = _google_calendar_range_query(min(valid_dates), max(valid_dates), member_timezone)
+        range_query['privateExtendedProperty'] = f'ipkpWorkspace={group.id}'
+        existing_events = _list_google_calendar_events(settings, range_query)
+        existing_by_id = {
+            str(event.get('id')): event
+            for event in existing_events
+            if event.get('id')
+        }
+        desired_ids = {event['id'] for event in managed_events}
+        created = 0
+        updated = 0
+        for event in managed_events:
+            payload = {
+                **event['payload'],
+                'extendedProperties': {
+                    'private': {
+                        **event['payload']['extendedProperties']['private'],
+                        'ipkpWorkspace': str(group.id),
+                    },
+                },
+            }
+            event_path = f"/calendars/primary/events/{quote(event['id'], safe='')}"
+            if event['id'] in existing_by_id:
+                payload.pop('id', None)
+                _google_calendar_api_request(settings, 'PUT', event_path, payload=payload)
+                updated += 1
+            else:
+                try:
+                    _google_calendar_api_request(settings, 'POST', '/calendars/primary/events', payload=payload)
+                    created += 1
+                except GoogleCalendarApiError as exc:
+                    if exc.status_code != 409:
+                        raise
+                    payload.pop('id', None)
+                    _google_calendar_api_request(settings, 'PUT', event_path, payload=payload)
+                    updated += 1
+        deleted = 0
+        for event_id in set(existing_by_id) - desired_ids:
+            _google_calendar_api_request(
+                settings,
+                'DELETE',
+                f"/calendars/primary/events/{quote(event_id, safe='')}",
+            )
+            deleted += 1
+        return jsonify({
+            'message': 'Google Calendar is in sync',
+            'created': created,
+            'updated': updated,
+            'removed': deleted,
+            'managed': len(managed_events),
+        }), 200
+    except GoogleCalendarApiError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+    except Exception as exc:
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/google-calendar/pull', methods=['POST'])
+@jwt_required()
+def pull_google_calendar_changes(group_id, student_id):
+    try:
+        group, settings = _google_calendar_member_context(group_id, student_id)
+        data = request.get_json() or {}
+        days = data.get('days') or []
+        if not isinstance(days, list) or not days or len(days) > 14:
+            return jsonify({'error': 'Pull between 1 and 14 planner days at a time'}), 400
+        valid_dates = []
+        for raw_day in days:
+            try:
+                valid_dates.append(date.fromisoformat(str((raw_day or {}).get('date') or '')[:10]))
+            except ValueError:
+                continue
+        if not valid_dates:
+            return jsonify({'error': 'No valid planner dates were supplied'}), 400
+
+        timezone_name, member_timezone = _student_timezone(group, student_id, settings)
+        range_query = _google_calendar_range_query(min(valid_dates), max(valid_dates), member_timezone)
+        range_query['privateExtendedProperty'] = f'ipkpWorkspace={group.id}'
+        managed_google_events = _list_google_calendar_events(settings, range_query)
+        reconciliation = reconcile_managed_google_events(
+            group.id,
+            student_id,
+            days,
+            managed_google_events,
+            member_timezone,
+        )
+        changed_dates = set(reconciliation['changedDates'])
+        saved_days = []
+        for raw_day in reconciliation['days']:
+            plan_date = date.fromisoformat(str((raw_day or {}).get('date') or '')[:10])
+            if plan_date.isoformat() not in changed_dates:
+                continue
+            plan = StudentSchedulePlan.query.filter_by(
+                group_id=group.id,
+                student_id=student_id,
+                plan_date=plan_date,
+            ).first()
+            normalized_items = _normalize_saved_schedule_items((raw_day or {}).get('items'))
+            schedule_error = _validate_same_day_habit_schedule_changes(
+                group,
+                student_id,
+                plan_date,
+                normalized_items,
+                existing_plan=plan,
+                existing_settings=settings,
+            )
+            if schedule_error:
+                continue
+            if not plan:
+                plan = StudentSchedulePlan(group_id=group.id, student_id=student_id, plan_date=plan_date)
+                db.session.add(plan)
+            plan.constraints_text = str((raw_day or {}).get('constraintsText') or '').strip()[:4000] or None
+            plan.items = normalized_items
+            plan.updated_at = datetime.utcnow()
+            saved_days.append({
+                'date': plan_date.isoformat(),
+                'constraintsText': plan.constraints_text or '',
+                'items': normalized_items,
+            })
+        corrected_dates = 0
+        correction_ids = set(reconciliation['dateCorrectionEventIds'])
+        if correction_ids:
+            corrected_events = {
+                event['id']: event
+                for event in build_managed_google_events(
+                    group.id,
+                    student_id,
+                    reconciliation['days'],
+                    timezone_name,
+                )
+                if event['id'] in correction_ids
+            }
+            for event_id, event in corrected_events.items():
+                payload = {
+                    **event['payload'],
+                    'extendedProperties': {
+                        'private': {
+                            **event['payload']['extendedProperties']['private'],
+                            'ipkpWorkspace': str(group.id),
+                        },
+                    },
+                }
+                payload.pop('id', None)
+                _google_calendar_api_request(
+                    settings,
+                    'PUT',
+                    f"/calendars/primary/events/{quote(event_id, safe='')}",
+                    payload=payload,
+                )
+                corrected_dates += 1
+        db.session.commit()
+        return jsonify({
+            'message': 'Google Calendar changes checked',
+            'pulled': len(saved_days),
+            'days': saved_days,
+            'movedAcrossDates': reconciliation['movedAcrossDates'],
+            'correctedDates': corrected_dates,
+        }), 200
+    except GoogleCalendarApiError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), exc.status_code
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/google-calendar/hidden-events', methods=['POST', 'DELETE'])
+@jwt_required()
+def manage_hidden_google_calendar_events(group_id, student_id):
+    try:
+        _, settings = _google_calendar_member_context(group_id, student_id)
+        if request.method == 'DELETE':
+            settings.google_calendar_hidden_event_ids = []
+        else:
+            event_id = str((request.get_json() or {}).get('eventId') or '').strip()[:1024]
+            if not event_id:
+                return jsonify({'error': 'Google event ID is required'}), 400
+            hidden_ids = [str(value) for value in (settings.google_calendar_hidden_event_ids or []) if str(value)]
+            hidden_ids = [value for value in hidden_ids if value != event_id]
+            hidden_ids.append(event_id)
+            settings.google_calendar_hidden_event_ids = hidden_ids[-500:]
+        flag_modified(settings, 'google_calendar_hidden_event_ids')
+        settings.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'hiddenCount': len(settings.google_calendar_hidden_event_ids or [])}), 200
+    except GoogleCalendarApiError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/google-calendar/connect', methods=['POST'])
+@jwt_required()
+def connect_student_google_calendar(group_id, student_id):
+    current_user_id = int(get_jwt_identity())
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not group:
+        return jsonify({'error': 'School not found'}), 404
+    if current_user_id != student_id:
+        return jsonify({'error': 'Students can only link their own calendar'}), 403
+    if not is_planner_member(group, student_id):
+        return jsonify({'error': 'Account not found in workspace'}), 404
+    client_id = os.getenv('GOOGLE_CALENDAR_CLIENT_ID')
+    redirect_uri = os.getenv('GOOGLE_CALENDAR_REDIRECT_URI')
+    if not client_id or not os.getenv('GOOGLE_CALENDAR_CLIENT_SECRET') or not redirect_uri:
+        return jsonify({'error': 'Google Calendar has not been configured by the platform administrator'}), 503
+
+    state = _google_calendar_state_serializer().dumps({'groupId': group.id, 'studentId': student_id})
+    authorization_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urlencode({
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'response_type': 'code',
+        'scope': (
+            'https://www.googleapis.com/auth/calendar.events '
+            'https://www.googleapis.com/auth/calendar.calendarlist.readonly'
+        ),
+        'access_type': 'offline',
+        'include_granted_scopes': 'true',
+        'prompt': 'consent',
+        'state': state,
+    })
+    return jsonify({'authorizationUrl': authorization_url}), 200
+
+
+@groups_bp.route('/google-calendar/callback', methods=['GET'])
+def google_calendar_callback():
+    if request.args.get('error'):
+        return _google_calendar_popup_response('error', 'Google Calendar access was not granted')
+    try:
+        state_data = _google_calendar_state_serializer().loads(request.args.get('state') or '', max_age=600)
+    except SignatureExpired:
+        return _google_calendar_popup_response('error', 'The connection request expired'), 400
+    except BadSignature:
+        return _google_calendar_popup_response('error', 'The connection request was invalid'), 400
+
+    code = request.args.get('code')
+    if not code:
+        return _google_calendar_popup_response('error', 'Google did not return an authorization code'), 400
+    token_request = UrlRequest(
+        'https://oauth2.googleapis.com/token',
+        data=urlencode({
+            'code': code,
+            'client_id': os.getenv('GOOGLE_CALENDAR_CLIENT_ID', ''),
+            'client_secret': os.getenv('GOOGLE_CALENDAR_CLIENT_SECRET', ''),
+            'redirect_uri': os.getenv('GOOGLE_CALENDAR_REDIRECT_URI', ''),
+            'grant_type': 'authorization_code',
+        }).encode('utf-8'),
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        method='POST',
+    )
+    try:
+        with urlopen(token_request, timeout=20) as token_response:
+            token_payload = json.loads(token_response.read().decode('utf-8'))
+    except (HTTPError, OSError, ValueError):
+        return _google_calendar_popup_response('error', 'Google token exchange failed'), 502
+
+    group = Group.query.get(int(state_data['groupId']))
+    student = User.query.get(int(state_data['studentId']))
+    if not group or not student or not is_planner_member(group, student.id):
+        return _google_calendar_popup_response('error', 'The workspace or account is no longer available'), 404
+    settings = _get_student_planner_settings(group.id, student.id, create=True)
+    refresh_token = token_payload.get('refresh_token') or settings.google_calendar_refresh_token
+    if not refresh_token:
+        db.session.rollback()
+        return _google_calendar_popup_response('error', 'Google did not provide offline calendar access'), 502
+    settings.google_calendar_refresh_token = refresh_token
+    settings.google_calendar_access_token = token_payload.get('access_token')
+    settings.google_calendar_token_expiry = datetime.utcnow() + timedelta(seconds=max(0, int(token_payload.get('expires_in') or 0)))
+    settings.google_calendar_scopes = token_payload.get('scope') or (
+        'https://www.googleapis.com/auth/calendar.events '
+        'https://www.googleapis.com/auth/calendar.calendarlist.readonly'
+    )
+    settings.updated_at = datetime.utcnow()
+    db.session.commit()
+    return _google_calendar_popup_response('connected', 'Google Calendar connected')
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/google-calendar', methods=['DELETE'])
+@jwt_required()
+def disconnect_student_google_calendar(group_id, student_id):
+    try:
+        current_user_id = int(get_jwt_identity())
+        if current_user_id != student_id:
+            return jsonify({'error': 'Students can only unlink their own calendar'}), 403
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group:
+            return jsonify({'error': 'School not found'}), 404
+        if not is_planner_member(group, student_id):
+            return jsonify({'error': 'Account not found in workspace'}), 404
+        settings = _get_student_planner_settings(group.id, student_id)
+        removal = {'removed': 0, 'remaining': 0, 'complete': True}
+        if settings:
+            if settings.google_calendar_refresh_token:
+                removal = _delete_google_workspace_events(settings, group.id)
+            if removal['complete']:
+                settings.google_calendar_refresh_token = None
+                settings.google_calendar_access_token = None
+                settings.google_calendar_token_expiry = None
+                settings.google_calendar_scopes = None
+                settings.google_calendar_hidden_event_ids = []
+                flag_modified(settings, 'google_calendar_hidden_event_ids')
+                settings.updated_at = datetime.utcnow()
+                db.session.commit()
+        return jsonify({
+            'message': (
+                'Google Calendar disconnected and IP planner events removed'
+                if removal['complete']
+                else 'IP planner event cleanup is still in progress'
+            ),
+            **removal,
+        }), 200 if removal['complete'] else 202
+    except GoogleCalendarApiError as exc:
+        db.session.rollback()
+        return jsonify({
+            'error': f'IP planner events could not be removed from Google Calendar: {str(exc)}',
+        }), exc.status_code
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
 
 
 @groups_bp.route('/<group_id>/students/<int:student_id>/schedule', methods=['GET'])
@@ -6138,8 +11161,8 @@ def get_student_schedule(group_id, student_id):
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'School not found'}), 404
-        if not any(member.id == student_id for member in get_group_members_list(group)):
-            return jsonify({'error': 'Student not found in school'}), 404
+        if not is_planner_member(group, student_id):
+            return jsonify({'error': 'Account not found in workspace'}), 404
         if current_user_id != student_id and not can_view_student(group, current_user_id, student_id):
             return jsonify({'error': 'Unauthorized'}), 403
 
@@ -6149,6 +11172,33 @@ def get_student_schedule(group_id, student_id):
             student_id=student_id,
             plan_date=plan_date,
         ).first()
+        settings = _get_student_planner_settings(group.id, student_id)
+        timezone_name, school_timezone = _student_timezone(group, student_id, settings)
+        school_now = datetime.now(school_timezone)
+        challenge, member_habit = _planner_challenge_context(group, student_id)
+        completion_windows = {}
+        for habit_index, habit in enumerate((member_habit or {}).get('habits') or []):
+            completion_access = _habit_completion_access(
+                group,
+                student_id,
+                habit,
+                habit_index,
+                now=school_now,
+                preferred_date=plan_date,
+                plan=plan,
+                settings=settings,
+                challenge=challenge,
+                member_habit=member_habit,
+            )
+            completion_access['streakRestore'] = _habit_streak_restore_quote(
+                challenge,
+                member_habit,
+                habit,
+                habit_index,
+                plan_date,
+                completion_access,
+            )
+            completion_windows[str(habit_index)] = completion_access
         return jsonify({
             'plan': plan.to_dict() if plan else {
                 'groupId': group.id,
@@ -6156,7 +11206,14 @@ def get_student_schedule(group_id, student_id):
                 'planDate': plan_date.isoformat(),
                 'constraintsText': '',
                 'items': [],
-            }
+            },
+            'completionWindows': completion_windows,
+            'completionPolicy': {
+                'minutesBefore': 60,
+                'minutesAfter': 60,
+                'timezone': timezone_name,
+                'serverNow': school_now.isoformat(),
+            },
         }), 200
     except Exception as e:
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
@@ -6170,8 +11227,8 @@ def save_student_schedule(group_id, student_id):
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'School not found'}), 404
-        if not any(member.id == student_id for member in get_group_members_list(group)):
-            return jsonify({'error': 'Student not found in school'}), 404
+        if not is_planner_member(group, student_id):
+            return jsonify({'error': 'Account not found in workspace'}), 404
         if current_user_id != student_id:
             return jsonify({'error': 'Students can only edit their own calendar'}), 403
 
@@ -6182,11 +11239,23 @@ def save_student_schedule(group_id, student_id):
             student_id=student_id,
             plan_date=plan_date,
         ).first()
+        normalized_items = _normalize_saved_schedule_items(data.get('items'))
+        settings = _get_student_planner_settings(group.id, student_id)
+        schedule_error = _validate_same_day_habit_schedule_changes(
+            group,
+            student_id,
+            plan_date,
+            normalized_items,
+            existing_plan=plan,
+            existing_settings=settings,
+        )
+        if schedule_error:
+            return jsonify({'error': schedule_error, 'code': 'HABIT_SCHEDULE_WINDOW_LOCKED'}), 403
         if not plan:
             plan = StudentSchedulePlan(group_id=group.id, student_id=student_id, plan_date=plan_date)
             db.session.add(plan)
         plan.constraints_text = str(data.get('constraintsText') or '').strip()[:4000] or None
-        plan.items = _normalize_saved_schedule_items(data.get('items'))
+        plan.items = normalized_items
         plan.updated_at = datetime.utcnow()
         db.session.commit()
         return jsonify({'plan': plan.to_dict()}), 200
@@ -6203,15 +11272,19 @@ def generate_student_schedule(group_id, student_id):
         group = Group.query.filter_by(group_id=group_id).first()
         if not group:
             return jsonify({'error': 'School not found'}), 404
-        if not any(member.id == student_id for member in get_group_members_list(group)):
-            return jsonify({'error': 'Student not found in school'}), 404
+        if not is_planner_member(group, student_id):
+            return jsonify({'error': 'Account not found in workspace'}), 404
         if current_user_id != student_id:
             return jsonify({'error': 'Students can only generate their own calendar'}), 403
 
         data = request.get_json() or {}
         plan_date = _parse_plan_date(data.get('date'))
         constraints_text = str(data.get('constraintsText') or '').strip()[:4000]
-        member_habit = get_member_habit_entry(group, student_id)
+        phase = str(data.get('phase') or 'generate').strip().lower()
+        repeat_weekly = bool(data.get('repeatWeekly'))
+        planning_scope = str(data.get('planningScope') or 'selected').strip()[:40]
+        planner_settings = _get_student_planner_settings(group.id, student_id)
+        _, member_habit = _planner_challenge_context(group, student_id)
         habits = []
         for index, habit in enumerate((member_habit or {}).get('habits', [])):
             schedule_days = habit.get('scheduleDays') or []
@@ -6223,9 +11296,18 @@ def generate_student_schedule(group_id, student_id):
                 'description': habit.get('description') or '',
                 'durationMinutes': max(5, int(habit.get('durationMinutes') or 30)),
                 'preferredTime': habit.get('scheduleTime') or '',
+                'habitType': habit.get('habitType') or 'boolean',
+                'periodicIntervalHours': max(1, int(habit.get('periodicIntervalHours') or 4)),
+                'periodicOccurrences': max(2, int(habit.get('periodicOccurrences') or 4)),
+                'allowOverlap': bool(habit.get('allowOverlap')),
             })
 
-        school_items = []
+        school_day_context, school_commute_items = _planner_school_day_context(
+            group,
+            plan_date.strftime('%A'),
+            planner_settings,
+        )
+        school_items = list(school_commute_items)
         for entry in group.school_timetable or []:
             if entry.get('weekday') != plan_date.strftime('%A'):
                 continue
@@ -6234,63 +11316,179 @@ def generate_student_schedule(group_id, student_id):
                 continue
             school_items.append({
                 'id': f"school-{entry.get('id')}",
-                'title': entry.get('subject') or 'School',
+                'title': ' · '.join(filter(None, [entry.get('subject') or 'School', entry.get('className') or ''])),
                 'itemType': 'school',
                 'habitIndex': -1,
                 'startTime': entry.get('startTime') or '',
                 'endTime': entry.get('endTime') or '',
                 'durationMinutes': _minutes_between(entry.get('startTime'), entry.get('endTime')),
                 'locked': True,
-                'reason': entry.get('room') or 'School timetable',
+                'reason': ' · '.join(filter(None, [entry.get('teacherName') or '', entry.get('room') or ''])) or 'School timetable',
                 'source': 'school',
             })
-        manual_items = [
-            item for item in _normalize_saved_schedule_items(data.get('manualItems'))
-            if item['itemType'] == 'manual'
+        submitted_fixed_items = data.get('fixedItems')
+        if not isinstance(submitted_fixed_items, list):
+            submitted_fixed_items = data.get('manualItems')
+        personal_fixed_items = [
+            item for item in _normalize_saved_schedule_items(submitted_fixed_items)
+            if item['itemType'] in {'manual', 'sleep', 'routine', 'google'}
         ]
+        fixed_commitments = school_items + personal_fixed_items
+        submitted_current_items = data.get('currentItems')
+        current_personal_items = [
+            item for item in _normalize_saved_schedule_items(submitted_current_items)
+            if item['itemType'] != 'school'
+        ]
+        current_layout = school_items + current_personal_items
+        if not current_layout:
+            current_layout = fixed_commitments
+        current_layout_context = _planner_ai_layout_context(current_layout)
+        wake_time = next(
+            (item['endTime'] for item in personal_fixed_items if item['itemType'] == 'sleep' and item['id'] == 'sleep-morning'),
+            planner_settings.wake_time if planner_settings else '07:00',
+        )
+        bedtime = next(
+            (item['startTime'] for item in personal_fixed_items if item['itemType'] == 'sleep' and item['id'] == 'sleep-evening'),
+            planner_settings.bedtime if planner_settings else '22:00',
+        )
 
+        if phase == 'clarify':
+            raw_clarification = create_structured_response(
+                model=OPENAI_SCHEDULER_MODEL,
+                system_prompt=(
+                    "You are a concise time-planning coach. You can see the complete current layout, including movable "
+                    "habits and breaks, plus fixed sleep, timetable, recurring reminders, one-off appointments, and Google Calendar events. "
+                    "Interpret references such as 'move that later' from item titles and current times. Decide whether "
+                    "missing information would materially change the result. Ask zero to three short questions only when "
+                    "necessary. Ask about travel time, departure buffers, or transitions when an activity involves going "
+                    "to a place and that information is unknown. Other useful topics include meals, deadlines, fixed "
+                    "commitments, and energy preferences. Never ask for information already present in the notes, current "
+                    "layout, habits, fixed commitments, wake time, or bedtime. If repeatWeekly is true, distinguish weekly "
+                    "routines from one-off appointments. The schoolDay context is authoritative and already includes the "
+                    "student's normal commute, so never ask for school travel information that it provides. If enough detail exists, return no questions."
+                ),
+                user_prompt=json.dumps({
+                    'task': 'Check whether clarification is needed before organising this day.',
+                    'date': plan_date.isoformat(),
+                    'weekday': plan_date.strftime('%A'),
+                    'studentConstraints': constraints_text,
+                    'habits': habits,
+                    'currentLayout': current_layout_context,
+                    'fixedCommitments': fixed_commitments,
+                    'schoolDay': school_day_context,
+                    'wakeTime': wake_time,
+                    'bedtime': bedtime,
+                    'repeatWeekly': repeat_weekly,
+                    'planningScope': planning_scope,
+                }),
+                schema_name='rituo_schedule_clarification',
+                schema=build_schedule_clarification_schema(),
+                max_output_tokens=900,
+            )
+            clarification = normalize_schedule_clarification(raw_clarification)
+            clarification = _add_planner_clarification_question(
+                clarification,
+                _planner_travel_clarification(constraints_text, current_layout_context),
+            )
+            return jsonify({
+                'clarification': clarification,
+                'contract': structured_contract_metadata('rituo_schedule_clarification'),
+            }), 200
+
+        raw_answers = data.get('clarificationAnswers') or {}
+        clarification_answers = {
+            str(question_id)[:60]: str(answer or '').strip()[:500]
+            for question_id, answer in raw_answers.items()
+            if str(answer or '').strip()
+        } if isinstance(raw_answers, dict) else {}
+
+        schedule_system_prompt = (
+            "You are a time-planning assistant. Build a realistic single-day plan using the complete current layout "
+            "as the baseline. Preserve sensible existing placements unless the user's notes, clarification answers, "
+            "conflicts, or wellbeing needs justify changing them. Resolve references to existing blocks from their "
+            "titles and current times. "
+            "Schedule every non-periodic habit exactly once around locked school, sleep, and manual commitments. "
+            "For periodic habits, create the requested number of occurrences, spaced by the requested interval across waking hours. "
+            "Respect durations and avoid overlaps unless a habit has allowOverlap true; those short occurrences may overlap another block. "
+            "Use clarification answers, including commute times, and add realistic travel or transition buffers as break blocks when needed. "
+            "When schoolDay is supplied, protect the full school day and its commute from ordinary habit scheduling. Only use a listed "
+            "school break or lunch for a short suitable habit when the user explicitly requests it or a periodic overlapping habit allows it. "
+            "Never move, copy, rename, or reproduce fixed commitments, including imported Google Calendar events. Never output a break block that represents an existing "
+            "lesson, appointment, meeting, class, routine, sleep block, or Google event. Break blocks are only for genuine free transition, travel, meal, or recovery time. "
+            "Weekly routines recur; manual appointments are one-off. When repeatWeekly is true, "
+            "create a stable repeatable pattern and do not assume one-off appointments recur. "
+            "Every habit item's reason must briefly explain why its time suits the user's request, answers, and surrounding commitments. "
+            "Return the complete replacement set of habit and break items, not only the blocks that changed. Fixed commitments are merged by the application."
+        )
+        schedule_request_payload = {
+            'task': 'Schedule the habits for this day.',
+            'date': plan_date.isoformat(),
+            'weekday': plan_date.strftime('%A'),
+            'studentConstraints': constraints_text,
+            'clarificationAnswers': clarification_answers,
+            'habits': habits,
+            'currentLayout': current_layout_context,
+            'fixedCommitments': fixed_commitments,
+            'schoolDay': school_day_context,
+            'dayBounds': {'earliest': wake_time, 'latest': bedtime},
+            'repeatWeekly': repeat_weekly,
+            'planningScope': planning_scope,
+        }
         raw_plan = create_structured_response(
             model=OPENAI_SCHEDULER_MODEL,
-            system_prompt=(
-                "You are a student time-planning assistant. Build a realistic single-day plan. "
-                "Schedule every supplied habit exactly once around locked school and manual commitments. "
-                "Respect durations, avoid overlaps, include short breaks when useful, and never move fixed commitments. "
-                "Return only habit and break items; fixed commitments are merged by the application."
-            ),
-            user_prompt=json.dumps({
-                'task': 'Schedule the habits for this day.',
-                'date': plan_date.isoformat(),
-                'weekday': plan_date.strftime('%A'),
-                'studentConstraints': constraints_text,
-                'habits': habits,
-                'fixedCommitments': school_items + manual_items,
-                'dayBounds': {'earliest': '06:00', 'latest': '22:00'},
-            }),
+            system_prompt=schedule_system_prompt,
+            user_prompt=json.dumps(schedule_request_payload),
             schema_name='rituo_daily_schedule',
             schema=build_daily_schedule_schema(),
             max_output_tokens=2200,
         )
         normalized_plan = normalize_daily_schedule(raw_plan)
+        coverage_issues = _planner_schedule_coverage_issues(normalized_plan['items'], habits)
+        if coverage_issues:
+            repair_payload = {
+                **schedule_request_payload,
+                'task': 'Repair the incomplete schedule and return a complete replacement schedule.',
+                'previousIncompletePlan': normalized_plan,
+                'coverageIssues': coverage_issues,
+            }
+            raw_plan = create_structured_response(
+                model=OPENAI_SCHEDULER_MODEL,
+                system_prompt=(
+                    f"{schedule_system_prompt} The previous response omitted or duplicated required habits. "
+                    "Correct every listed coverage issue and return the whole day again."
+                ),
+                user_prompt=json.dumps(repair_payload),
+                schema_name='rituo_daily_schedule',
+                schema=build_daily_schedule_schema(),
+                max_output_tokens=2200,
+            )
+            normalized_plan = normalize_daily_schedule(raw_plan)
+            coverage_issues = _planner_schedule_coverage_issues(normalized_plan['items'], habits)
+        if coverage_issues:
+            return jsonify({
+                'error': 'The AI returned an incomplete schedule, so no planner changes were applied. Please try again.',
+                'code': 'AI_SCHEDULE_INCOMPLETE',
+                'coverageIssues': coverage_issues,
+            }), 422
+        allowed_habit_indexes = {habit['habitIndex'] for habit in habits}
         generated_items = [
             item for item in normalized_plan['items']
-            if item['itemType'] in {'habit', 'break'}
+            if item['itemType'] == 'break' or (
+                item['itemType'] == 'habit' and item['habitIndex'] in allowed_habit_indexes
+            )
         ]
-        combined_items = _normalize_saved_schedule_items(school_items + manual_items + generated_items)
+        generated_items = _filter_generated_breaks_against_fixed_items(generated_items, fixed_commitments)
+        persisted_fixed_items = [item for item in fixed_commitments if item['itemType'] != 'routine']
+        combined_items = _normalize_saved_schedule_items(persisted_fixed_items + generated_items)
 
-        plan = StudentSchedulePlan.query.filter_by(
-            group_id=group.id,
-            student_id=student_id,
-            plan_date=plan_date,
-        ).first()
-        if not plan:
-            plan = StudentSchedulePlan(group_id=group.id, student_id=student_id, plan_date=plan_date)
-            db.session.add(plan)
-        plan.constraints_text = constraints_text or None
-        plan.items = combined_items
-        plan.updated_at = datetime.utcnow()
-        db.session.commit()
         return jsonify({
-            'plan': plan.to_dict(),
+            'plan': {
+                'groupId': group.id,
+                'studentId': student_id,
+                'planDate': plan_date.isoformat(),
+                'constraintsText': constraints_text,
+                'items': combined_items,
+            },
             'summary': normalized_plan['summary'],
             'warnings': normalized_plan['warnings'],
             'contract': structured_contract_metadata('rituo_daily_schedule'),
@@ -6313,12 +11511,56 @@ def update_student_planner(group_id, student_id):
         if current_user_id != student_id:
             return jsonify({'error': 'Students can only edit their own planner'}), 403
 
-        member_habit = get_member_habit_entry(group, student_id)
+        data = request.get_json() or {}
+        habits_payload = data.get('habits', [])
+        challenge, member_habit = _planner_challenge_context(
+            group,
+            student_id,
+            challenge_id=data.get('challengeId'),
+        )
         if not member_habit:
-            return jsonify({'error': 'Student is not in the active challenge'}), 404
+            if not habits_payload:
+                return jsonify({'memberHabit': None}), 200
+            return jsonify({'error': 'You are not in an active challenge'}), 404
 
-        habits_payload = (request.get_json() or {}).get('habits', [])
         habits_by_index = {int(item.get('index')): item for item in habits_payload if item.get('index') is not None}
+
+        _, school_timezone = _student_timezone(
+            group,
+            student_id,
+            _get_student_planner_settings(group.id, student_id),
+        )
+        today_value = datetime.now(school_timezone).date()
+        today_plan = StudentSchedulePlan.query.filter_by(
+            group_id=group.id,
+            student_id=student_id,
+            plan_date=today_value,
+        ).first()
+        if not today_plan or not today_plan.items:
+            proposed_default_items = []
+            for index, habit in enumerate(member_habit.get('habits', [])):
+                proposed_habit = dict(habit)
+                update = habits_by_index.get(index)
+                if update:
+                    proposed_habit['scheduleTime'] = (update.get('scheduleTime') or '').strip()
+                    try:
+                        proposed_habit['durationMinutes'] = max(5, int(update.get('durationMinutes', 30) or 30))
+                    except (TypeError, ValueError):
+                        proposed_habit['durationMinutes'] = 30
+                proposed_default_items.extend({
+                    **item,
+                    'itemType': 'habit',
+                } for item in build_default_habit_schedule_items(proposed_habit, index))
+            schedule_error = _validate_same_day_habit_schedule_changes(
+                group,
+                student_id,
+                today_value,
+                proposed_default_items,
+                existing_plan=today_plan,
+                existing_settings=_get_student_planner_settings(group.id, student_id),
+            )
+            if schedule_error:
+                return jsonify({'error': schedule_error, 'code': 'HABIT_SCHEDULE_WINDOW_LOCKED'}), 403
 
         for index, habit in enumerate(member_habit.get('habits', [])):
             update = habits_by_index.get(index)
@@ -6331,10 +11573,15 @@ def update_student_planner(group_id, student_id):
                 habit['durationMinutes'] = 30
             habit['orderIndex'] = int(update.get('orderIndex', index) or index)
 
-        member_habit['habits'] = sorted(member_habit.get('habits', []), key=lambda habit: (habit.get('orderIndex', 999), habit.get('scheduleTime') or '99:99'))
-        flag_modified(group.active_challenge, 'member_habits')
+        if getattr(group, 'group_type', 'school') == 'staff':
+            challenge.habits = member_habit.get('habits') or []
+            flag_modified(challenge, 'habits')
+        else:
+            flag_modified(group.active_challenge, 'member_habits')
         db.session.commit()
 
+        if getattr(group, 'group_type', 'school') == 'staff':
+            return jsonify({'memberHabit': member_habit}), 200
         student = next((member for member in group.members if member.id == student_id), None)
         return jsonify({'profile': serialize_school_profile(group, student)}), 200
     except Exception as e:
@@ -6769,6 +12016,548 @@ def download_school_impact_evidence(record_id):
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 
+def _staff_workspace_context(group_id):
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not group:
+        return None, None, (jsonify({'error': 'Workspace not found'}), 404)
+    user = User.query.get(int(get_jwt_identity()))
+    if getattr(group, 'group_type', 'school') != 'staff':
+        return None, None, (jsonify({'error': 'This is not a Coaches HQ workspace'}), 400)
+    if not is_staff_group_member(group, user):
+        return None, None, (jsonify({'error': 'Coaches HQ access is restricted to its admin and coach members'}), 403)
+    return group, user, None
+
+
+def _staff_member_display_name(user):
+    full_name = ' '.join(part for part in (user.first_name, user.last_name) if part).strip()
+    return full_name or user.username
+
+
+def _staff_member_timezone(group, member_id, requested_timezone=None):
+    candidate = str(requested_timezone or '').strip()
+    if candidate:
+        timezone_name, timezone_value = resolve_timezone(candidate)
+        if timezone_name == candidate:
+            return timezone_name, timezone_value
+    return _student_timezone(group, member_id)
+
+
+def _finalize_staff_challenges(group):
+    updated = False
+    challenges = StaffPersonalChallenge.query.filter_by(group_id=group.id, status='active').all()
+    for challenge in challenges:
+        _, member_timezone = _staff_member_timezone(group, challenge.member_id)
+        member_today = datetime.now(member_timezone).date()
+        end_date = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+        if end_date and end_date < member_today:
+            challenge.status = 'completed'
+            challenge.updated_at = datetime.utcnow()
+            updated = True
+    return updated
+
+
+def build_chat_reader_profiles(messages):
+    reader_ids = set()
+    for message in messages:
+        try:
+            reader_ids.update(int(user_id) for user_id in json.loads(message.read_by or '[]'))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+    if not reader_ids:
+        return {}
+    users = User.query.filter(User.id.in_(reader_ids)).all()
+    return {
+        str(user.id): {
+            'userId': user.id,
+            'username': user.username
+        }
+        for user in users
+    }
+
+
+def _build_staff_hub_payload(group, viewer, requested_timezone=None):
+    members = get_staff_group_members(group)
+    challenges = StaffPersonalChallenge.query.filter_by(group_id=group.id).order_by(
+        StaffPersonalChallenge.created_at.desc()
+    ).all()
+    challenges_by_member = defaultdict(list)
+    for challenge in challenges:
+        challenges_by_member[challenge.member_id].append(challenge)
+
+    member_rows = []
+    for member in members:
+        member_challenges = challenges_by_member.get(member.id) or []
+        current_challenge = next((challenge for challenge in member_challenges if challenge.status == 'active'), None)
+        member_timezone_name, member_timezone = _staff_member_timezone(
+            group,
+            member.id,
+            requested_timezone if member.id == viewer.id else None,
+        )
+        member_today = datetime.now(member_timezone).date()
+        challenge_payload = None
+        stats = None
+        completion_windows = {}
+        score = 0.0
+        today_rate = None
+        if current_challenge:
+            stats = _build_group_member_habit_statistics(
+                group,
+                current_challenge,
+                _staff_challenge_member_entry(current_challenge),
+                member.id,
+                today_value=member_today,
+            )
+            summary = stats.get('summary') or {}
+            score = float(summary.get('completionRate') or 0)
+            today_row = summary.get('today') or {}
+            today_rate = today_row.get('completionRate') if today_row else None
+            challenge_payload = current_challenge.to_dict()
+            challenge_start = current_challenge.start_date.date()
+            challenge_end = current_challenge.end_date.date()
+            if member.id == viewer.id and challenge_start <= member_today <= challenge_end:
+                current_time = datetime.now(member_timezone)
+                staff_member_habit = _staff_challenge_member_entry(current_challenge)
+                for index, habit in enumerate(current_challenge.habits or []):
+                    completion_access = _staff_habit_completion_access(
+                        group,
+                        current_challenge,
+                        member.id,
+                        habit,
+                        index,
+                        current_time,
+                    )
+                    completion_access['streakRestore'] = _habit_streak_restore_quote(
+                        current_challenge,
+                        staff_member_habit,
+                        habit,
+                        index,
+                        member_today,
+                        completion_access,
+                    )
+                    completion_windows[str(index)] = completion_access
+        member_rows.append({
+            'memberId': member.id,
+            'username': member.username,
+            'name': _staff_member_display_name(member),
+            'accountRole': member.account_role,
+            'isLeader': member.id == group.leader_id,
+            'isViewer': member.id == viewer.id,
+            'timezone': member_timezone_name,
+            'today': member_today.isoformat(),
+            'challenge': challenge_payload,
+            'stats': stats,
+            'completionWindows': completion_windows,
+            'score': round(score, 1),
+            'todayRate': round(float(today_rate), 1) if today_rate is not None else None,
+            'historyCount': sum(1 for challenge in member_challenges if challenge.status == 'completed'),
+        })
+
+    leaderboard = sorted(
+        member_rows,
+        key=lambda row: (
+            0 if row.get('challenge') else 1,
+            -row['score'],
+            -int((row.get('stats') or {}).get('summary', {}).get('currentActiveStreak') or 0),
+            row['name'].lower(),
+        ),
+    )
+    for rank, row in enumerate(leaderboard, start=1):
+        row['rank'] = rank
+
+    viewer_history = [
+        challenge.to_dict()
+        for challenge in challenges_by_member.get(viewer.id, [])
+        if challenge.status == 'completed'
+    ][:12]
+    return {
+        'group': {
+            'id': group.id,
+            'groupId': group.group_id,
+            'name': group.name,
+            'leaderId': group.leader_id,
+        },
+        'viewerId': viewer.id,
+        'members': member_rows,
+        'leaderboard': leaderboard,
+        'slackerCallout': build_staff_slacker_callout(member_rows),
+        'history': viewer_history,
+        'rules': {
+            'independentChallenges': True,
+            'completionWindowMinutesBefore': 60,
+            'completionWindowMinutesAfter': 60,
+            'featuresIncluded': True,
+            'avatarItemsUseIpBucks': True,
+        },
+    }
+
+
+@groups_bp.route('/<group_id>/staff-hub', methods=['GET'])
+@jwt_required()
+def get_staff_hub(group_id):
+    try:
+        group, user, error = _staff_workspace_context(group_id)
+        if error:
+            return error
+        if _finalize_staff_challenges(group):
+            db.session.commit()
+        return jsonify({'hub': _build_staff_hub_payload(group, user, request.args.get('timezone'))}), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/staff-challenges', methods=['POST'])
+@jwt_required()
+def create_staff_personal_challenge(group_id):
+    try:
+        group, user, error = _staff_workspace_context(group_id)
+        if error:
+            return error
+        data = request.get_json() or {}
+        timezone_name, member_timezone = _staff_member_timezone(group, user.id, data.get('deviceTimezone'))
+        member_today = datetime.now(member_timezone).date()
+        try:
+            start_date = date.fromisoformat(str(data.get('startDate') or '')[:10])
+            end_date = date.fromisoformat(str(data.get('endDate') or '')[:10])
+        except ValueError:
+            return jsonify({'error': 'Valid start and end dates are required'}), 400
+        if start_date < member_today:
+            return jsonify({'error': 'A new personal challenge cannot start in the past'}), 400
+        if end_date < start_date:
+            return jsonify({'error': 'The challenge end date must be on or after its start date'}), 400
+        if (end_date - start_date).days > 365:
+            return jsonify({'error': 'Keep a personal challenge to 365 days or fewer'}), 400
+        _finalize_staff_challenges(group)
+        existing = StaffPersonalChallenge.query.filter_by(
+            group_id=group.id,
+            member_id=user.id,
+            status='active',
+        ).first()
+        if existing:
+            return jsonify({'error': 'Finish your current personal challenge before starting another'}), 409
+        habits = normalize_staff_challenge_habits(data.get('habits'))
+        settings = _get_student_planner_settings(group.id, user.id, create=True)
+        settings.timezone_name = timezone_name
+        settings.updated_at = datetime.utcnow()
+        challenge = StaffPersonalChallenge(
+            group_id=group.id,
+            member_id=user.id,
+            title=str(data.get('title') or 'My personal challenge').strip()[:140] or 'My personal challenge',
+            start_date=datetime.fromisoformat(f'{start_date.isoformat()}T00:00:00'),
+            end_date=datetime.fromisoformat(f'{end_date.isoformat()}T23:59:59'),
+            habits=habits,
+            status='active',
+        )
+        db.session.add(challenge)
+        db.session.commit()
+        return jsonify({
+            'message': 'Personal challenge started',
+            'hub': _build_staff_hub_payload(group, user, timezone_name),
+        }), 201
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/staff-challenges/<int:challenge_id>', methods=['PUT'])
+@jwt_required()
+def update_staff_personal_challenge(group_id, challenge_id):
+    try:
+        group, user, error = _staff_workspace_context(group_id)
+        if error:
+            return error
+        challenge = StaffPersonalChallenge.query.filter_by(
+            id=challenge_id,
+            group_id=group.id,
+            member_id=user.id,
+            status='active',
+        ).first()
+        if not challenge:
+            return jsonify({'error': 'Active personal challenge not found'}), 404
+        data = request.get_json() or {}
+        if 'title' in data:
+            challenge.title = str(data.get('title') or '').strip()[:140] or challenge.title
+        if 'endDate' in data:
+            try:
+                end_date = date.fromisoformat(str(data.get('endDate') or '')[:10])
+            except ValueError:
+                return jsonify({'error': 'A valid end date is required'}), 400
+            if end_date < challenge.start_date.date():
+                return jsonify({'error': 'The end date cannot be before the start date'}), 400
+            challenge.end_date = datetime.fromisoformat(f'{end_date.isoformat()}T23:59:59')
+        if 'habits' in data:
+            challenge.habits = normalize_staff_challenge_habits(data.get('habits'), challenge.habits)
+            flag_modified(challenge, 'habits')
+        challenge.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({
+            'message': 'Personal challenge updated',
+            'hub': _build_staff_hub_payload(group, user, data.get('deviceTimezone')),
+        }), 200
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/staff-challenges/<int:challenge_id>/complete', methods=['POST'])
+@jwt_required()
+def complete_staff_personal_challenge(group_id, challenge_id):
+    try:
+        group, user, error = _staff_workspace_context(group_id)
+        if error:
+            return error
+        challenge = StaffPersonalChallenge.query.filter_by(
+            id=challenge_id,
+            group_id=group.id,
+            member_id=user.id,
+            status='active',
+        ).first()
+        if not challenge:
+            return jsonify({'error': 'Active personal challenge not found'}), 404
+        challenge.status = 'completed'
+        challenge.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({
+            'message': 'Challenge moved to your history',
+            'hub': _build_staff_hub_payload(group, user, (request.get_json() or {}).get('deviceTimezone')),
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/staff-challenges/<int:challenge_id>/habits/<int:habit_index>/progress', methods=['POST'])
+@jwt_required()
+def update_staff_personal_habit_progress(group_id, challenge_id, habit_index):
+    try:
+        group, user, error = _staff_workspace_context(group_id)
+        if error:
+            return error
+        challenge = StaffPersonalChallenge.query.filter_by(
+            id=challenge_id,
+            group_id=group.id,
+            member_id=user.id,
+            status='active',
+        ).first()
+        if not challenge:
+            return jsonify({'error': 'Active personal challenge not found'}), 404
+        try:
+            habit = (challenge.habits or [])[habit_index]
+        except IndexError:
+            return jsonify({'error': 'Habit not found'}), 404
+        data = request.get_json() or {}
+        timezone_name, member_timezone = _staff_member_timezone(group, user.id, data.get('deviceTimezone'))
+        settings = _get_student_planner_settings(group.id, user.id, create=True)
+        settings.timezone_name = timezone_name
+        settings.updated_at = datetime.utcnow()
+        current_time = datetime.now(member_timezone)
+        completion_access = _staff_habit_completion_access(group, challenge, user.id, habit, habit_index, current_time)
+        progress_date = date.fromisoformat(completion_access['date'])
+        if progress_date < challenge.start_date.date() or progress_date > challenge.end_date.date():
+            return jsonify({'error': 'This habit is outside your challenge dates'}), 403
+        if not completion_access.get('windowOpen'):
+            return _completion_window_error(completion_access)
+        progress_entry = _habit_progress_for_date(habit, progress_date)
+        if not progress_entry:
+            progress_entry = {'date': progress_date.isoformat(), 'completed': False}
+            habit.setdefault('progress', []).append(progress_entry)
+
+        habit_type = habit.get('habitType') or 'boolean'
+        was_completed = bool(progress_entry.get('completed'))
+        if habit_type == 'numeric':
+            try:
+                value = float(data.get('value'))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'A numeric value is required'}), 400
+            minimum = float(habit.get('minValue') or 0)
+            maximum = float(habit.get('maxValue') or 10)
+            if value < minimum or value > maximum:
+                return jsonify({'error': f'Value must be between {minimum:g} and {maximum:g}'}), 400
+            progress_entry['numericValue'] = value
+            progress_entry['completed'] = value >= maximum
+        elif habit_type == 'text':
+            value = str(data.get('value') or '').strip()
+            if not value:
+                return jsonify({'error': 'Write a response before saving'}), 400
+            progress_entry['textValue'] = value[:2000]
+            progress_entry['completed'] = True
+        elif habit_type == 'periodic':
+            target = max(1, int(
+                completion_access.get('eligibleOccurrenceCount')
+                or habit.get('periodicOccurrences')
+                or 4
+            ))
+            logged = list(progress_entry.get('periodicLoggedOccurrences') or [])
+            occurrence_index = completion_access.get('activeOccurrenceIndex')
+            if occurrence_index is None or occurrence_index in logged:
+                return _completion_window_error(completion_access)
+            logged = sorted(set(logged + [occurrence_index]))
+            progress_entry['periodicLoggedOccurrences'] = logged
+            progress_entry['periodicCompleted'] = min(target, len(logged))
+            progress_entry['periodicTarget'] = target
+            progress_entry['completed'] = len(logged) >= target
+        else:
+            progress_entry['completed'] = not was_completed
+
+        if progress_entry.get('completed'):
+            progress_entry['completedAt'] = datetime.now(timezone.utc).isoformat()
+        else:
+            progress_entry.pop('completedAt', None)
+        challenge.habits = list(challenge.habits or [])
+        flag_modified(challenge, 'habits')
+        challenge.updated_at = datetime.utcnow()
+        if progress_entry.get('completed') and not was_completed:
+            db.session.add(Message(
+                group_id=group.id,
+                sender_id=user.id,
+                content=f"{_staff_member_display_name(user)} completed {habit.get('name') or 'a personal habit'} — receipts officially filed.",
+                message_type='system',
+            ))
+        db.session.commit()
+        return jsonify({
+            'message': 'Progress recorded',
+            'completionWindow': _staff_habit_completion_access(group, challenge, user.id, habit, habit_index, current_time),
+            'hub': _build_staff_hub_payload(group, user, timezone_name),
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
+@groups_bp.route('/<group_id>/staff-challenges/<int:challenge_id>/habits/<int:habit_index>/restore-streak', methods=['POST'])
+@jwt_required()
+def restore_staff_personal_habit_streak(group_id, challenge_id, habit_index):
+    try:
+        group, user, error = _staff_workspace_context(group_id)
+        if error:
+            return error
+        challenge = StaffPersonalChallenge.query.filter_by(
+            id=challenge_id,
+            group_id=group.id,
+            member_id=user.id,
+            status='active',
+        ).first()
+        if not challenge:
+            return jsonify({'error': 'Active personal challenge not found'}), 404
+        try:
+            habit = (challenge.habits or [])[habit_index]
+        except IndexError:
+            return jsonify({'error': 'Habit not found'}), 404
+
+        data = request.get_json() or {}
+        timezone_name, member_timezone = _staff_member_timezone(group, user.id, data.get('deviceTimezone'))
+        current_time = datetime.now(member_timezone)
+        target_date = current_time.date()
+        member_habit = _staff_challenge_member_entry(challenge)
+        completion_access = _staff_habit_completion_access(
+            group,
+            challenge,
+            user.id,
+            habit,
+            habit_index,
+            current_time,
+        )
+        quote = _habit_streak_restore_quote(
+            challenge,
+            member_habit,
+            habit,
+            habit_index,
+            target_date,
+            completion_access,
+        )
+        wallet, _ = _sync_student_ip_bucks(group, user.id, today_value=target_date)
+        if quote['alreadyRestored']:
+            db.session.commit()
+            return jsonify({
+                'message': 'This streak is already protected',
+                'alreadyRestored': True,
+                'wallet': wallet.to_dict(),
+                'streakRestore': quote,
+                'hub': _build_staff_hub_payload(group, user, timezone_name),
+            }), 200
+        if not quote['eligible']:
+            if completion_access.get('status') != 'closed':
+                message = 'A streak can only be protected after every completion window for today has closed.'
+            elif quote['progressPercent'] >= 100:
+                message = 'This habit was completed, so its streak does not need restoring.'
+            elif quote['atRiskStreak'] < 1:
+                message = 'There is no previous streak to restore for this habit.'
+            else:
+                message = 'This streak cannot be restored.'
+            db.session.rollback()
+            return jsonify({'error': message, 'wallet': wallet.to_dict(), 'streakRestore': quote}), 409
+
+        cost = int(quote['cost'])
+        if int(wallet.balance or 0) < cost:
+            db.session.rollback()
+            return jsonify({
+                'error': f'You need {cost - int(wallet.balance or 0)} more IP Bucks to protect this streak.',
+                'wallet': wallet.to_dict(),
+                'streakRestore': quote,
+            }), 409
+
+        reference_key = f'streak-restore:staff:v1:g{group.id}:c{challenge.id}:s{user.id}:h{habit_index}:d{target_date.isoformat()}'
+        if StudentIpTransaction.query.filter_by(reference_key=reference_key).first():
+            db.session.rollback()
+            return jsonify({'error': 'This streak restoration has already been processed.'}), 409
+
+        progress_entry = _habit_progress_for_date(habit, target_date)
+        if not progress_entry:
+            progress_entry = {'date': target_date.isoformat(), 'completed': False}
+            habit.setdefault('progress', []).append(progress_entry)
+        progress_entry['streakRestored'] = True
+        progress_entry['streakRestoredAt'] = datetime.now(timezone.utc).isoformat()
+        progress_entry['streakRestoreCost'] = cost
+        progress_entry['streakRestoredFrom'] = quote['atRiskStreak']
+
+        wallet.balance = int(wallet.balance or 0) - cost
+        wallet.lifetime_spent = int(wallet.lifetime_spent or 0) + cost
+        wallet.updated_at = datetime.utcnow()
+        db.session.add(StudentIpTransaction(
+            wallet_id=wallet.id,
+            group_id=group.id,
+            amount=-cost,
+            kind='streak_restore',
+            reference_key=reference_key,
+            description=f"Protected a {quote['atRiskStreak']}-occasion streak for {habit.get('name') or 'a habit'}",
+            details={
+                'challengeId': challenge.id,
+                'habitIndex': habit_index,
+                'habitName': habit.get('name') or f'Habit {habit_index + 1}',
+                'date': target_date.isoformat(),
+                'restoredStreak': quote['atRiskStreak'],
+                'cost': cost,
+                'timezone': timezone_name,
+            },
+        ))
+        challenge.habits = list(challenge.habits or [])
+        flag_modified(challenge, 'habits')
+        challenge.updated_at = datetime.utcnow()
+        settings = _get_student_planner_settings(group.id, user.id, create=True)
+        settings.timezone_name = timezone_name
+        settings.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({
+            'message': f"Your {quote['atRiskStreak']}-occasion streak is protected.",
+            'wallet': wallet.to_dict(),
+            'streakRestore': {
+                **quote,
+                'eligible': False,
+                'alreadyRestored': True,
+            },
+            'hub': _build_staff_hub_payload(group, user, timezone_name),
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
+
 @groups_bp.route('/<group_id>', methods=['GET'])
 @jwt_required()
 def get_group(group_id):
@@ -6825,6 +12614,8 @@ def update_group(group_id):
         if new_group_type is not None:
             if new_group_type not in ALLOWED_GROUP_TYPES:
                 return jsonify({'error': 'Invalid group type'}), 400
+            if 'staff' in {group.group_type, new_group_type} and group.group_type != new_group_type:
+                return jsonify({'error': 'Coaches HQ workspaces must be created as new workspaces'}), 400
             if group.active_challenge and group.group_type != new_group_type:
                 return jsonify({'error': 'Cannot change group type while a challenge is active'}), 400
             if group.group_type != new_group_type:
@@ -6924,6 +12715,8 @@ def delete_group(group_id):
         # 5. Delete messages
         Message.query.filter_by(group_id=group.id).delete()
 
+        StaffPersonalChallenge.query.filter_by(group_id=group.id).delete()
+
         # 6. Delete challenges (member habits will be cascade deleted)
         GroupChallenge.query.filter_by(group_id=group.id).delete()
 
@@ -6936,6 +12729,138 @@ def delete_group(group_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+@groups_bp.route('/<group_id>/challenge/<int:challenge_id>/habit/<int:habit_index>/restore-streak', methods=['POST'])
+@jwt_required()
+def restore_group_habit_streak(group_id, challenge_id, habit_index):
+    try:
+        user_id = int(get_jwt_identity())
+        group = Group.query.filter_by(group_id=group_id).first()
+        if not group or not group.active_challenge or group.active_challenge.id != challenge_id:
+            return jsonify({'error': 'Group or active challenge not found'}), 404
+
+        challenge = group.active_challenge
+        member_habits = list(challenge.member_habits or [])
+        member_habit = next(
+            (
+                entry for entry in member_habits
+                if str(
+                    (entry.get('member') or {}).get('id')
+                    if isinstance(entry.get('member'), dict)
+                    else entry.get('member')
+                ) == str(user_id)
+            ),
+            None,
+        )
+        if not member_habit:
+            return jsonify({'error': 'Member not found in challenge'}), 404
+        try:
+            habit = (member_habit.get('habits') or [])[habit_index]
+        except IndexError:
+            return jsonify({'error': 'Habit not found'}), 404
+
+        timezone_name, member_timezone = _student_timezone(group, user_id)
+        current_time = datetime.now(member_timezone)
+        target_date = current_time.date()
+        completion_access = _habit_completion_access(
+            group,
+            user_id,
+            habit,
+            habit_index,
+            now=current_time,
+            preferred_date=target_date,
+            challenge=challenge,
+            member_habit=member_habit,
+        )
+        quote = _habit_streak_restore_quote(
+            challenge,
+            member_habit,
+            habit,
+            habit_index,
+            target_date,
+            completion_access,
+        )
+        wallet, _ = _sync_student_ip_bucks(group, user_id, today_value=target_date)
+        if quote['alreadyRestored']:
+            db.session.commit()
+            return jsonify({
+                'message': 'This streak is already protected',
+                'alreadyRestored': True,
+                'wallet': wallet.to_dict(),
+                'streakRestore': quote,
+            }), 200
+        if not quote['eligible']:
+            if completion_access.get('status') != 'closed':
+                message = 'A streak can only be protected after every completion window for today has closed.'
+            elif quote['progressPercent'] >= 100:
+                message = 'This habit was completed, so its streak does not need restoring.'
+            elif quote['atRiskStreak'] < 1:
+                message = 'There is no previous streak to restore for this habit.'
+            else:
+                message = 'This streak cannot be restored.'
+            db.session.rollback()
+            return jsonify({'error': message, 'streakRestore': quote}), 409
+
+        cost = int(quote['cost'])
+        if int(wallet.balance or 0) < cost:
+            db.session.rollback()
+            return jsonify({
+                'error': f'You need {cost - int(wallet.balance or 0)} more IP Bucks to protect this streak.',
+                'wallet': wallet.to_dict(),
+                'streakRestore': quote,
+            }), 409
+
+        reference_key = f'streak-restore:v1:g{group.id}:c{challenge.id}:s{user_id}:h{habit_index}:d{target_date.isoformat()}'
+        existing_transaction = StudentIpTransaction.query.filter_by(reference_key=reference_key).first()
+        if existing_transaction:
+            db.session.rollback()
+            return jsonify({'error': 'This streak restoration has already been processed.'}), 409
+
+        progress_entry = _habit_progress_for_date(habit, target_date)
+        if not progress_entry:
+            progress_entry = {'date': target_date.isoformat(), 'completed': False}
+            habit.setdefault('progress', []).append(progress_entry)
+        progress_entry['streakRestored'] = True
+        progress_entry['streakRestoredAt'] = datetime.now(timezone.utc).isoformat()
+        progress_entry['streakRestoreCost'] = cost
+        progress_entry['streakRestoredFrom'] = quote['atRiskStreak']
+
+        wallet.balance = int(wallet.balance or 0) - cost
+        wallet.lifetime_spent = int(wallet.lifetime_spent or 0) + cost
+        wallet.updated_at = datetime.utcnow()
+        db.session.add(StudentIpTransaction(
+            wallet_id=wallet.id,
+            group_id=group.id,
+            amount=-cost,
+            kind='streak_restore',
+            reference_key=reference_key,
+            description=f"Protected a {quote['atRiskStreak']}-occasion streak for {habit.get('name') or 'a habit'}",
+            details={
+                'challengeId': challenge.id,
+                'habitIndex': habit_index,
+                'habitName': habit.get('name') or f'Habit {habit_index + 1}',
+                'date': target_date.isoformat(),
+                'restoredStreak': quote['atRiskStreak'],
+                'cost': cost,
+                'timezone': timezone_name,
+            },
+        ))
+        challenge.member_habits = member_habits
+        flag_modified(challenge, 'member_habits')
+        db.session.commit()
+        return jsonify({
+            'message': f"Your {quote['atRiskStreak']}-occasion streak is protected.",
+            'wallet': wallet.to_dict(),
+            'streakRestore': {
+                **quote,
+                'eligible': False,
+                'alreadyRestored': True,
+            },
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'traceback': traceback.format_exc()}), 500
+
 
 @groups_bp.route('/<group_id>/challenge/<int:challenge_id>/habit/<int:habit_index>/toggle', methods=['POST'])
 @jwt_required()
@@ -6958,21 +12883,64 @@ def toggle_group_habit(group_id, challenge_id, habit_index):
     except IndexError:
         return jsonify({'error': 'Habit not found'}), 404
 
-    # Find today's progress entry or create it
-    today = datetime.utcnow().date().isoformat()
-    progress_entry = next((p for p in habit.get('progress', []) if p['date'][:10] == today), None)
-    if not progress_entry:
-        progress_entry = {'date': today, 'completed': False}
-        habit.setdefault('progress', []).append(progress_entry)
-
     # Get user info for the message
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
-    # Toggle completion
+    school_now = datetime.now(_student_timezone(group, int(user_id))[1])
+    completion_access = _habit_completion_access(group, int(user_id), habit, habit_index, now=school_now)
+    progress_date = completion_access['date']
+    progress_entry = next(
+        (entry for entry in (habit.get('progress') or []) if str(entry.get('date') or '')[:10] == progress_date),
+        None,
+    )
+    if not progress_entry:
+        if not completion_access.get('windowOpen'):
+            return _completion_window_error(completion_access)
+        progress_entry = {'date': progress_date, 'completed': False}
+        habit.setdefault('progress', []).append(progress_entry)
+
+    # Toggle completion, or advance one occurrence for periodic habits.
     was_completed = progress_entry['completed']
-    progress_entry['completed'] = not progress_entry['completed']
+    if habit.get('habitType') == 'periodic':
+        target_occurrences = max(1, int(
+            completion_access.get('eligibleOccurrenceCount')
+            or habit.get('periodicOccurrences')
+            or 4
+        ))
+        if progress_entry['completed']:
+            logged_occurrences = []
+            progress_entry['periodicLoggedAt'] = {}
+        else:
+            if not completion_access.get('windowOpen'):
+                return _completion_window_error(completion_access)
+            logged_occurrences = list(progress_entry.get('periodicLoggedOccurrences') or [])
+            if not logged_occurrences:
+                legacy_count = max(0, int(progress_entry.get('periodicCompleted') or 0))
+                eligible_indexes = completion_access.get('eligibleOccurrenceIndexes') or list(range(target_occurrences))
+                logged_occurrences = eligible_indexes[:legacy_count]
+            occurrence_index = completion_access.get('activeOccurrenceIndex')
+            if occurrence_index is None or occurrence_index in logged_occurrences:
+                return _completion_window_error(completion_access)
+            logged_occurrences.append(occurrence_index)
+            logged_occurrences = sorted(set(logged_occurrences))
+            logged_at = dict(progress_entry.get('periodicLoggedAt') or {})
+            logged_at[str(occurrence_index)] = datetime.now(timezone.utc).isoformat()
+            progress_entry['periodicLoggedAt'] = logged_at
+        current_occurrences = min(target_occurrences, len(logged_occurrences))
+        progress_entry['periodicLoggedOccurrences'] = logged_occurrences
+        progress_entry['periodicCompleted'] = current_occurrences
+        progress_entry['periodicTarget'] = target_occurrences
+        progress_entry['completed'] = current_occurrences >= target_occurrences
+    else:
+        if not progress_entry['completed'] and not completion_access.get('windowOpen'):
+            return _completion_window_error(completion_access)
+        progress_entry['completed'] = not progress_entry['completed']
+    if progress_entry['completed']:
+        progress_entry['completedAt'] = datetime.now(timezone.utc).isoformat()
+    else:
+        progress_entry.pop('completedAt', None)
 
     # Save back to the challenge
     challenge.member_habits = member_habits
@@ -6991,7 +12959,13 @@ def toggle_group_habit(group_id, challenge_id, habit_index):
         db.session.add(system_message)
         db.session.commit()
 
-    return jsonify({'success': True, 'completed': progress_entry['completed']})
+    return jsonify({
+        'success': True,
+        'completed': progress_entry['completed'],
+        'periodicCompleted': progress_entry.get('periodicCompleted'),
+        'periodicTarget': progress_entry.get('periodicTarget'),
+        'completionWindow': _habit_completion_access(group, int(user_id), habit, habit_index, now=school_now),
+    })
 
 @groups_bp.route('/<group_id>/challenge/<int:challenge_id>/habit/<int:habit_index>/numeric', methods=['POST'])
 @jwt_required()
@@ -7024,16 +12998,23 @@ def update_numeric_habit(group_id, challenge_id, habit_index):
     if value < min_value or value > max_value:
         return jsonify({'error': f'Value must be between {min_value} and {max_value}'}), 400
 
-    # Find today's progress entry or create it
-    today = datetime.utcnow().date().isoformat()
-    progress_entry = next((p for p in habit.get('progress', []) if p['date'][:10] == today), None)
+    school_now = datetime.now(_student_timezone(group, int(user_id))[1])
+    completion_access = _habit_completion_access(group, int(user_id), habit, habit_index, now=school_now)
+    if not completion_access.get('windowOpen'):
+        return _completion_window_error(completion_access)
+    progress_date = completion_access['date']
+    progress_entry = next(
+        (entry for entry in (habit.get('progress') or []) if str(entry.get('date') or '')[:10] == progress_date),
+        None,
+    )
     if not progress_entry:
-        progress_entry = {'date': today, 'completed': False, 'numericValue': None}
+        progress_entry = {'date': progress_date, 'completed': False, 'numericValue': None}
         habit.setdefault('progress', []).append(progress_entry)
 
     # Update numeric value and mark as completed
     progress_entry['numericValue'] = value
     progress_entry['completed'] = True
+    progress_entry['completedAt'] = datetime.now(timezone.utc).isoformat()
 
     # Save back to the challenge
     challenge.member_habits = member_habits
@@ -7052,7 +13033,11 @@ def update_numeric_habit(group_id, challenge_id, habit_index):
         db.session.add(system_message)
         db.session.commit()
 
-    return jsonify({'success': True, 'numericValue': value})
+    return jsonify({
+        'success': True,
+        'numericValue': value,
+        'completionWindow': _habit_completion_access(group, int(user_id), habit, habit_index, now=school_now),
+    })
 
 @groups_bp.route('/<group_id>/challenge/<int:challenge_id>/habit/<int:habit_index>/text', methods=['POST'])
 @jwt_required()
@@ -7079,16 +13064,23 @@ def update_text_habit(group_id, challenge_id, habit_index):
     except IndexError:
         return jsonify({'error': 'Habit not found'}), 404
 
-    # Find today's progress entry or create it
-    today = datetime.utcnow().date().isoformat()
-    progress_entry = next((p for p in habit.get('progress', []) if p['date'][:10] == today), None)
+    school_now = datetime.now(_student_timezone(group, int(user_id))[1])
+    completion_access = _habit_completion_access(group, int(user_id), habit, habit_index, now=school_now)
+    if not completion_access.get('windowOpen'):
+        return _completion_window_error(completion_access)
+    progress_date = completion_access['date']
+    progress_entry = next(
+        (entry for entry in (habit.get('progress') or []) if str(entry.get('date') or '')[:10] == progress_date),
+        None,
+    )
     if not progress_entry:
-        progress_entry = {'date': today, 'completed': False, 'textValue': None}
+        progress_entry = {'date': progress_date, 'completed': False, 'textValue': None}
         habit.setdefault('progress', []).append(progress_entry)
 
     # Update text value and mark as completed
     progress_entry['textValue'] = value.strip()
     progress_entry['completed'] = True
+    progress_entry['completedAt'] = datetime.now(timezone.utc).isoformat()
 
     # Save back to the challenge
     challenge.member_habits = member_habits
@@ -7107,7 +13099,11 @@ def update_text_habit(group_id, challenge_id, habit_index):
         db.session.add(system_message)
         db.session.commit()
 
-    return jsonify({'success': True, 'textValue': value.strip()}) 
+    return jsonify({
+        'success': True,
+        'textValue': value.strip(),
+        'completionWindow': _habit_completion_access(group, int(user_id), habit, habit_index, now=school_now),
+    })
 
 @groups_bp.route('/<group_id>/chat', methods=['GET'])
 @jwt_required()
@@ -7130,7 +13126,8 @@ def get_group_chat(group_id):
     ).order_by(Message.created_at.asc()).all()
     return jsonify({
         'messages': [message.to_dict() for message in messages],
-        'channel': context['channel']
+        'channel': context['channel'],
+        'readers': build_chat_reader_profiles(messages)
     })
 
 
@@ -7154,7 +13151,15 @@ def send_group_chat(group_id):
     content = data.get('content', '').strip()
     if not content:
         return jsonify({'error': 'Message content required'}), 400
-    msg = Message(group_id=group.id, sender_id=user.id, class_id=context['class_id'], content=content)
+    if len(content) > 2000:
+        return jsonify({'error': 'Messages can be at most 2,000 characters'}), 400
+    msg = Message(
+        group_id=group.id,
+        sender_id=user.id,
+        class_id=context['class_id'],
+        content=content,
+        read_by=json.dumps([user.id])
+    )
     db.session.add(msg)
     db.session.commit()
     return jsonify({'success': True, 'message': msg.to_dict(), 'channel': context['channel']})
@@ -7536,141 +13541,74 @@ def get_group_archives(group_id):
         
         archives = []
         for challenge in completed_challenges:
-            # Calculate challenge statistics
             total_days = (challenge.end_date - challenge.start_date).days + 1
             total_members = len(challenge.member_habits)
-            
-            # Calculate overall completion rate
             total_possible_completions = 0
-            total_actual_completions = 0
-            
+            total_actual_completions = 0.0
             member_stats = []
+            member_statistics = []
             for member_habit in challenge.member_habits:
-                member_id = member_habit['member']
+                raw_member_id = member_habit.get('member')
+                member_id = raw_member_id.get('id') if isinstance(raw_member_id, dict) else raw_member_id
                 member = User.query.get(member_id)
                 if not member:
                     continue
-                    
-                habits = member_habit.get('habits', [])
-                habit_details = []
-                
-                # Track which days the member completed ANY habit
-                completed_dates = set()
-                
-                # First, collect all progress data for all habits
-                all_habit_progress = {}
-                for habit in habits:
-                    habit_name = habit.get('name', 'Unknown Habit')
-                    habit_type = habit.get('habitType', 'boolean')
-                    progress = habit.get('progress', [])
-                    
-                    # Create a map of progress entries for this habit
-                    habit_progress_map = {}
-                    for progress_entry in progress:
-                        progress_date = datetime.fromisoformat(progress_entry['date']).date()
-                        if challenge.start_date.date() <= progress_date <= challenge.end_date.date():
-                            habit_progress_map[progress_date.isoformat()] = progress_entry.get('completed', False)
-                    
-                    all_habit_progress[habit_name] = {
-                        'type': habit_type,
-                        'progress_map': habit_progress_map
-                    }
-                
-                # Now calculate individual habit performance and track daily participation
-                for habit_name, habit_data in all_habit_progress.items():
-                    habit_type = habit_data['type']
-                    progress_map = habit_data['progress_map']
-                    
-                    # Count completions for this habit during challenge period
-                    habit_completed_days = 0
-                    habit_total_days = total_days  # Each habit should be done every day of the challenge
-                    
-                    # Check each day of the challenge for this habit
-                    for day_offset in range(total_days):
-                        current_date = challenge.start_date.date() + timedelta(days=day_offset)
-                        date_str = current_date.isoformat()
-                        
-                        if date_str in progress_map and progress_map[date_str]:
-                            habit_completed_days += 1
-                    
-                    habit_details.append({
-                        'name': habit_name,
-                        'type': habit_type,
-                        'completed_days': habit_completed_days,
-                        'total_days': habit_total_days,
-                        'completion_rate': round((habit_completed_days / habit_total_days * 100) if habit_total_days > 0 else 0, 1)
-                    })
-                
-                # Now calculate daily participation (days with ANY habit completed)
-                for day_offset in range(total_days):
-                    current_date = challenge.start_date.date() + timedelta(days=day_offset)
-                    date_str = current_date.isoformat()
-                    
-                    # Check if ANY habit was completed on this day
-                    day_has_completion = False
-                    for habit_data in all_habit_progress.values():
-                        if date_str in habit_data['progress_map'] and habit_data['progress_map'][date_str]:
-                            day_has_completion = True
-                            break
-                    
-                    if day_has_completion:
-                        completed_dates.add(date_str)
-                
-                # Member performance: days with ANY habit completed / total challenge days
-                member_days_completed = len(completed_dates)
-                member_total_days = total_days
-                member_completion_rate = (member_days_completed / member_total_days * 100) if member_total_days > 0 else 0
-                
-                # For overall stats, count total habit completions
-                total_habit_completions = sum(h['completed_days'] for h in habit_details)
-                total_possible_habit_completions = sum(h['total_days'] for h in habit_details)
-                
-                total_possible_completions += total_possible_habit_completions
-                total_actual_completions += total_habit_completions
-                
+                statistics = _build_group_member_habit_statistics(
+                    group,
+                    challenge,
+                    member_habit,
+                    member_id,
+                    today_value=challenge.end_date.date(),
+                )
+                member_statistics.append(statistics)
+                summary = statistics['summary']
+                habit_details = [{
+                    'name': habit['name'],
+                    'type': habit['habitType'],
+                    'combat_type': habit['combatType'],
+                    'completed_days': habit['fullCount'],
+                    'partial_days': habit['partialCount'],
+                    'missed_days': habit['missedCount'],
+                    'earned_units': habit['earnedUnits'],
+                    'total_days': habit['possibleUnits'],
+                    'completion_rate': habit['completionRate'],
+                    'periodic_completed': habit['periodicCompleted'],
+                    'periodic_target': habit['periodicTarget'],
+                } for habit in statistics['habits']]
+                total_possible_completions += summary['possibleUnits']
+                total_actual_completions += summary['earnedUnits']
                 member_stats.append({
                     'id': member_id,
                     'username': member.username,
-                    'days_completed': member_days_completed,  # Days with ANY habit completed
-                    'total_days': member_total_days,  # Total challenge days
-                    'completion_rate': round(member_completion_rate, 1),  # Days with habits / total days
+                    'days_completed': summary['activeDays'],
+                    'perfect_days': summary['perfectDays'],
+                    'partial_days': summary['partialDays'],
+                    'total_days': summary['scheduledDays'],
+                    'completion_rate': summary['completionRate'],
                     'habit_details': habit_details,
-                    'total_habit_completions': total_habit_completions,  # Total individual habit completions
-                    'total_possible_habit_completions': total_possible_habit_completions
+                    'total_habit_completions': summary['earnedUnits'],
+                    'total_possible_habit_completions': summary['possibleUnits'],
+                    'periodic_completed': summary['periodicCompleted'],
+                    'periodic_target': summary['periodicTarget'],
                 })
-            
+
             overall_completion_rate = (total_actual_completions / total_possible_completions * 100) if total_possible_completions > 0 else 0
-            
-            # Generate daily progress data for graphs
             daily_progress = []
             for day_offset in range(total_days):
                 current_date = challenge.start_date.date() + timedelta(days=day_offset)
                 date_str = current_date.isoformat()
-                
-                # Calculate daily completion rate (average of user averages)
-                user_daily_averages = []
-                for member_habit in challenge.member_habits:
-                    habits = member_habit.get('habits', [])
-                    if not habits:
-                        continue
-                    
-                    user_daily_total = 0
-                    for habit in habits:
-                        progress = habit.get('progress', [])
-                        progress_entry = next((p for p in progress if p['date'][:10] == date_str), None)
-                        if progress_entry and progress_entry.get('completed', False):
-                            user_daily_total += 1
-                    
-                    user_daily_average = user_daily_total / len(habits) if habits else 0
-                    user_daily_averages.append(user_daily_average)
-                
+                user_daily_averages = [
+                    row['completionRate']
+                    for statistics in member_statistics
+                    for row in statistics['daily']
+                    if row['date'] == date_str
+                ]
                 daily_avg = sum(user_daily_averages) / len(user_daily_averages) if user_daily_averages else 0
-                
                 daily_progress.append({
                     'date': date_str,
-                    'completion_rate': round(daily_avg * 100, 1)
+                    'completion_rate': round(daily_avg, 1)
                 })
-            
+
             archives.append({
                 'id': challenge.id,
                 'title': f"{challenge.start_date.strftime('%b %d')} - {challenge.end_date.strftime('%b %d, %Y')} Challenge",
@@ -7679,7 +13617,7 @@ def get_group_archives(group_id):
                 'duration_days': total_days,
                 'total_members': total_members,
                 'overall_completion_rate': round(overall_completion_rate, 1),
-                'total_completions': total_actual_completions,
+                'total_completions': round(total_actual_completions, 2),
                 'total_possible': total_possible_completions,
                 'member_stats': member_stats,
                 'daily_progress': daily_progress,
@@ -7727,91 +13665,59 @@ def get_group_attendance(group_id):
             return jsonify({'error': 'No active challenge', 'attendance': []}), 200
 
         challenge = group.active_challenge
-        total_days = (challenge.end_date - challenge.start_date).days + 1
-        
-        # Calculate attendance for each member
+
+        # This endpoint describes challenge engagement, not physical school attendance.
+        # Use the canonical habit statistics so schedules, join dates, recurring
+        # occurrences and numeric progress have the same meaning everywhere.
         attendance_data = []
         for member_habit in challenge.member_habits:
-            member_id = member_habit['member']
+            raw_member_id = member_habit.get('member')
+            member_id = raw_member_id.get('id') if isinstance(raw_member_id, dict) else raw_member_id
             member = User.query.get(member_id)
             if not member:
                 continue
-                
-            habits = member_habit.get('habits', [])
-            
-            # Track which days the member was active (completed ANY habit)
-            active_dates = set()
-            
-            # Collect all progress data for this member
-            for habit in habits:
-                progress = habit.get('progress', [])
-                for progress_entry in progress:
-                    # Parse the date string consistently
-                    progress_date_str = progress_entry['date']
-                    # Handle both ISO datetime strings and date-only strings
-                    if 'T' in progress_date_str:
-                        progress_date = datetime.fromisoformat(progress_date_str.replace('Z', '+00:00')).date()
-                    else:
-                        progress_date = datetime.fromisoformat(progress_date_str).date()
-                    
-                    # Ensure challenge dates are date objects
-                    challenge_start = challenge.start_date.date() if isinstance(challenge.start_date, datetime) else challenge.start_date
-                    challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
-                    
-                    if challenge_start <= progress_date <= challenge_end:
-                        if progress_entry.get('completed', False):
-                            active_dates.add(progress_date.isoformat())
-            
-            # Calculate attendance statistics
-            days_active = len(active_dates)
-            attendance_rate = (days_active / total_days * 100) if total_days > 0 else 0
-            
-            # Get recent activity (last 7 days including today, but not before challenge start)
-            recent_activity = []
-            today = date.today()  # Use date.today() for consistent local date
-            challenge_start = challenge.start_date.date() if isinstance(challenge.start_date, datetime) else challenge.start_date
-            challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
-            
-            # Calculate how many days to show (min of 7 or days since challenge start)
-            days_since_start = (today - challenge_start).days + 1  # +1 to include today
-            days_to_show = min(7, days_since_start)
-            
-            for i in range(days_to_show):
-                check_date = today - timedelta(days=i)
-                # Don't show dates before challenge started
-                if check_date >= challenge_start:
-                    date_str = check_date.isoformat()
-                    recent_activity.append({
-                        'date': date_str,
-                        'active': date_str in active_dates
-                    })
-            
-            # Generate full attendance history (all days from challenge start to today or end date)
-            full_attendance = []
-            current_date = challenge_start
-            end_date_for_display = min(today, challenge_end)
-            
-            while current_date <= end_date_for_display:
-                date_str = current_date.isoformat()
-                full_attendance.append({
-                    'date': date_str,
-                    'active': date_str in active_dates
-                })
-                current_date += timedelta(days=1)
-            
+            student_today = datetime.now(_student_timezone(group, member_id)[1]).date()
+            statistics = _build_group_member_habit_statistics(
+                group,
+                challenge,
+                member_habit,
+                member_id,
+                today_value=student_today,
+            )
+            summary = statistics['summary']
+            full_attendance = [{
+                'date': row['date'],
+                'active': row['completionRate'] > 0,
+                'perfect': row['completionRate'] >= 100,
+                'partial': 0 < row['completionRate'] < 100,
+                'completion_rate': row['completionRate'],
+                'earned_units': row['earnedUnits'],
+                'scheduled_count': row['scheduledCount'],
+            } for row in statistics['daily']]
+            active_dates = [row['date'] for row in full_attendance if row['active']]
+            days_active = summary['activeDays']
+            total_days = summary['scheduledDays']
+            attendance_rate = (days_active / total_days * 100) if total_days else 0
+
             attendance_data.append({
                 'member_id': member_id,
                 'username': member.username,
                 'days_active': days_active,
                 'total_days': total_days,
                 'attendance_rate': round(attendance_rate, 1),
-                'recent_activity': recent_activity,
+                'completion_rate': summary['completionRate'],
+                'completion_units': summary['earnedUnits'],
+                'possible_units': summary['possibleUnits'],
+                'perfect_days': summary['perfectDays'],
+                'partial_days': summary['partialDays'],
+                'missed_days': summary['missedDays'],
+                'recent_activity': list(reversed(full_attendance[-7:])),
                 'full_attendance': full_attendance,
-                'last_active': max(active_dates) if active_dates else None
+                'last_active': max(active_dates) if active_dates else None,
+                'metric_definition': 'Active scheduled days divided by all scheduled days since the student joined the challenge.',
             })
         
-        # Sort by attendance rate (highest first)
-        attendance_data.sort(key=lambda x: x['attendance_rate'], reverse=True)
+        attendance_data.sort(key=lambda row: (row['completion_rate'], row['attendance_rate']), reverse=True)
         
         return jsonify({
             'attendance': attendance_data,
@@ -7862,99 +13768,188 @@ def delete_group_challenge(group_id, challenge_id):
 @groups_bp.route('/<group_id>/challenge/<int:challenge_id>/member/<int:member_id>/habit/<int:habit_index>/toggle-day', methods=['POST'])
 @jwt_required()
 def toggle_habit_day_status(group_id, challenge_id, member_id, habit_index):
-    """Allow group leader to manually toggle a member's habit completion status for a specific day"""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         group = Group.query.filter_by(group_id=group_id).first()
-        
         if not group:
             return jsonify({'error': 'Group not found'}), 404
-            
-        # Only group leaders can modify member habits
         if not can_manage_group(group, user_id):
-            return jsonify({'error': 'Only group leaders can modify member habits'}), 403
-        
+            return jsonify({'error': 'Only school admins or legacy group owners can correct habit records'}), 403
+
+        student = next((member for member in get_group_members_list(group) if member.id == member_id), None)
+        if not student:
+            return jsonify({'error': 'Student not found in this group'}), 404
         challenge = GroupChallenge.query.get(challenge_id)
         if not challenge or challenge.group_id != group.id:
             return jsonify({'error': 'Challenge not found'}), 404
-        
-        data = request.get_json()
-        target_date = data.get('date')  # Should be ISO date string YYYY-MM-DD
-        new_status = data.get('completed')  # True or False (for boolean habits)
-        numeric_value = data.get('numericValue')  # Number (for numeric habits)
-        text_value = data.get('textValue')  # String (for text habits)
-        
-        if not target_date:
-            return jsonify({'error': 'Missing date'}), 400
-        
-        # Prevent modification of today's data
-        today = date.today().isoformat()
-        if target_date == today:
-            return jsonify({'error': 'Cannot modify today\'s data. Students must log their own progress for today.'}), 403
-        
-        # Find the member's habits
-        member_habit = None
-        for mh in challenge.member_habits:
-            if str(mh.get('member')) == str(member_id):
-                member_habit = mh
-                break
-        
+
+        data = request.get_json() or {}
+        reason = str(data.get('reason') or '').strip()
+        if len(reason) < 5:
+            return jsonify({'error': 'Add a short reason explaining how the completion was verified'}), 400
+        if len(reason) > 500:
+            return jsonify({'error': 'Keep the correction reason to 500 characters or fewer'}), 400
+        try:
+            target_date = date.fromisoformat(str(data.get('date') or '')[:10])
+        except ValueError:
+            return jsonify({'error': 'A valid correction date is required'}), 400
+
+        member_habit = next(
+            (
+                entry for entry in (challenge.member_habits or [])
+                if str(_member_habit_user_id(entry)) == str(member_id)
+            ),
+            None,
+        )
         if not member_habit:
             return jsonify({'error': 'Member not found in challenge'}), 404
-        
+
         habits = member_habit.get('habits', [])
         if habit_index < 0 or habit_index >= len(habits):
             return jsonify({'error': 'Invalid habit index'}), 400
-        
         habit = habits[habit_index]
-        habit_type = habit.get('habitType', 'boolean')
-        progress = habit.get('progress', [])
-        
-        # Check if progress entry already exists for this date
-        existing_entry = None
-        for p in progress:
-            if p['date'].startswith(target_date):  # Handle both date and datetime strings
-                existing_entry = p
-                break
-        
-        if existing_entry:
-            # Update existing entry based on habit type
-            if habit_type == 'numeric' and numeric_value is not None:
-                existing_entry['numericValue'] = numeric_value
-                existing_entry['completed'] = True  # Auto-mark as completed when value is set
-            elif habit_type == 'text' and text_value is not None:
-                existing_entry['textValue'] = text_value
-                existing_entry['completed'] = True  # Auto-mark as completed when value is set
-            elif new_status is not None:
-                existing_entry['completed'] = new_status
-        else:
-            # Create new progress entry
-            new_entry = {
-                'date': f"{target_date}T00:00:00",  # Store as ISO datetime
-                'completed': new_status if new_status is not None else False
+
+        timezone_name, student_timezone = _student_timezone(group, member_id)
+        student_today = datetime.now(student_timezone).date()
+        challenge_start = effective_challenge_start(challenge, member_habit)
+        challenge_end = challenge.end_date.date() if isinstance(challenge.end_date, datetime) else challenge.end_date
+        if target_date > student_today:
+            return jsonify({'error': 'Future habit records cannot be corrected'}), 400
+        if not challenge_start or target_date < challenge_start or (challenge_end and target_date > challenge_end):
+            return jsonify({'error': 'The selected date is outside this student\'s challenge period'}), 400
+        if not _habit_is_scheduled_on(habit, target_date):
+            return jsonify({'error': 'This habit was not scheduled on the selected date'}), 400
+
+        current_time = datetime.now(student_timezone)
+        completion_access = _habit_completion_access(
+            group,
+            member_id,
+            habit,
+            habit_index,
+            now=current_time,
+            preferred_date=target_date,
+            challenge=challenge,
+            member_habit=member_habit,
+        )
+        eligible_occurrences = int(completion_access.get('eligibleOccurrenceCount') or 0)
+        if eligible_occurrences < 1:
+            return jsonify({'error': 'This habit had no eligible completion window on the selected date'}), 400
+        correctable_occurrences = eligible_occurrences
+        if target_date == student_today:
+            correctable_occurrences = sum(
+                1
+                for window in (completion_access.get('windows') or [])
+                if window.get('eligible') is not False
+                and datetime.fromisoformat(str(window.get('opensAt')).replace('Z', '+00:00')) <= current_time
+            )
+            if correctable_occurrences < 1:
+                return jsonify({'error': 'Today\'s completion window has not opened yet'}), 400
+
+        progress = habit.setdefault('progress', [])
+        existing_entry = _habit_progress_for_date(habit, target_date)
+        if not existing_entry:
+            existing_entry = {
+                'date': target_date.isoformat(),
+                'completed': False,
             }
-            
-            if habit_type == 'numeric' and numeric_value is not None:
-                new_entry['numericValue'] = numeric_value
-                new_entry['completed'] = True
-            elif habit_type == 'text' and text_value is not None:
-                new_entry['textValue'] = text_value
-                new_entry['completed'] = True
-            
-            progress.append(new_entry)
-        
+            progress.append(existing_entry)
+
+        previous_result = _habit_correction_snapshot(habit, existing_entry)
+        restored_streak_cost = max(0, int(existing_entry.get('streakRestoreCost') or 0))
+        had_streak_restore = bool(existing_entry.get('streakRestored'))
+        new_result = _apply_admin_habit_correction(
+            habit,
+            existing_entry,
+            data,
+            periodic_target_override=(eligible_occurrences if habit.get('habitType') == 'periodic' else None),
+            periodic_max_completed=(correctable_occurrences if habit.get('habitType') == 'periodic' else None),
+        )
+
+        corrected_at = datetime.now(timezone.utc).isoformat()
+        actor = User.query.get(user_id)
+        actor_name = ' '.join(filter(None, [getattr(actor, 'first_name', ''), getattr(actor, 'last_name', '')])).strip()
+        actor_name = actor_name or getattr(actor, 'username', '') or 'Administrator'
+        correction_record = {
+            'actorId': user_id,
+            'actorName': actor_name,
+            'correctedAt': corrected_at,
+            'reason': reason,
+            'previousResult': previous_result,
+            'newResult': new_result,
+        }
+        correction_history = list(existing_entry.get('adminCorrections') or [])
+        existing_entry['adminCorrections'] = (correction_history + [correction_record])[-20:]
+
+        refund_amount = 0
+        if new_result['progressPercent'] >= 100 and had_streak_restore:
+            for key in ('streakRestored', 'streakRestoredAt', 'streakRestoreCost', 'streakRestoredFrom'):
+                existing_entry.pop(key, None)
+            spend_reference = f'streak-restore:v1:g{group.id}:c{challenge.id}:s{member_id}:h{habit_index}:d{target_date.isoformat()}'
+            refund_reference = f'streak-restore-refund:v1:g{group.id}:c{challenge.id}:s{member_id}:h{habit_index}:d{target_date.isoformat()}'
+            original_spend = StudentIpTransaction.query.filter_by(reference_key=spend_reference).first()
+            existing_refund = StudentIpTransaction.query.filter_by(reference_key=refund_reference).first()
+            if restored_streak_cost and original_spend and not existing_refund:
+                wallet = _get_or_create_ip_wallet(member_id)
+                refund_amount = restored_streak_cost
+                wallet.balance = int(wallet.balance or 0) + refund_amount
+                wallet.lifetime_spent = max(0, int(wallet.lifetime_spent or 0) - refund_amount)
+                wallet.updated_at = datetime.utcnow()
+                db.session.add(StudentIpTransaction(
+                    wallet_id=wallet.id,
+                    group_id=group.id,
+                    amount=refund_amount,
+                    kind='streak_restore_refund',
+                    reference_key=refund_reference,
+                    description=f"Refunded streak protection after an admin verified {habit.get('name') or 'a habit'}",
+                    details={
+                        'challengeId': challenge.id,
+                        'habitIndex': habit_index,
+                        'habitName': habit.get('name') or f'Habit {habit_index + 1}',
+                        'date': target_date.isoformat(),
+                        'reason': reason,
+                        'correctedBy': user_id,
+                    },
+                ))
+
         habit['progress'] = progress
-        
-        # Mark the field as modified for SQLAlchemy to detect the change
+        challenge.member_habits = list(challenge.member_habits or [])
         flag_modified(challenge, 'member_habits')
+        wallet, credited = _sync_student_ip_bucks(group, member_id, today_value=student_today)
+        earned_adjustment = sum(int(item.get('amount') or 0) for item in credited)
+        student_name = ' '.join(filter(None, [student.first_name, student.last_name])).strip() or student.username
+        log_school_audit(
+            group.id,
+            user_id,
+            'habit_progress_corrected',
+            'habit_progress',
+            f"Corrected {habit.get('name') or f'Habit {habit_index + 1}'} for {student_name}",
+            description=reason,
+            student_id=member_id,
+            metadata={
+                'challengeId': challenge.id,
+                'habitIndex': habit_index,
+                'habitType': habit.get('habitType') or 'boolean',
+                'date': target_date.isoformat(),
+                'timezone': timezone_name,
+                'previousResult': previous_result,
+                'newResult': new_result,
+                'ipBucksEarnedAdjustment': earned_adjustment,
+                'ipBucksRefunded': refund_amount,
+            },
+        )
         db.session.commit()
-        
+
         return jsonify({
-            'message': 'Habit status updated successfully',
-            'date': target_date,
-            'completed': new_status
+            'message': 'Verified habit correction saved and statistics recalculated',
+            'date': target_date.isoformat(),
+            'result': new_result,
+            'wallet': wallet.to_dict(),
+            'ipBucksEarnedAdjustment': earned_adjustment,
+            'ipBucksRefunded': refund_amount,
         }), 200
-        
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500

@@ -11,7 +11,7 @@ const useChallengeValidation = ({
   };
 
   const getAllMembers = () => {
-    return group?.members || [];
+    return (group?.members || []).filter((member) => !member.accountRole || member.accountRole === 'student');
   };
 
   const getMembersWithHabits = () => {

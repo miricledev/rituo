@@ -64,13 +64,43 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_HABIT_DRAFT_MODEL=gpt-4o-mini
 OPENAI_SCHEDULER_MODEL=gpt-4o-mini
 OPENAI_STUDENT_IMPORT_MODEL=gpt-4o-mini
+OPENAI_STUDENT_TOOLS_MODEL=gpt-5.6-luna
+SCHOOL_TIMEZONE=Europe/London
 ```
 
 The API key is used only by the Flask server and must never be added to the client environment.
 
+## Google Calendar
+
+Create a Google OAuth 2.0 Web application, enable the Google Calendar API, and add the exact backend callback URL to its authorised redirect URIs. For local development, use `http://localhost:5000/api/groups/google-calendar/callback`.
+
+Add these values to `server\.env`:
+
+```env
+GOOGLE_CALENDAR_CLIENT_ID=your_google_oauth_client_id
+GOOGLE_CALENDAR_CLIENT_SECRET=your_google_oauth_client_secret
+GOOGLE_CALENDAR_REDIRECT_URI=http://localhost:5000/api/groups/google-calendar/callback
+```
+
+Production must use its HTTPS backend callback URL. The link button remains disabled until all three values are configured.
+
 ### Structured AI Contracts
 
 Every OpenAI feature uses a named strict JSON Schema contract through `server\utils\openai_responses.py`. The schema is sent to the Responses API with strict mode enabled, the system prompt explicitly forbids prose or additional fields, and the returned JSON is validated again on the server before application code can use it.
+
+## Guided Meditation Audio
+
+The admin Feature Lab builds a detailed manual ChatGPT prompt, validates the pasted meditation JSON against a strict server contract, then sends only the narration text to ElevenLabs. Add these values to `server\.env`:
+
+```env
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+ELEVENLABS_VOICE_ID=your_voice_id
+ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+MEDITATION_MEDIA_DIR=C:\path\to\persistent\meditation-media
+MEDITATION_DEFAULT_MUSIC_FILENAME=ip-meditation-background-15min.mp3
+```
+
+For the default local background track, place a 15-minute seamless instrumental MP3 at `server\uploads\meditations\ip-meditation-background-15min.mp3`. The same track loops automatically for the supported 5, 10, 15, 20, and 30-minute sessions. Keep it original or properly licensed, without vocals, and under 15 MB. Admins may still upload a different MP3, WAV, M4A, or OGG for an individual session. `MEDITATION_MEDIA_DIR` is optional locally, but production needs a persistent mounted directory because generated narration and uploaded music must survive application restarts and deploys.
 
 Current contracts cover Copilot answers, student goal plans, habit drafts, daily schedules, and CSV column mapping. API responses include the contract name and version for predictable client handling.
 

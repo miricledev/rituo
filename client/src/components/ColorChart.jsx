@@ -762,7 +762,8 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
 
   const exportToPDF = () => {
     // Create a simple HTML structure for the PDF
-    const memberName = memberHabit?.member?.username || 'Student';
+    const isFootballChart = resolvedGroupType === 'football';
+    const memberName = memberHabit?.member?.username || (isFootballChart ? 'Client' : 'Student');
     const term = activeTermConfig.name || activeTerm;
     
     let htmlContent = `
@@ -784,9 +785,9 @@ const ColorChart = ({ memberHabit, isLeader, isCoach = false, groupId: propGroup
           </style>
         </head>
         <body>
-          <h1>Skill Development Chart</h1>
-          <h2>IP Creative Learning Standards</h2>
-          <div class="subtitle">Student: ${memberName} | Term: ${term} (${activeTermConfig.dates})</div>
+          <h1>${isFootballChart ? 'Football Colour Chart' : 'Skill Development Chart'}</h1>
+          <h2>${isFootballChart ? 'Inner Performance Football Standards' : 'IP Creative Learning Standards'}</h2>
+          <div class="subtitle">${isFootballChart ? 'Client' : 'Student'}: ${memberName} | Term: ${term} (${activeTermConfig.dates})</div>
           
           <div class="legend">
     `;

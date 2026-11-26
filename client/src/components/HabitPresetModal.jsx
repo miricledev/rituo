@@ -78,8 +78,8 @@ const HabitPresetModal = ({
 
                       <div>
                         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {['boolean', 'numeric', 'text'].map((type) => (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          {['boolean', 'numeric', 'text', 'periodic'].map((type) => (
                             <button
                               key={type}
                               type="button"
@@ -90,7 +90,7 @@ const HabitPresetModal = ({
                                   : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
                               }`}
                             >
-                              {type === 'boolean' ? 'Checkbox' : type === 'numeric' ? 'Numeric' : 'Text'}
+                              {type === 'boolean' ? 'Checkbox' : type === 'numeric' ? 'Numeric' : type === 'periodic' ? 'Periodic' : 'Text'}
                             </button>
                           ))}
                         </div>
@@ -132,6 +132,25 @@ const HabitPresetModal = ({
                         </div>
                       )}
 
+                      {habit.habitType === 'periodic' && (
+                        <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3 dark:border-cyan-800 dark:bg-cyan-950/20">
+                          <div className="grid grid-cols-2 gap-3">
+                            <label className="text-xs font-medium text-cyan-950 dark:text-cyan-100">
+                              Interval hours
+                              <input type="number" min="1" max="12" value={habit.periodicIntervalHours || 4} onChange={(event) => onUpdatePresetHabit(index, 'periodicIntervalHours', Number(event.target.value) || 4)} className="mt-1 w-full rounded-lg border border-cyan-200 bg-white px-3 py-2 dark:border-cyan-800 dark:bg-gray-700" />
+                            </label>
+                            <label className="text-xs font-medium text-cyan-950 dark:text-cyan-100">
+                              Times per day
+                              <input type="number" min="2" max="12" value={habit.periodicOccurrences || 4} onChange={(event) => onUpdatePresetHabit(index, 'periodicOccurrences', Number(event.target.value) || 4)} className="mt-1 w-full rounded-lg border border-cyan-200 bg-white px-3 py-2 dark:border-cyan-800 dark:bg-gray-700" />
+                            </label>
+                          </div>
+                          <label className="mt-3 flex items-center gap-2 text-xs font-medium text-cyan-950 dark:text-cyan-100">
+                            <input type="checkbox" checked={!!habit.allowOverlap} onChange={(event) => onUpdatePresetHabit(index, 'allowOverlap', event.target.checked)} />
+                            May overlap another scheduled block
+                          </label>
+                        </div>
+                      )}
+
                       <div>
                         <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Estimated minutes</label>
                         <input
@@ -146,9 +165,9 @@ const HabitPresetModal = ({
                       </div>
 
                       <div>
-                        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Combat Type</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {['neutral', 'attack', 'defence'].map((type) => (
+                        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Purpose type</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {['attack', 'defence'].map((type) => (
                             <button
                               key={type}
                               type="button"
@@ -159,7 +178,7 @@ const HabitPresetModal = ({
                                     ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
                                     : type === 'defence'
                                       ? 'border-red-500 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-                                      : 'border-gray-500 bg-gray-100 dark:bg-gray-600'
+                                    : 'border-gray-500 bg-gray-100 dark:bg-gray-600'
                                   : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                               }`}
                             >
@@ -167,6 +186,7 @@ const HabitPresetModal = ({
                             </button>
                           ))}
                         </div>
+                        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Attack builds toward a new goal. Defence protects an existing positive state or standard.</p>
                       </div>
 
                       <div>

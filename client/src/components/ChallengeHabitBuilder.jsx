@@ -1,11 +1,28 @@
-import { useState } from 'react';
-import axios from 'axios';
+import { useMemo, useState } from 'react';
+import {
+  FiArrowLeft,
+  FiArrowRight,
+  FiCheck,
+  FiClock,
+  FiPlus,
+  FiShield,
+  FiTarget,
+  FiUsers
+} from 'react-icons/fi';
+import { HiOutlineSparkles } from 'react-icons/hi2';
 import { DAY_NAMES } from '../utils/habitScheduleUtils';
+import { createEmptyCurrentHabit } from '../utils/groupDetailDefaults';
+import { generatePersonalizedHabitBatches } from '../utils/challengeAiBatching';
 
-const DAY_OPTIONS = DAY_NAMES;
 const DEFAULT_SCHEDULE = [...DAY_NAMES];
+const STEPS = [
+  { id: 'basics', label: 'Basics', icon: FiTarget },
+  { id: 'tracking', label: 'Tracking', icon: FiClock },
+  { id: 'students', label: 'Students', icon: FiUsers },
+  { id: 'schedule', label: 'Schedule', icon: FiShield }
+];
 
-const sameDays = (left, right) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+const sameDays = (left, right) => JSON.stringify([...(left || [])].sort()) === JSON.stringify([...right].sort());
 
 const ChallengeHabitBuilder = ({
   groupId,
@@ -21,481 +38,470 @@ const ChallengeHabitBuilder = ({
   getMissingMembers,
   handleCancel,
   hasHabitsAdded,
-  lockHabitsAndShowOverview
+  lockHabitsAndShowOverview,
+  onAiGenerationComplete,
+  onAiProgress,
+  workspaceType = 'school'
 }) => {
+  const isFootballWorkspace = workspaceType === 'football';
+  const memberLabel = isFootballWorkspace ? 'client' : 'student';
+  const memberLabelPlural = isFootballWorkspace ? 'clients' : 'students';
+  const [studioMode, setStudioMode] = useState('ai');
+  const [manualStep, setManualStep] = useState(0);
   const [aiBrief, setAiBrief] = useState('');
+  const [aiMemberIds, setAiMemberIds] = useState(null);
   const [generatingHabits, setGeneratingHabits] = useState(false);
-  const [aiMessage, setAiMessage] = useState('');
+  const [message, setMessage] = useState('');
+  const [aiProgress, setAiProgress] = useState(null);
 
-  const updateCurrentHabit = (patch) => {
-    setCurrentHabit({ ...currentHabit, ...patch });
-  };
+  const editableMembers = useMemo(
+    () => (groupMembers || []).filter(
+      (member) => (!member.accountRole || member.accountRole === 'student')
+        && (!editChallengeHabitsMode || !lockedChallengeMemberIds.has(String(member.id)))
+    ),
+    [editChallengeHabitsMode, groupMembers, lockedChallengeMemberIds]
+  );
+  const selectedAiMemberIds = aiMemberIds === null ? editableMembers.map((member) => member.id) : aiMemberIds;
+  const updateCurrentHabit = (patch) => setCurrentHabit({ ...currentHabit, ...patch });
 
   const resetCurrentHabit = () => {
     setCurrentHabit({
-      name: '',
-      description: '',
-      habitType: 'boolean',
-      minValue: 0,
-      maxValue: 10,
-      prompt: '',
-      assignedMembers: [],
-      applyToAll: false,
-      scheduleDays: DEFAULT_SCHEDULE,
-      durationMinutes: 30,
-      combatType: 'neutral',
-      linkedGoalIds: {}
+      ...createEmptyCurrentHabit(),
+      combatType: 'attack'
     });
+    setManualStep(0);
+  };
+
+  const validateStep = () => {
+    if (manualStep === 0 && !currentHabit.name.trim()) return 'Give the habit a clear name before continuing.';
+    if (manualStep === 1 && currentHabit.habitType === 'periodic' && Number(currentHabit.periodicOccurrences) < 2) {
+      return 'A periodic habit needs at least two occurrences.';
+    }
+    if (manualStep === 2 && !currentHabit.assignedMembers.length) return `Select at least one ${memberLabel}.`;
+    if (manualStep === 3 && !currentHabit.scheduleDays.length) return 'Choose at least one scheduled day.';
+    return '';
+  };
+
+  const nextStep = () => {
+    const validationMessage = validateStep();
+    if (validationMessage) {
+      setMessage(validationMessage);
+      return;
+    }
+    setMessage('');
+    setManualStep((previous) => Math.min(STEPS.length - 1, previous + 1));
   };
 
   const addHabit = () => {
-    if (!currentHabit.name.trim() || currentHabit.assignedMembers.length === 0) {
+    const validationMessage = validateStep();
+    if (validationMessage) {
+      setMessage(validationMessage);
       return;
     }
-
     const nextMemberHabits = { ...memberHabits };
     currentHabit.assignedMembers.forEach((memberId) => {
-      if (!nextMemberHabits[memberId]) {
-        nextMemberHabits[memberId] = [];
-      }
-      nextMemberHabits[memberId].push({
-        name: currentHabit.name,
-        description: currentHabit.description,
+      const memberKey = String(memberId);
+      nextMemberHabits[memberKey] = [...(nextMemberHabits[memberKey] || []), {
+        name: currentHabit.name.trim(),
+        description: currentHabit.description.trim(),
         habitType: currentHabit.habitType,
-        minValue: currentHabit.minValue,
-        maxValue: currentHabit.maxValue,
+        minValue: Number(currentHabit.minValue) || 0,
+        maxValue: Number(currentHabit.maxValue) || 10,
         prompt: currentHabit.prompt,
         scheduleDays: currentHabit.scheduleDays,
         durationMinutes: Number(currentHabit.durationMinutes) || 30,
-        combatType: currentHabit.combatType,
+        combatType: currentHabit.combatType === 'defence' ? 'defence' : 'attack',
+        periodicIntervalHours: Number(currentHabit.periodicIntervalHours) || 4,
+        periodicOccurrences: Number(currentHabit.periodicOccurrences) || 4,
+        allowOverlap: !!currentHabit.allowOverlap,
         linkedGoalId: currentHabit.linkedGoalIds?.[memberId] || null
-      });
+      }];
     });
-
     setMemberHabits(nextMemberHabits);
+    setMessage(`“${currentHabit.name.trim()}” added. You can build the next habit now.`);
     resetCurrentHabit();
   };
 
-  const editableMembers = editChallengeHabitsMode
-    ? Object.keys(memberHabits)
-      .map((id) => groupMembers?.find((member) => String(member.id) === id))
-      .filter(Boolean)
-    : (groupMembers || []);
-
   const generateHabits = async () => {
-    const targetMembers = editableMembers
-      .filter((member) => !editChallengeHabitsMode || !lockedChallengeMemberIds.has(String(member.id)))
-      .map((member) => member.id);
-    if (!aiBrief.trim() || !targetMembers.length) {
-      setAiMessage('Add a brief and make sure there are editable students.');
+    if (aiBrief.trim().length < 10 || !selectedAiMemberIds.length) {
+      setMessage(`Add a fuller brief and select at least one editable ${memberLabel}.`);
       return;
     }
-
     try {
       setGeneratingHabits(true);
-      setAiMessage('');
-      const response = await axios.post(`/groups/${groupId}/ai-habits`, { text: aiBrief });
-      const generated = response.data?.draft?.habits || [];
+      setMessage('');
+      const draft = await generatePersonalizedHabitBatches({
+        groupId,
+        text: aiBrief,
+        memberIds: selectedAiMemberIds,
+        onProgress: (progress) => {
+          setAiProgress(progress);
+          onAiProgress?.(progress);
+        },
+      });
+      const studentHabitSets = draft.studentHabitSets || [];
       setMemberHabits((previous) => {
         const next = { ...previous };
-        targetMembers.forEach((memberId) => {
-          next[memberId] = [
-            ...(next[memberId] || []),
-            ...generated.map((habit) => ({ ...habit, linkedGoalId: null }))
+        studentHabitSets.forEach((studentSet) => {
+          const memberKey = String(studentSet.studentId);
+          next[memberKey] = [
+            ...(next[memberKey] || []),
+            ...(studentSet.habits || [])
           ];
         });
         return next;
       });
-      setAiMessage(`${generated.length} habits added to ${targetMembers.length} student${targetMembers.length === 1 ? '' : 's'}.`);
-      setAiBrief('');
+      const totalHabits = studentHabitSets.reduce((sum, studentSet) => sum + (studentSet.habits?.length || 0), 0);
+      setMessage(`${totalHabits} personalised habits added across ${studentHabitSets.length} ${memberLabelPlural}. Review them on the left.`);
+      onAiGenerationComplete?.({
+        text: aiBrief,
+        presetHabits: [],
+        memberIds: selectedAiMemberIds,
+      });
     } catch (error) {
-      setAiMessage(error.response?.data?.error || 'OpenAI could not generate habits.');
+      setMessage(error.response?.data?.error || error.message || 'OpenAI could not generate habits.');
+      setAiProgress((previous) => previous ? { ...previous, status: 'error' } : null);
     } finally {
       setGeneratingHabits(false);
     }
   };
 
-  return (
-    <>
-      <div className="mb-6 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-cyan-50 p-5 dark:border-violet-800 dark:from-violet-950/40 dark:to-cyan-950/30">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.24em] text-violet-600 dark:text-violet-300">OpenAI habit studio</p>
-            <h3 className="mt-1 text-lg font-semibold text-secondary-900 dark:text-white">Describe the outcome, not every field</h3>
-            <p className="mt-1 text-sm text-secondary-600 dark:text-secondary-300">
-              Paste notes, expectations, or a rough programme. Estimated times and schedules are included automatically.
-            </p>
-          </div>
-          <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-violet-700 shadow-sm dark:bg-secondary-900/70 dark:text-violet-200">AI draft</span>
-        </div>
-        <textarea
-          value={aiBrief}
-          onChange={(event) => setAiBrief(event.target.value)}
-          rows={6}
-          maxLength={8000}
-          placeholder="Example: Build a weekday morning routine focused on arriving prepared, reading for 20 minutes, and a short evening reflection..."
-          className="mt-4 w-full rounded-xl border border-violet-200 bg-white/90 px-4 py-3 text-sm text-secondary-900 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-200 dark:border-violet-800 dark:bg-secondary-900/80 dark:text-white dark:focus:ring-violet-900"
+  const handleDone = () => {
+    if (currentHabit.name.trim()) {
+      setMessage('This habit has not been added yet. Add it or clear the form before finishing.');
+      return;
+    }
+    if (!isChallengeValid()) {
+      const missingMembers = getMissingMembers();
+      setMessage(
+        missingMembers.length
+          ? `Add at least one habit for: ${missingMembers.map((member) => member.username).join(', ')}.`
+          : `Every ${memberLabel} needs at least one habit.`
+      );
+      return;
+    }
+    setMessage('');
+    lockHabitsAndShowOverview();
+  };
+
+  const toggleAiMember = (memberId) => {
+    const allSelected = aiMemberIds === null;
+    const current = allSelected ? editableMembers.map((member) => member.id) : aiMemberIds;
+    setAiMemberIds(
+      current.includes(memberId)
+        ? current.filter((id) => id !== memberId)
+        : [...current, memberId]
+    );
+  };
+
+  const renderBasics = () => (
+    <div className="space-y-4">
+      <div>
+        <label className="text-sm font-bold text-slate-800 dark:text-slate-200">Habit name</label>
+        <input
+          value={currentHabit.name}
+          onChange={(event) => updateCurrentHabit({ name: event.target.value })}
+          placeholder="e.g. Complete a focused revision block"
+          className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-950 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-500/10 dark:border-white/10 dark:bg-slate-950 dark:text-white"
         />
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-secondary-500 dark:text-secondary-400">Generated habits apply to all editable students and can be changed before saving.</p>
+      </div>
+      <div>
+        <label className="text-sm font-bold text-slate-800 dark:text-slate-200">Why and how</label>
+        <textarea
+          value={currentHabit.description}
+          onChange={(event) => updateCurrentHabit({ description: event.target.value })}
+          rows={4}
+          placeholder="Explain what good completion looks like."
+          className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-950 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-500/10 dark:border-white/10 dark:bg-slate-950 dark:text-white"
+        />
+      </div>
+      <div>
+        <label className="text-sm font-bold text-slate-800 dark:text-slate-200">Minutes per completion</label>
+        <input
+          type="number"
+          min="5"
+          max="240"
+          step="5"
+          value={currentHabit.durationMinutes || 30}
+          onChange={(event) => updateCurrentHabit({ durationMinutes: Number(event.target.value) || 30 })}
+          className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-950 dark:border-white/10 dark:bg-slate-950 dark:text-white"
+        />
+      </div>
+    </div>
+  );
+
+  const renderTracking = () => (
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {[
+          ['boolean', 'Checkbox', 'One clear completion'],
+          ['numeric', 'Numeric', 'Measure a value or total'],
+          ['text', 'Reflection', 'Write a short response'],
+          ['periodic', 'Periodic', 'Repeat through waking hours']
+        ].map(([value, label, detail]) => (
           <button
+            key={value}
             type="button"
-            onClick={generateHabits}
-            disabled={generatingHabits || aiBrief.trim().length < 10}
-            className="rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => updateCurrentHabit({ habitType: value })}
+            className={`rounded-2xl border p-4 text-left transition ${currentHabit.habitType === value ? 'border-violet-500 bg-violet-50 shadow-lg shadow-violet-500/10 dark:bg-violet-500/10' : 'border-slate-200 hover:border-violet-300 dark:border-white/10'}`}
           >
-            {generatingHabits ? 'Generating...' : 'Generate habits'}
+            <p className="font-bold text-slate-950 dark:text-white">{label}</p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{detail}</p>
           </button>
+        ))}
+      </div>
+      {currentHabit.habitType === 'numeric' && (
+        <div className="grid grid-cols-2 gap-3">
+          <input type="number" value={currentHabit.minValue} onChange={(event) => updateCurrentHabit({ minValue: Number(event.target.value) })} placeholder="Minimum" className="rounded-xl border border-slate-200 px-4 py-3 dark:border-white/10 dark:bg-slate-950 dark:text-white" />
+          <input type="number" value={currentHabit.maxValue} onChange={(event) => updateCurrentHabit({ maxValue: Number(event.target.value) })} placeholder="Target" className="rounded-xl border border-slate-200 px-4 py-3 dark:border-white/10 dark:bg-slate-950 dark:text-white" />
         </div>
-        {aiMessage && <p className="mt-3 text-sm font-medium text-violet-700 dark:text-violet-200">{aiMessage}</p>}
+      )}
+      {currentHabit.habitType === 'text' && (
+        <input value={currentHabit.prompt} onChange={(event) => updateCurrentHabit({ prompt: event.target.value })} placeholder="Reflection prompt" className="w-full rounded-xl border border-slate-200 px-4 py-3 dark:border-white/10 dark:bg-slate-950 dark:text-white" />
+      )}
+      {currentHabit.habitType === 'periodic' && (
+        <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 dark:border-cyan-400/20 dark:bg-cyan-400/5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="text-sm font-semibold text-cyan-950 dark:text-cyan-100">
+              Repeat every
+              <span className="mt-2 flex items-center gap-2">
+                <input type="number" min="1" max="12" value={currentHabit.periodicIntervalHours || 4} onChange={(event) => updateCurrentHabit({ periodicIntervalHours: Number(event.target.value) || 4 })} className="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 dark:border-cyan-400/20 dark:bg-slate-950" />
+                hours
+              </span>
+            </label>
+            <label className="text-sm font-semibold text-cyan-950 dark:text-cyan-100">
+              Times per day
+              <input type="number" min="2" max="12" value={currentHabit.periodicOccurrences || 4} onChange={(event) => updateCurrentHabit({ periodicOccurrences: Number(event.target.value) || 4 })} className="mt-2 w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 dark:border-cyan-400/20 dark:bg-slate-950" />
+            </label>
+          </div>
+          <label className="mt-4 flex items-start gap-3 rounded-xl bg-white/80 p-3 text-sm text-cyan-950 dark:bg-slate-950/50 dark:text-cyan-100">
+            <input type="checkbox" checked={!!currentHabit.allowOverlap} onChange={(event) => updateCurrentHabit({ allowOverlap: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-cyan-300 text-cyan-600" />
+            <span><strong>Allow overlap.</strong> A short occurrence may sit inside another block, such as a five-minute water break during study.</span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderStudents = () => {
+    const editableIds = editableMembers.map((member) => member.id);
+    return (
+      <div className="space-y-4">
+        <button
+          type="button"
+          onClick={() => updateCurrentHabit({
+            applyToAll: currentHabit.assignedMembers.length !== editableIds.length,
+            assignedMembers: currentHabit.assignedMembers.length === editableIds.length ? [] : editableIds
+          })}
+          className="w-full rounded-2xl border border-violet-200 bg-violet-50 p-4 text-left dark:border-violet-400/20 dark:bg-violet-500/10"
+        >
+          <p className="font-bold text-violet-950 dark:text-violet-100">Apply to all editable {memberLabelPlural}</p>
+          <p className="mt-1 text-xs text-violet-700 dark:text-violet-300">{currentHabit.assignedMembers.length}/{editableIds.length} selected</p>
+        </button>
+        <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+          {editableMembers.map((member) => (
+            <label key={member.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3 dark:border-white/10">
+              <input
+                type="checkbox"
+                checked={currentHabit.assignedMembers.includes(member.id)}
+                onChange={() => updateCurrentHabit({
+                  assignedMembers: currentHabit.assignedMembers.includes(member.id)
+                    ? currentHabit.assignedMembers.filter((id) => id !== member.id)
+                    : [...currentHabit.assignedMembers, member.id]
+                })}
+                className="h-4 w-4 rounded text-violet-600"
+              />
+              <span className="font-semibold text-slate-900 dark:text-white">{member.username}</span>
+            </label>
+          ))}
+        </div>
+        {!!currentHabit.assignedMembers.length && (
+          <div className="space-y-3 rounded-2xl bg-slate-50 p-4 dark:bg-white/[0.035]">
+            <div>
+              <p className="font-bold text-slate-900 dark:text-white">Link each {memberLabel}’s goal</p>
+              <p className="text-xs text-slate-500">Leave blank when the {memberLabel} has no relevant goal.</p>
+            </div>
+            {currentHabit.assignedMembers.map((memberId) => {
+              const member = groupMembers?.find((item) => String(item.id) === String(memberId));
+              const goals = schoolProfileMap[String(memberId)]?.goals || [];
+              return (
+                <label key={memberId} className="grid gap-2 sm:grid-cols-[130px_minmax(0,1fr)] sm:items-center">
+                  <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">{member?.username}</span>
+                  <select
+                    value={currentHabit.linkedGoalIds?.[memberId] || ''}
+                    onChange={(event) => updateCurrentHabit({ linkedGoalIds: { ...(currentHabit.linkedGoalIds || {}), [memberId]: event.target.value } })}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950 dark:text-white"
+                  >
+                    <option value="">{goals.length ? 'No linked goal' : 'No goals set'}</option>
+                    {goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSchedule = () => (
+    <div className="space-y-5">
+      <div>
+        <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Scheduled days</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {[
+            ['Every day', DEFAULT_SCHEDULE],
+            ['Weekdays', DAY_NAMES.slice(0, 5)],
+            ['Mon / Wed / Fri', ['Monday', 'Wednesday', 'Friday']]
+          ].map(([label, days]) => (
+            <button key={label} type="button" onClick={() => updateCurrentHabit({ scheduleDays: days })} className={`rounded-full px-3 py-1.5 text-xs font-bold ${sameDays(currentHabit.scheduleDays, days) ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300'}`}>{label}</button>
+          ))}
+        </div>
+        <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
+          {DAY_NAMES.map((day) => (
+            <button
+              key={day}
+              type="button"
+              onClick={() => updateCurrentHabit({
+                scheduleDays: currentHabit.scheduleDays.includes(day)
+                  ? currentHabit.scheduleDays.filter((item) => item !== day)
+                  : [...currentHabit.scheduleDays, day]
+              })}
+              className={`rounded-xl border px-2 py-3 text-xs font-bold ${currentHabit.scheduleDays.includes(day) ? 'border-cyan-500 bg-cyan-50 text-cyan-800 dark:bg-cyan-400/10 dark:text-cyan-200' : 'border-slate-200 text-slate-500 dark:border-white/10'}`}
+            >
+              {day.slice(0, 3)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Purpose type</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {[
+            ['attack', 'Attack', 'Moves toward a goal or a new achievement.', 'border-blue-500 bg-blue-50 dark:bg-blue-500/10'],
+            ['defence', 'Defence', 'Protects discipline, kindness, health, or an existing achievement.', 'border-rose-500 bg-rose-50 dark:bg-rose-500/10']
+          ].map(([value, label, detail, activeClass]) => (
+            <button key={value} type="button" onClick={() => updateCurrentHabit({ combatType: value })} className={`rounded-2xl border-2 p-4 text-left ${currentHabit.combatType === value ? activeClass : 'border-slate-200 dark:border-white/10'}`}>
+              <p className="font-black text-slate-950 dark:text-white">{label}</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{detail}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const stepContent = [renderBasics, renderTracking, renderStudents, renderSchedule][manualStep]();
+
+  return (
+    <div className="space-y-5">
+      <div className="flex rounded-2xl border border-slate-200 bg-slate-50 p-1 dark:border-white/10 dark:bg-black/15">
+        <button type="button" onClick={() => setStudioMode('ai')} className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold transition ${studioMode === 'ai' ? 'bg-white text-violet-700 shadow dark:bg-white/10 dark:text-cyan-200' : 'text-slate-500'}`}>
+          <span className="inline-flex items-center gap-2"><HiOutlineSparkles /> AI personalised</span>
+        </button>
+        <button type="button" onClick={() => setStudioMode('manual')} className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold transition ${studioMode === 'manual' ? 'bg-white text-violet-700 shadow dark:bg-white/10 dark:text-cyan-200' : 'text-slate-500'}`}>
+          <span className="inline-flex items-center gap-2"><FiPlus /> Manual stepper</span>
+        </button>
       </div>
 
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">Add New Habit</h3>
-        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
-          <div className="grid grid-cols-1 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Habit Name</label>
-              <input
-                type="text"
-                value={currentHabit.name}
-                onChange={(e) => updateCurrentHabit({ name: e.target.value })}
-                placeholder="e.g., Drink 8 glasses of water"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description (Optional)</label>
-              <input
-                type="text"
-                value={currentHabit.description}
-                onChange={(e) => updateCurrentHabit({ description: e.target.value })}
-                placeholder="Brief description of the habit"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Estimated completion time</label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="5"
-                  max="240"
-                  step="5"
-                  value={currentHabit.durationMinutes || 30}
-                  onChange={(event) => updateCurrentHabit({ durationMinutes: Number(event.target.value) || 30 })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-20 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-600 dark:text-white"
-                  required
-                />
-                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-gray-500 dark:text-gray-300">minutes</span>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Habit Type</label>
-            <div className="grid grid-cols-1 gap-3">
-              {[
-                ['boolean', 'Checkbox', 'Simple yes/no completion'],
-                ['numeric', 'Numeric Range', 'Track numbers with min/max values'],
-                ['text', 'Text Entry', 'Written response or journal entry']
-              ].map(([value, title, description]) => (
-                <label key={value} className="flex items-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-                  <input
-                    type="radio"
-                    name="habit-type"
-                    value={value}
-                    checked={currentHabit.habitType === value}
-                    onChange={(e) => updateCurrentHabit({ habitType: e.target.value })}
-                    className="mr-3"
-                  />
-                  <div>
-                    <div className="font-medium text-secondary-900 dark:text-white">{title}</div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">{description}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Assign to Members</label>
-            <div className="mb-4">
-              <label className={`flex items-center gap-3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors ${editChallengeHabitsMode ? '' : 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600'}`}>
-                <input
-                  type="checkbox"
-                  checked={currentHabit.applyToAll}
-                  onChange={(e) => {
-                    const applyToAll = e.target.checked;
-                    const membersToAssign = editChallengeHabitsMode
-                      ? editableMembers.filter((member) => !lockedChallengeMemberIds.has(String(member.id))).map((member) => member.id)
-                      : editableMembers.map((member) => member.id);
-                    updateCurrentHabit({
-                      applyToAll,
-                      assignedMembers: applyToAll ? membersToAssign : []
-                    });
-                  }}
-                  className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                />
-                <div>
-                  <div className="font-medium text-secondary-900 dark:text-white">
-                    Apply to All {editChallengeHabitsMode ? 'Editable Members' : 'Members'}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {editChallengeHabitsMode ? 'Assign this habit to all members you can edit (newly added)' : 'Assign this habit to all group members'}
-                  </div>
-                </div>
-              </label>
-            </div>
-
-            {!currentHabit.applyToAll && (
-              <div className="space-y-2 max-h-40 overflow-y-auto">
-                {editableMembers.map((member) => {
-                  const memberIdStr = String(member.id);
-                  const isMemberLocked = editChallengeHabitsMode && lockedChallengeMemberIds.has(memberIdStr);
-                  return (
-                    <label
-                      key={member.id}
-                      className={`flex items-center gap-3 p-2 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors ${isMemberLocked ? 'opacity-75 bg-gray-50 dark:bg-gray-800 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600'}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={currentHabit.assignedMembers.includes(member.id)}
-                        onChange={(e) => {
-                          if (isMemberLocked) return;
-                          const isChecked = e.target.checked;
-                          updateCurrentHabit({
-                            assignedMembers: isChecked
-                              ? [...currentHabit.assignedMembers, member.id]
-                              : currentHabit.assignedMembers.filter((id) => id !== member.id)
-                          });
-                        }}
-                        disabled={isMemberLocked}
-                        className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
-                      />
-                      <div className="flex items-center gap-3 flex-1">
-                        <div className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">
-                          {member.username?.[0]?.toUpperCase() || '?'}
-                        </div>
-                        <span className="text-sm font-medium text-secondary-900 dark:text-white">{member.username}</span>
-                        {isMemberLocked && (
-                          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 text-xs">
-                            <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                            </svg>
-                            Locked
-                          </span>
-                        )}
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-
-            {!currentHabit.applyToAll && currentHabit.assignedMembers.length === 0 && (
-              <p className="text-sm text-red-500 dark:text-red-400 mt-2">
-                Please select at least one member or choose "Apply to All Members"
-              </p>
-            )}
-
-            {currentHabit.assignedMembers.length > 0 && (
-              <div className="mt-4 space-y-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Link habit to a goal</label>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Choose the goal each student should see behind this habit.</p>
-                </div>
-                {currentHabit.assignedMembers.map((memberId) => {
-                  const member = groupMembers?.find((groupMember) => String(groupMember.id) === String(memberId));
-                  const goals = schoolProfileMap[String(memberId)]?.goals || [];
-                  return (
-                    <div key={`goal-link-${memberId}`} className="grid grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)] gap-3 items-center">
-                      <div className="text-sm font-medium text-secondary-900 dark:text-white">{member?.username || `Member ${memberId}`}</div>
-                      <select
-                        value={currentHabit.linkedGoalIds?.[memberId] || ''}
-                        onChange={(e) => updateCurrentHabit({
-                          linkedGoalIds: {
-                            ...(currentHabit.linkedGoalIds || {}),
-                            [memberId]: e.target.value
-                          }
-                        })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                      >
-                        <option value="">No linked goal</option>
-                        {goals.map((goal) => (
-                          <option key={goal.id} value={goal.id}>{goal.title}</option>
-                        ))}
-                      </select>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Schedule Days</label>
-            <div className="flex flex-wrap gap-2 mb-3">
-              <button
-                type="button"
-                onClick={() => updateCurrentHabit({ scheduleDays: DEFAULT_SCHEDULE })}
-                className={`px-3 py-1 text-xs rounded-lg transition-colors ${currentHabit.scheduleDays.length === 7 ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'}`}
-              >
-                Everyday
-              </button>
-              <button
-                type="button"
-                onClick={() => updateCurrentHabit({ scheduleDays: ['Monday', 'Wednesday', 'Friday'] })}
-                className={`px-3 py-1 text-xs rounded-lg transition-colors ${sameDays(currentHabit.scheduleDays, ['Monday', 'Wednesday', 'Friday']) ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'}`}
-              >
-                Mon, Wed, Fri
-              </button>
-              <button
-                type="button"
-                onClick={() => updateCurrentHabit({ scheduleDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] })}
-                className={`px-3 py-1 text-xs rounded-lg transition-colors ${sameDays(currentHabit.scheduleDays, ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']) ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'}`}
-              >
-                Weekdays
-              </button>
-            </div>
-
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2">
-              {DAY_OPTIONS.map((day) => (
-                <label
-                  key={day}
-                  className={`flex flex-col items-center p-2 border rounded-lg cursor-pointer transition-colors ${currentHabit.scheduleDays.includes(day) ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-500 text-blue-700 dark:text-blue-300' : 'bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={currentHabit.scheduleDays.includes(day)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        updateCurrentHabit({ scheduleDays: [...currentHabit.scheduleDays, day] });
-                      } else {
-                        updateCurrentHabit({ scheduleDays: currentHabit.scheduleDays.filter((selectedDay) => selectedDay !== day) });
-                      }
-                    }}
-                    className="sr-only"
-                  />
-                  <span className="text-xs font-medium mt-1">{day.slice(0, 3)}</span>
-                </label>
-              ))}
-            </div>
-
-            {currentHabit.scheduleDays.length === 0 && (
-              <p className="text-sm text-red-500 dark:text-red-400 mt-2">
-                Please select at least one day for the habit schedule
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Combat Type</label>
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                ['attack', 'Attack', 'border-blue-500 bg-blue-50 dark:bg-blue-900/20', 'hover:border-blue-300 dark:hover:border-blue-700', 'text-blue-600 dark:text-blue-400'],
-                ['defence', 'Defence', 'border-red-500 bg-red-50 dark:bg-red-900/20', 'hover:border-red-300 dark:hover:border-red-700', 'text-red-600 dark:text-red-400'],
-                ['neutral', 'Neutral', 'border-gray-500 bg-gray-50 dark:bg-gray-700', 'hover:border-gray-400 dark:hover:border-gray-500', 'text-gray-600 dark:text-gray-300']
-              ].map(([value, label, activeClasses, hoverClasses, activeText]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => updateCurrentHabit({ combatType: value })}
-                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 transition-all ${currentHabit.combatType === value ? activeClasses : `border-gray-300 dark:border-gray-600 ${hoverClasses}`}`}
-                >
-                  <span className={`text-sm font-medium ${currentHabit.combatType === value ? activeText : 'text-gray-500 dark:text-gray-400'}`}>{label}</span>
+      {studioMode === 'ai' ? (
+        <section className="overflow-hidden rounded-[1.75rem] border border-violet-200 bg-gradient-to-br from-violet-50 via-white to-cyan-50 dark:border-violet-400/20 dark:from-violet-500/10 dark:via-white/[0.03] dark:to-cyan-400/5">
+          <div className="p-5">
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-violet-600 dark:text-cyan-300">OpenAI habit studio</p>
+            <h3 className="mt-2 text-2xl font-black text-slate-950 dark:text-white">Build for each {memberLabel}, not the average {memberLabel}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              AI reads each selected {memberLabel}’s goals, writes customised habits, links the relevant goal, and classifies every habit as attack or defence.
+            </p>
+            <textarea value={aiBrief} onChange={(event) => setAiBrief(event.target.value)} rows={7} maxLength={8000} placeholder="Describe the outcomes, standards, routines, age group, and any limits..." className="mt-4 w-full rounded-2xl border border-violet-200 bg-white/90 px-4 py-3 text-sm text-slate-950 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10 dark:border-violet-400/20 dark:bg-slate-950/80 dark:text-white" />
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{isFootballWorkspace ? 'Clients' : 'Students'} receiving this AI draft</p>
+                <button type="button" onClick={() => setAiMemberIds(selectedAiMemberIds.length === editableMembers.length ? [] : null)} className="text-xs font-bold text-violet-700 dark:text-cyan-300">
+                  {selectedAiMemberIds.length === editableMembers.length ? 'Clear all' : 'Apply to all'}
                 </button>
-              ))}
-            </div>
-          </div>
-
-          {currentHabit.habitType === 'numeric' && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Minimum Value</label>
-                <input
-                  type="number"
-                  value={currentHabit.minValue ?? ''}
-                  onChange={(e) => updateCurrentHabit({ minValue: e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                  required
-                />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Maximum Value</label>
-                <input
-                  type="number"
-                  value={currentHabit.maxValue ?? ''}
-                  onChange={(e) => updateCurrentHabit({ maxValue: e.target.value === '' ? undefined : parseInt(e.target.value, 10) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                  required
-                />
+              <div className="mt-2 flex max-h-32 flex-wrap gap-2 overflow-y-auto">
+                {editableMembers.map((member) => {
+                  const selected = selectedAiMemberIds.includes(member.id);
+                  const goals = schoolProfileMap[String(member.id)]?.goals || [];
+                  return (
+                    <button key={member.id} type="button" onClick={() => toggleAiMember(member.id)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${selected ? 'border-violet-500 bg-violet-600 text-white' : 'border-slate-200 bg-white text-slate-500 dark:border-white/10 dark:bg-white/[0.04]'}`}>
+                      {member.username} · {goals.length} goal{goals.length === 1 ? '' : 's'}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          )}
-
-          {currentHabit.habitType === 'text' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Prompt/Question</label>
-              <input
-                type="text"
-                value={currentHabit.prompt}
-                onChange={(e) => updateCurrentHabit({ prompt: e.target.value })}
-                placeholder="e.g., What did you learn today?"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-600 dark:text-white"
-                required
-              />
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={addHabit}
-            disabled={!currentHabit.name.trim() || currentHabit.assignedMembers.length === 0}
-            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            Add Habit to Challenge
-          </button>
-        </div>
-      </div>
-
-      {!isChallengeValid() && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6">
-          <div className="flex items-center gap-2 mb-2">
-            <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <span className="font-medium text-yellow-800 dark:text-yellow-200">Challenge Setup Incomplete</span>
+            <button type="button" onClick={generateHabits} disabled={generatingHabits || aiBrief.trim().length < 10 || !selectedAiMemberIds.length} className="mt-5 w-full rounded-2xl bg-gradient-to-r from-violet-600 to-cyan-500 px-5 py-3.5 font-black text-white shadow-xl shadow-violet-500/20 transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50">
+              {generatingHabits
+                ? `Generating batch ${aiProgress?.batchNumber || 1} of ${aiProgress?.totalBatches || Math.ceil(selectedAiMemberIds.length / 8)}...`
+                : `Generate personalised ${memberLabel} habits`}
+            </button>
+            {generatingHabits && aiProgress && (
+              <div className="mt-4 rounded-2xl border border-cyan-200 bg-white/80 p-4 dark:border-cyan-400/20 dark:bg-slate-950/55">
+                <div className="flex items-center justify-between text-xs font-bold text-cyan-800 dark:text-cyan-200">
+                  <span>{aiProgress.completedStudents}/{aiProgress.totalStudents} {memberLabelPlural} complete</span>
+                  <span>{Math.round((aiProgress.completedStudents / aiProgress.totalStudents) * 100)}%</span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-cyan-100 dark:bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-500"
+                    style={{ width: `${(aiProgress.completedStudents / aiProgress.totalStudents) * 100}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Keep this window open while each {memberLabel} batch is safely completed.</p>
+              </div>
+            )}
           </div>
-          <p className="text-yellow-700 dark:text-yellow-300 text-sm">
-            {getMissingMembers().length > 0
-              ? `${getMissingMembers().length} member(s) still need habits assigned: ${getMissingMembers().map((member) => member.username).join(', ')}`
-              : 'All members need at least one habit assigned.'}
-          </p>
+        </section>
+      ) : (
+        <section className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-xl shadow-slate-900/5 dark:border-white/10 dark:bg-white/[0.035]">
+          <div className="mb-6 grid grid-cols-4 gap-2">
+            {STEPS.map((step, index) => {
+              const StepIcon = step.icon;
+              return (
+                <button key={step.id} type="button" onClick={() => index <= manualStep && setManualStep(index)} className={`rounded-xl p-2 text-center text-xs font-bold ${index === manualStep ? 'bg-violet-600 text-white' : index < manualStep ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-white/[0.04]'}`}>
+                  <StepIcon className="mx-auto mb-1 h-4 w-4" />
+                  {step.id === 'students' ? (isFootballWorkspace ? 'Clients' : 'Students') : step.label}
+                </button>
+              );
+            })}
+          </div>
+          {stepContent}
+          <div className="mt-6 flex items-center justify-between gap-3 border-t border-slate-200 pt-4 dark:border-white/10">
+            <button type="button" onClick={() => setManualStep((previous) => Math.max(0, previous - 1))} disabled={manualStep === 0} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 disabled:opacity-40 dark:border-white/10 dark:text-slate-300">
+              <FiArrowLeft /> Back
+            </button>
+            {manualStep < STEPS.length - 1 ? (
+              <button type="button" onClick={nextStep} className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white dark:bg-cyan-500 dark:text-slate-950">
+                Next <FiArrowRight />
+              </button>
+            ) : (
+              <button type="button" onClick={addHabit} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-cyan-500 px-5 py-2.5 text-sm font-black text-white shadow-lg">
+                <FiPlus /> Add habit
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
+      {message && <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-800 dark:border-violet-400/20 dark:bg-violet-500/10 dark:text-violet-200">{message}</div>}
+
+      {!isChallengeValid() && Object.values(memberHabits).flat().length > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-100">
+          Every {memberLabel} needs at least one habit before review.
         </div>
       )}
 
-      <div className="flex justify-between items-center pt-4 border-t border-gray-200 dark:border-gray-700 gap-4">
-        <button
-          type="button"
-          onClick={handleCancel}
-          className={`px-6 py-2 rounded-lg transition-colors ${hasHabitsAdded ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 hover:bg-orange-200 dark:hover:bg-orange-900/50 border border-orange-200 dark:border-orange-800' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
-        >
-          {hasHabitsAdded ? 'Cancel (Unsaved)' : 'Cancel'}
+      <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
+        <button type="button" onClick={handleCancel} className={`rounded-xl px-5 py-2.5 text-sm font-bold ${hasHabitsAdded ? 'border border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-200' : 'bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300'}`}>
+          {hasHabitsAdded ? (editChallengeHabitsMode ? 'Cancel unsaved changes' : 'Close autosaved draft') : 'Cancel'}
         </button>
-
-        {Object.values(memberHabits).flat().length > 0 && (
-          <button
-            type="button"
-            onClick={lockHabitsAndShowOverview}
-            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium shadow-lg border-2 border-green-500"
-          >
-            ✓ Done Adding Habits
-          </button>
-        )}
+        <button type="button" onClick={handleDone} disabled={!Object.values(memberHabits).flat().length} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-black text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40">
+          <FiCheck /> Done adding habits
+        </button>
       </div>
-    </>
+    </div>
   );
 };
 

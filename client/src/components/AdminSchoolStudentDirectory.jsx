@@ -1,12 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
+import { Link } from 'react-router-dom';
 import {
+  FaCalendarCheck,
+  FaChartLine,
   FaDownload,
   FaEdit,
   FaKey,
   FaSearch,
   FaUserGraduate
 } from 'react-icons/fa';
+import StudentLoginPackModal from './StudentLoginPackModal';
+import {
+  downloadStudentLoginCsv,
+  downloadStudentLoginHtml
+} from '../utils/studentLoginPack';
 
 const escapeCsvValue = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
@@ -38,6 +46,7 @@ const AdminSchoolStudentDirectory = ({ schools, refreshKey, onEdit, onToast }) =
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [generatingLogins, setGeneratingLogins] = useState(false);
+  const [showLoginPackModal, setShowLoginPackModal] = useState(false);
 
   useEffect(() => {
     if (!groupId && manageableSchools.length) {
@@ -95,26 +104,23 @@ const AdminSchoolStudentDirectory = ({ schools, refreshKey, onEdit, onToast }) =
     );
   };
 
-  const generateLoginPack = async () => {
-    const confirmed = window.confirm(
-      `Generate a new login CSV for all ${students.length} students in ${schoolName}? This resets every student's password to a new six-digit password.`
-    );
-    if (!confirmed) return;
-
+  const generateLoginPack = async (format) => {
     try {
       setGeneratingLogins(true);
       const response = await axios.post(`/admin/schools/${groupId}/student-logins`, {
         confirmReset: true
       });
-      downloadCsv(
-        `${safeFilename(schoolName)}-student-logins-${new Date().toISOString().slice(0, 10)}.csv`,
-        ['firstName', 'lastName', 'username', 'email', 'temporaryPassword', 'yearGroup', 'tutorGroup', 'isActive'],
-        response.data.credentials || []
-      );
+      const credentials = response.data.credentials || [];
+      if (format === 'html') {
+        downloadStudentLoginHtml(schoolName, credentials);
+      } else {
+        downloadStudentLoginCsv(schoolName, credentials);
+      }
+      setShowLoginPackModal(false);
       onToast({
         type: 'success',
-        title: 'Login CSV downloaded',
-        message: `${response.data.credentials?.length || 0} six-digit passwords were securely regenerated.`
+        title: `Login ${format.toUpperCase()} downloaded`,
+        message: `${credentials.length} six-digit passwords were securely regenerated.`
       });
     } catch (error) {
       onToast({
@@ -146,8 +152,8 @@ const AdminSchoolStudentDirectory = ({ schools, refreshKey, onEdit, onToast }) =
           <button type="button" disabled={!students.length} onClick={downloadRoster} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold transition hover:bg-white/10 disabled:opacity-40">
             <FaDownload /> Download roster
           </button>
-          <button type="button" disabled={!students.length || generatingLogins} onClick={generateLoginPack} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-300 to-cyan-300 px-4 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-40">
-            <FaKey /> {generatingLogins ? 'Generating...' : 'Generate login CSV'}
+          <button type="button" disabled={!students.length || generatingLogins} onClick={() => setShowLoginPackModal(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-300 to-cyan-300 px-4 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-40">
+            <FaKey /> {generatingLogins ? 'Generating...' : 'Download login pack'}
           </button>
         </div>
       </div>
@@ -169,7 +175,7 @@ const AdminSchoolStudentDirectory = ({ schools, refreshKey, onEdit, onToast }) =
           <span>{loading ? 'Loading...' : `${visibleStudents.length} of ${students.length} students`}</span>
         </div>
         <div className="max-h-[460px] overflow-auto">
-          <table className="min-w-[850px] w-full text-left text-sm">
+          <table className="min-w-[980px] w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-900 text-xs uppercase tracking-wider text-slate-500">
               <tr>
                 <th className="px-4 py-3">Student</th>
@@ -193,9 +199,17 @@ const AdminSchoolStudentDirectory = ({ schools, refreshKey, onEdit, onToast }) =
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button type="button" onClick={() => onEdit(student)} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/40 hover:text-cyan-200">
-                      <FaEdit /> Edit
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <Link to={`/groups/${groupId}/member/${student.id}`} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-indigo-400/40 hover:text-indigo-200">
+                        <FaChartLine /> Stats
+                      </Link>
+                      <Link to={`/groups/${groupId}/member/${student.id}?section=calendar`} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-emerald-400/40 hover:text-emerald-200">
+                        <FaCalendarCheck /> Consistency
+                      </Link>
+                      <button type="button" onClick={() => onEdit(student)} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/40 hover:text-cyan-200">
+                        <FaEdit /> Edit
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -210,6 +224,14 @@ const AdminSchoolStudentDirectory = ({ schools, refreshKey, onEdit, onToast }) =
           </table>
         </div>
       </div>
+      <StudentLoginPackModal
+        open={showLoginPackModal}
+        schoolName={schoolName}
+        studentCount={students.length}
+        loading={generatingLogins}
+        onCancel={() => setShowLoginPackModal(false)}
+        onConfirm={generateLoginPack}
+      />
     </section>
   );
 };

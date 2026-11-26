@@ -1,218 +1,185 @@
 import React from 'react';
 import {
-  BarChart,
   Bar,
-  LineChart,
+  BarChart,
+  CartesianGrid,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer
 } from 'recharts';
+import { FiArchive, FiAward, FiCalendar, FiInfo, FiRepeat, FiTarget, FiUsers } from 'react-icons/fi';
 import { getArchiveBestPerformer } from '../utils/archiveHelpers';
 
-const ArchivePanel = ({ archivesLoading, archives }) => {
+const formatDate = (value) => {
+  if (!value) return 'Unknown';
+  const dateValue = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  return dateValue.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+const numberValue = (value, digits = 1) => Number(value || 0).toFixed(digits).replace(/\.0$/, '');
+
+const ArchivePanel = ({ archivesLoading, archives, workspaceType = 'school' }) => {
+  const isFootballWorkspace = workspaceType === 'football';
+  const memberLabel = isFootballWorkspace ? 'client' : 'student';
+  const memberLabelPlural = isFootballWorkspace ? 'clients' : 'students';
+  if (archivesLoading) {
+    return (
+      <section className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-12 text-center text-white">
+        <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-cyan-300 border-t-transparent" />
+        <p className="mt-4 text-sm font-bold text-slate-400">Rebuilding historical performance...</p>
+      </section>
+    );
+  }
+
   return (
-    <div>
-      <div className="mb-8">
-        <h2 className="text-3xl font-bold text-secondary-900 dark:text-white mb-2">📚 Challenge Archives</h2>
-        <p className="text-secondary-600 dark:text-secondary-400 mb-4">View completed challenges and their statistics.</p>
-      </div>
-
-      <div className="space-y-6">
-        {archivesLoading ? (
-          <div className="flex justify-center items-center py-12">
-            <div className="w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+    <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-[#080d1d] text-white shadow-2xl shadow-black/20">
+      <header className="relative border-b border-white/10 p-5 sm:p-7">
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
+        <div className="flex items-start gap-4">
+          <div className="rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 p-3 text-xl shadow-lg shadow-violet-950/30"><FiArchive /></div>
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300">Historical intelligence</p>
+            <h2 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">Challenge archives</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">Completed challenges use the same proportional scoring as live statistics. Three of four recurring occurrences contributes 75%, not a failed habit-day.</p>
           </div>
-        ) : archives && archives.length > 0 ? (
-          archives.map((archive) => (
-            <div key={archive.id} className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-6 border border-gray-200 dark:border-secondary-700">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">
-                    {archive.title}
-                  </h3>
-                  <p className="text-secondary-600 dark:text-secondary-400">
-                    {new Date(archive.start_date).toLocaleDateString()} - {new Date(archive.end_date).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-primary-600 dark:text-primary-400">
-                    {archive.overall_completion_rate}%
-                  </div>
-                  <div className="text-sm text-secondary-500 dark:text-secondary-400">
-                    Overall Completion
-                  </div>
-                </div>
-              </div>
+        </div>
+      </header>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4">
-                  <div className="text-sm text-primary-600 dark:text-primary-400 font-medium">Duration</div>
-                  <div className="text-xl font-semibold text-secondary-900 dark:text-white">
-                    {archive.duration_days} days
-                  </div>
-                </div>
-                <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4">
-                  <div className="text-sm text-green-600 dark:text-green-400 font-medium">Members</div>
-                  <div className="text-xl font-semibold text-secondary-900 dark:text-white">
-                    {archive.total_members}
-                  </div>
-                </div>
-                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4">
-                  <div className="text-sm text-blue-600 dark:text-blue-400 font-medium">Completions</div>
-                  <div className="text-xl font-semibold text-secondary-900 dark:text-white">
-                    {archive.total_completions}/{archive.total_possible}
-                  </div>
-                </div>
-                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4">
-                  <div className="text-sm text-purple-600 dark:text-purple-400 font-medium">Best Performer</div>
-                  <div className="text-xl font-semibold text-secondary-900 dark:text-white">
-                    {getArchiveBestPerformer(archive)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                {archive.daily_progress && archive.daily_progress.length > 0 && (
+      <div className="space-y-5 p-3 sm:p-6">
+        {archives?.length ? archives.map((archive) => {
+          const memberChart = [...(archive.member_stats || [])].sort((left, right) => right.completion_rate - left.completion_rate);
+          return (
+            <article key={archive.id} className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.045]">
+              <div className="p-4 sm:p-6">
+                <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-3">Daily Progress</h4>
-                    <div className="bg-white dark:bg-secondary-800 rounded-lg p-4">
-                      <ResponsiveContainer width="100%" height={200}>
-                        <LineChart data={archive.daily_progress}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis
-                            dataKey="date"
-                            tickFormatter={(value) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                          />
-                          <YAxis domain={[0, 100]} />
-                          <Tooltip
-                            formatter={(value) => [`${value}%`, 'Completion Rate']}
-                            labelFormatter={(label) => `Date: ${new Date(label).toLocaleDateString()}`}
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="completion_rate"
-                            stroke="#3b82f6"
-                            strokeWidth={2}
-                            dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
-                          />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-violet-200">Completed challenge</span>
+                      <span className="text-xs font-bold text-slate-500">{formatDate(archive.start_date)} - {formatDate(archive.end_date)}</span>
+                    </div>
+                    <h3 className="mt-3 text-xl font-black sm:text-2xl">{archive.title}</h3>
+                  </div>
+                  <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-5 py-4 text-left lg:text-right">
+                    <p className="text-3xl font-black text-cyan-200">{numberValue(archive.overall_completion_rate)}%</p>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-[0.15em] text-cyan-100/60">Average scheduled progress</p>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                  {[
+                    [FiCalendar, 'Duration', `${archive.duration_days} days`, 'text-violet-200'],
+                    [FiUsers, isFootballWorkspace ? 'Clients' : 'Students', archive.total_members, 'text-emerald-200'],
+                    [FiTarget, 'Completion units', `${numberValue(archive.total_completions, 2)} / ${archive.total_possible}`, 'text-cyan-200'],
+                    [FiAward, 'Top performer', getArchiveBestPerformer(archive), 'text-amber-200'],
+                  ].map(([Icon, label, value, tone]) => (
+                    <div key={label} className="rounded-2xl border border-white/10 bg-black/15 p-3.5 sm:p-4">
+                      <Icon className={tone} />
+                      <p className={`mt-3 text-lg font-black ${tone}`}>{value}</p>
+                      <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em] text-slate-500">{label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-black/15 p-3 sm:p-5">
+                    <h4 className="text-sm font-black">Daily average completion</h4>
+                    <p className="mt-1 text-xs text-slate-500">Average scheduled progress across {memberLabelPlural} for each challenge day.</p>
+                    <div className="mt-4 h-60">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={archive.daily_progress || []} margin={{ top: 5, right: 10, left: -18, bottom: 0 }}>
+                          <CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.3} />
+                          <XAxis dataKey="date" tickFormatter={(value) => formatDate(value).replace(/ \d{4}$/, '')} tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <Tooltip formatter={(value) => [`${numberValue(value)}%`, 'Scheduled progress']} labelFormatter={formatDate} contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,.1)', borderRadius: 12 }} />
+                          <Line type="monotone" dataKey="completion_rate" stroke="#22d3ee" strokeWidth={3} dot={{ fill: '#8b5cf6', r: 3, strokeWidth: 0 }} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
-                )}
 
-                {archive.member_stats && archive.member_stats.length > 0 && (
-                  <div>
-                    <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-3">Daily Participation Comparison</h4>
-                    <div className="bg-white dark:bg-secondary-800 rounded-lg p-4">
-                      <ResponsiveContainer width="100%" height={200}>
-                        <BarChart data={archive.member_stats}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis
-                            dataKey="username"
-                            tick={{ fontSize: 12 }}
-                            angle={-45}
-                            textAnchor="end"
-                            height={60}
-                          />
-                          <YAxis domain={[0, 100]} />
-                          <Tooltip
-                            formatter={(value) => [`${value}%`, 'Daily Participation']}
-                            labelFormatter={(label) => `Member: ${label}`}
-                          />
-                          <Bar
-                            dataKey="completion_rate"
-                            fill="#10b981"
-                            radius={[4, 4, 0, 0]}
-                          />
+                  <div className="rounded-2xl border border-white/10 bg-black/15 p-3 sm:p-5">
+                    <h4 className="text-sm font-black">{isFootballWorkspace ? 'Client' : 'Student'} completion comparison</h4>
+                    <p className="mt-1 text-xs text-slate-500">Independent {memberLabel} percentages, shown as bars rather than slices of a whole.</p>
+                    <div className="mt-4 h-60">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={memberChart} layout="vertical" margin={{ top: 0, right: 12, left: 18, bottom: 0 }}>
+                          <CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.3} horizontal={false} />
+                          <XAxis type="number" domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <YAxis type="category" dataKey="username" width={82} tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <Tooltip formatter={(value) => [`${numberValue(value)}%`, 'Scheduled progress']} contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,.1)', borderRadius: 12 }} />
+                          <Bar dataKey="completion_rate" fill="#8b5cf6" radius={[0, 7, 7, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
-                )}
-              </div>
-
-              <div className="mb-4">
-                <h4 className="text-lg font-semibold text-secondary-900 dark:text-white mb-3">Member Performance</h4>
-                <div className="space-y-4">
-                  {archive.member_stats.map((member) => (
-                    <div key={member.id} className="bg-gray-50 dark:bg-secondary-700 rounded-lg p-4">
-                      <div className="flex justify-between items-center mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-sm font-bold text-primary-700 dark:text-primary-200">
-                            {member.username[0].toUpperCase()}
-                          </div>
-                          <div>
-                            <span className="font-medium text-secondary-900 dark:text-white">
-                              {member.username}
-                            </span>
-                            <div className="text-sm text-secondary-500 dark:text-secondary-400">
-                              Daily Participation: {member.completion_rate}% ({member.days_completed}/{member.total_days} days)
-                            </div>
-                            {member.total_habit_completions !== undefined && (
-                              <div className="text-xs text-secondary-400 dark:text-secondary-500">
-                                Total Habit Completions: {member.total_habit_completions}/{member.total_possible_habit_completions}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-lg font-semibold text-secondary-900 dark:text-white">
-                            {member.completion_rate}%
-                          </div>
-                        </div>
-                      </div>
-
-                      {member.habit_details && member.habit_details.length > 0 && (
-                        <div className="ml-13">
-                          <div className="text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">Individual Habit Performance (vs Total Challenge Days):</div>
-                          <div className="space-y-2">
-                            {member.habit_details.map((habit, idx) => (
-                              <div key={idx} className="flex justify-between items-center bg-white dark:bg-secondary-800 rounded p-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm text-secondary-600 dark:text-secondary-400">
-                                    {habit.name}
-                                  </span>
-                                  <span className="text-xs px-2 py-1 bg-gray-200 dark:bg-secondary-600 rounded text-secondary-600 dark:text-secondary-400">
-                                    {habit.type}
-                                  </span>
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-sm font-semibold text-secondary-900 dark:text-white">
-                                    {habit.completion_rate}%
-                                  </div>
-                                  <div className="text-xs text-secondary-500 dark:text-secondary-400">
-                                    {habit.completed_days}/{habit.total_days}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
                 </div>
               </div>
-            </div>
-          ))
-        ) : (
-          <div className="text-center py-12">
-            <div className="text-6xl mb-4">📚</div>
-            <h3 className="text-xl font-semibold text-secondary-900 dark:text-white mb-2">
-              No Completed Challenges Yet
-            </h3>
-            <p className="text-secondary-600 dark:text-secondary-400">
-              Completed challenges will appear here once they finish.
-            </p>
+
+              <details className="border-t border-white/10 bg-black/10">
+                <summary className="cursor-pointer px-4 py-4 text-sm font-black text-slate-200 sm:px-6">Open {memberLabel} and habit audit</summary>
+                <div className="space-y-3 border-t border-white/10 p-3 sm:p-6">
+                  {(archive.member_stats || []).map((member) => (
+                    <details key={member.id} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+                      <summary className="cursor-pointer p-4 sm:p-5">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="truncate font-black text-white">{member.username}</p>
+                            <p className="mt-1 text-xs text-slate-500">{member.perfect_days || 0} perfect - {member.partial_days || 0} partial - {member.days_completed || 0}/{member.total_days || 0} active days</p>
+                          </div>
+                          <p className="shrink-0 text-xl font-black text-cyan-200">{numberValue(member.completion_rate)}%</p>
+                        </div>
+                      </summary>
+                      <div className="border-t border-white/10 p-3 sm:p-5">
+                        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          <Metric label="Completion units" value={`${numberValue(member.total_habit_completions, 2)} / ${member.total_possible_habit_completions || 0}`} />
+                          <Metric label="Perfect days" value={member.perfect_days || 0} />
+                          <Metric label="Partial days" value={member.partial_days || 0} />
+                          <Metric label="Recurring events" value={`${member.periodic_completed || 0} / ${member.periodic_target || 0}`} />
+                        </div>
+                        <div className="space-y-2">
+                          {(member.habit_details || []).map((habit, index) => (
+                            <div key={`${habit.name}-${index}`} className="grid gap-3 rounded-xl border border-white/10 bg-black/15 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2"><p className="truncate text-sm font-black">{habit.name}</p><span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] font-black uppercase text-slate-500">{habit.type}</span><span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] font-black uppercase text-slate-500">{habit.combat_type}</span></div>
+                                <p className="mt-1 text-[11px] text-slate-500">{habit.completed_days || 0} full - {habit.partial_days || 0} partial - {habit.missed_days || 0} missed - {numberValue(habit.earned_units, 2)}/{habit.total_days || 0} units</p>
+                                {habit.type === 'periodic' ? <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-cyan-300"><FiRepeat /> {habit.periodic_completed || 0}/{habit.periodic_target || 0} occurrences logged</p> : null}
+                              </div>
+                              <p className="text-lg font-black text-cyan-200">{numberValue(habit.completion_rate)}%</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </details>
+            </article>
+          );
+        }) : (
+          <div className="rounded-[1.75rem] border border-dashed border-white/10 p-12 text-center">
+            <FiArchive className="mx-auto text-4xl text-slate-600" />
+            <h3 className="mt-4 text-xl font-black">No completed challenges yet</h3>
+            <p className="mt-2 text-sm text-slate-500">Historical analytics appear here after a challenge is completed.</p>
           </div>
         )}
+
+        <div className="flex items-start gap-3 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.07] p-4 text-xs leading-5 text-slate-400">
+          <FiInfo className="mt-0.5 shrink-0 text-cyan-200" />
+          <p><strong className="text-slate-200">Completion units</strong> are completion-equivalent scheduled habit-days. A 75% recurring habit contributes 0.75 units. Unscheduled days are excluded, so every percentage describes only work that was actually expected.</p>
+        </div>
       </div>
-    </div>
+    </section>
   );
 };
+
+const Metric = ({ label, value }) => (
+  <div className="rounded-xl border border-white/10 bg-black/15 p-3">
+    <p className="text-base font-black text-slate-100">{value}</p>
+    <p className="mt-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600">{label}</p>
+  </div>
+);
 
 export default ArchivePanel;

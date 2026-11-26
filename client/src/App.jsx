@@ -1,6 +1,10 @@
-import React, { Suspense, lazy, useEffect } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
+import {
+  getProtocolNameForPath,
+  IPKP_TRANSITION_EVENT
+} from './utils/protocolTransition';
 
 // Components
 import ProtectedRoute from './components/ProtectedRoute';
@@ -23,10 +27,62 @@ const GroupDetail = lazy(() => import('./pages/GroupDetail'));
 const MemberStats = lazy(() => import('./pages/MemberStats'));
 const TeacherDesk = lazy(() => import('./pages/TeacherDesk'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const FeatureLab = lazy(() => import('./pages/FeatureLab'));
 
 function App() {
   const { isAuthenticated, loading, postLoginStage, currentUser, completePostLogin } = useAuth();
   const location = useLocation();
+  const [routeProtocol, setRouteProtocol] = useState(null);
+  const routeTimerRef = useRef(null);
+  const previousPathRef = useRef(location.pathname);
+  const activeTransitionRef = useRef(null);
+  const manualTransitionAtRef = useRef(0);
+
+  const startProtocolTransition = useCallback((protocolName, duration = 1250) => {
+    const normalizedProtocolName = protocolName || 'Workspace';
+    const now = Date.now();
+    if (
+      activeTransitionRef.current?.protocolName === normalizedProtocolName
+      && activeTransitionRef.current.expiresAt > now
+    ) {
+      return;
+    }
+    if (routeTimerRef.current) {
+      window.clearTimeout(routeTimerRef.current);
+    }
+    activeTransitionRef.current = {
+      protocolName: normalizedProtocolName,
+      expiresAt: now + Math.max(650, Number(duration) || 1250)
+    };
+    setRouteProtocol(normalizedProtocolName);
+    routeTimerRef.current = window.setTimeout(() => {
+      setRouteProtocol(null);
+      activeTransitionRef.current = null;
+      routeTimerRef.current = null;
+    }, Math.max(650, Number(duration) || 1250));
+  }, []);
+
+  useEffect(() => {
+    const handleProtocolTransition = (event) => {
+      manualTransitionAtRef.current = Date.now();
+      startProtocolTransition(event.detail?.protocolName, event.detail?.duration);
+    };
+    window.addEventListener(IPKP_TRANSITION_EVENT, handleProtocolTransition);
+    return () => {
+      window.removeEventListener(IPKP_TRANSITION_EVENT, handleProtocolTransition);
+      if (routeTimerRef.current) {
+        window.clearTimeout(routeTimerRef.current);
+      }
+    };
+  }, [startProtocolTransition]);
+
+  useLayoutEffect(() => {
+    const previousPath = previousPathRef.current;
+    previousPathRef.current = location.pathname;
+    if (!isAuthenticated || previousPath === location.pathname || postLoginStage) return;
+    if (Date.now() - manualTransitionAtRef.current < 500) return;
+    startProtocolTransition(getProtocolNameForPath(location.pathname), 1350);
+  }, [isAuthenticated, location.pathname, postLoginStage, startProtocolTransition]);
   
   // Scroll to top on route change
   useEffect(() => {
@@ -45,7 +101,7 @@ function App() {
 
   // Show loading state while authentication is being checked
   if (loading || postLoginStage === 'loading') {
-    return <BrandLoadingScreen />;
+    return <BrandLoadingScreen protocolName={loading ? 'Secure Access' : 'Authentication'} />;
   }
 
   if (postLoginStage === 'affirmations') {
@@ -55,14 +111,11 @@ function App() {
   // Determine if we should show the navbar
   const showNavbar = isAuthenticated && location.pathname !== '/';
 
-  const routeFallback = (
-    <div className="flex min-h-[40vh] items-center justify-center">
-      <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
-    </div>
-  );
+  const routeFallback = <BrandLoadingScreen protocolName={getProtocolNameForPath(location.pathname)} transitionMode />;
 
   return (
     <div className="min-h-screen bg-primary-50 dark:bg-secondary-900 overflow-x-hidden w-full">
+      {routeProtocol ? <BrandLoadingScreen protocolName={routeProtocol} transitionMode /> : null}
       <GoldParticlesBackground />
       {showNavbar && <Navbar />}
       {isAuthenticated ? <AppCopilot /> : null}
@@ -130,6 +183,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin', 'teacher']}>
                   <TeacherDesk />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/feature-lab"
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <FeatureLab />
                 </ProtectedRoute>
               }
             />

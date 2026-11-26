@@ -22,6 +22,12 @@ import {
 import AdminAccountEditor from './AdminAccountEditor';
 import AdminStudentImport from './AdminStudentImport';
 import GroupManagementSection from './GroupManagementSection';
+import StudentLoginPackModal from './StudentLoginPackModal';
+import {
+  downloadStudentLoginCsv,
+  downloadStudentLoginHtml
+} from '../utils/studentLoginPack';
+import { HOMEWORK_ENABLED } from '../config/features';
 
 const emptyAccountForm = {
   firstName: '',
@@ -39,12 +45,21 @@ const sections = [
   { id: 'people', label: 'People', icon: FaUsers },
   { id: 'add', label: 'Add person', icon: FaPlus },
   { id: 'import', label: 'Bulk CSV', icon: FaFileCsv },
+  { id: 'ai-testing', label: 'AI test data', icon: FaRobot },
   { id: 'settings', label: 'School setup', icon: FaSchool },
 ];
 
 const schoolRoleLabels = {
   'school-admin': 'School admin',
   headteacher: 'Headteacher',
+  'deputy-headteacher': 'Deputy headteacher',
+  'assistant-headteacher': 'Assistant headteacher',
+  slt: 'Senior leadership team',
+  'head-of-department': 'Head of department',
+  'head-of-year': 'Head of year',
+  'subject-teacher': 'Subject teacher',
+  'assistant-teacher': 'Assistant teacher',
+  senco: 'SENCO',
   teacher: 'Teacher',
   coach: 'Coach',
   'pastoral-lead': 'Pastoral lead',
@@ -111,8 +126,12 @@ function SchoolAdminWorkspace({
   const [latestCredential, setLatestCredential] = useState(null);
   const [workingAccountId, setWorkingAccountId] = useState(null);
   const [generatingStudentLogins, setGeneratingStudentLogins] = useState(false);
+  const [showLoginPackModal, setShowLoginPackModal] = useState(false);
   const [schoolName, setSchoolName] = useState(group?.name || '');
   const [savingSchool, setSavingSchool] = useState(false);
+  const [selectedTestGoalStudentIds, setSelectedTestGoalStudentIds] = useState(null);
+  const [generatingTestGoals, setGeneratingTestGoals] = useState(false);
+  const [testGoalResult, setTestGoalResult] = useState(null);
 
   const school = useMemo(() => ({ ...group, viewerCanManage: true }), [group]);
   const notify = (toast) => {
@@ -160,6 +179,14 @@ function SchoolAdminWorkspace({
       ].join(' ').toLowerCase().includes(query);
     });
   }, [accounts, roleFilter, search]);
+
+  const schoolStudents = useMemo(
+    () => accounts.filter((account) => account.accountRole === 'student'),
+    [accounts]
+  );
+  const testGoalStudentIds = selectedTestGoalStudentIds === null
+    ? schoolStudents.map((student) => student.id)
+    : selectedTestGoalStudentIds;
 
   const createAccount = async (event) => {
     event.preventDefault();
@@ -264,28 +291,30 @@ function SchoolAdminWorkspace({
     );
   };
 
-  const generateStudentLoginPack = async () => {
+  const openStudentLoginPack = () => {
     const studentCount = accounts.filter((account) => account.accountRole === 'student').length;
     if (!studentCount) {
       notify({ type: 'error', title: 'No student logins available', message: 'Add students before generating a login pack.' });
       return;
     }
-    const confirmed = window.confirm(
-      `Generate a login CSV for all ${studentCount} students? This resets every current student password to a new six-digit password.`
-    );
-    if (!confirmed) return;
+    setShowLoginPackModal(true);
+  };
+
+  const generateStudentLoginPack = async (format) => {
     try {
       setGeneratingStudentLogins(true);
       const response = await axios.post(`/admin/schools/${groupId}/student-logins`, { confirmReset: true });
-      downloadCsv(
-        `${safeFilename(group.name)}-student-logins-${new Date().toISOString().slice(0, 10)}.csv`,
-        ['firstName', 'lastName', 'username', 'email', 'temporaryPassword', 'yearGroup', 'tutorGroup', 'isActive'],
-        response.data.credentials || []
-      );
+      const credentials = response.data.credentials || [];
+      if (format === 'html') {
+        downloadStudentLoginHtml(group.name, credentials);
+      } else {
+        downloadStudentLoginCsv(group.name, credentials);
+      }
+      setShowLoginPackModal(false);
       notify({
         type: 'success',
-        title: 'Student login pack downloaded',
-        message: `${response.data.credentials?.length || 0} passwords were securely regenerated.`,
+        title: `Student login ${format.toUpperCase()} downloaded`,
+        message: `${credentials.length} passwords were securely regenerated.`,
       });
     } catch (error) {
       notify({
@@ -310,6 +339,44 @@ function SchoolAdminWorkspace({
       notify({ type: 'error', title: 'School not updated', message: error.response?.data?.error || error.message });
     } finally {
       setSavingSchool(false);
+    }
+  };
+
+  const toggleTestGoalStudent = (studentId) => {
+    const currentIds = selectedTestGoalStudentIds === null
+      ? schoolStudents.map((student) => student.id)
+      : selectedTestGoalStudentIds;
+    setSelectedTestGoalStudentIds(
+      currentIds.includes(studentId)
+        ? currentIds.filter((id) => id !== studentId)
+        : [...currentIds, studentId]
+    );
+    setTestGoalResult(null);
+  };
+
+  const generateTestStudentGoals = async () => {
+    if (!testGoalStudentIds.length || testGoalStudentIds.length > 60) return;
+    try {
+      setGeneratingTestGoals(true);
+      setTestGoalResult(null);
+      const response = await axios.post(`/groups/${groupId}/students/goals/ai-seed`, {
+        memberIds: testGoalStudentIds,
+      });
+      setTestGoalResult(response.data);
+      await fetchGroupDetails?.();
+      notify({
+        type: 'success',
+        title: 'AI test goals generated',
+        message: `${response.data?.goalsCreated || 0} goals were added for ${response.data?.studentsProcessed || testGoalStudentIds.length} students.`,
+      });
+    } catch (error) {
+      notify({
+        type: 'error',
+        title: 'Test goals not generated',
+        message: error.response?.data?.error || error.message,
+      });
+    } finally {
+      setGeneratingTestGoals(false);
     }
   };
 
@@ -395,7 +462,7 @@ function SchoolAdminWorkspace({
 
             {renderCredentialCard()}
 
-            <div className="grid gap-4 lg:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <button type="button" onClick={() => setActiveSection('add')} className={`${cardClass} text-left transition hover:-translate-y-0.5 hover:border-violet-300/35`}>
                 <FaPlus className="text-xl text-violet-300" />
                 <h3 className="mt-5 text-lg font-semibold">Add one person</h3>
@@ -410,6 +477,11 @@ function SchoolAdminWorkspace({
                 <FaUsers className="text-xl text-emerald-300" />
                 <h3 className="mt-5 text-lg font-semibold">Manage existing accounts</h3>
                 <p className="mt-2 text-sm leading-6 text-slate-400">Search people, edit details, deactivate accounts, reset passwords, or remove school access.</p>
+              </button>
+              <button type="button" onClick={() => setActiveSection('ai-testing')} className={`${cardClass} text-left transition hover:-translate-y-0.5 hover:border-amber-300/35`}>
+                <FaRobot className="text-xl text-amber-300" />
+                <h3 className="mt-5 text-lg font-semibold">Generate AI test goals</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-400">Create five realistic demonstration goals for each selected student so goal-linked habits can be tested.</p>
               </button>
             </div>
 
@@ -505,7 +577,7 @@ function SchoolAdminWorkspace({
                 <button type="button" onClick={downloadStudentRoster} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-200 hover:border-cyan-400/35 hover:text-white">
                   <FaDownload /> Student roster
                 </button>
-                <button type="button" disabled={generatingStudentLogins} onClick={generateStudentLoginPack} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-amber-400/15 disabled:opacity-50">
+                <button type="button" disabled={generatingStudentLogins} onClick={openStudentLoginPack} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-amber-400/15 disabled:opacity-50">
                   <FaKey /> {generatingStudentLogins ? 'Generating...' : 'Student login pack'}
                 </button>
                 <label className="relative">
@@ -602,6 +674,124 @@ function SchoolAdminWorkspace({
           </>
         )}
 
+        {activeSection === 'ai-testing' && (
+          <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
+            <div className={cardClass}>
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-400/15 text-xl text-amber-300">
+                  <FaRobot />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-300">Admin testing tool</p>
+                  <h3 className="mt-1 text-xl font-semibold">Generate student-style goals with AI</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    The AI creates exactly five safe, realistic demonstration goals for every selected student. Existing goals are retained and duplicate titles are skipped.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-4">
+                <div className="text-sm font-semibold text-cyan-100">{testGoalStudentIds.length} students selected</div>
+                <p className="mt-1 text-xs leading-5 text-cyan-100/65">Choose up to 60 students per generation. You can run the tool again for another group.</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={generateTestStudentGoals}
+                disabled={!testGoalStudentIds.length || testGoalStudentIds.length > 60 || generatingTestGoals}
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-300 via-orange-300 to-violet-300 px-5 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-950/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <FaMagic /> {generatingTestGoals ? 'Generating five goals each...' : 'Generate five AI goals per student'}
+              </button>
+
+              {!schoolStudents.length && (
+                <p className="mt-3 text-sm font-medium text-amber-200">Add student accounts to this school before generating test goals.</p>
+              )}
+              {testGoalStudentIds.length > 60 && (
+                <p className="mt-3 text-sm font-medium text-rose-300">Select no more than 60 students for one generation.</p>
+              )}
+              {testGoalResult && (
+                <div className="mt-5 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-4">
+                  <div className="flex items-center gap-2 font-semibold text-emerald-100">
+                    <FaCheckCircle /> Generation complete
+                  </div>
+                  <p className="mt-2 text-sm text-emerald-100/75">
+                    {testGoalResult.goalsCreated || 0} goals added for {testGoalResult.studentsProcessed || 0} students.
+                  </p>
+                  {testGoalResult.summary && <p className="mt-2 text-xs leading-5 text-emerald-100/60">{testGoalResult.summary}</p>}
+                </div>
+              )}
+            </div>
+
+            <div className={cardClass}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300">Student selection</p>
+                  <h3 className="mt-1 text-lg font-semibold">Choose who receives test goals</h3>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTestGoalStudentIds(null);
+                      setTestGoalResult(null);
+                    }}
+                    className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-cyan-400/35"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTestGoalStudentIds([]);
+                      setTestGoalResult(null);
+                    }}
+                    className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-rose-400/35"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5 max-h-[32rem] space-y-2 overflow-y-auto pr-1">
+                {schoolStudents.map((student) => {
+                  const selected = testGoalStudentIds.includes(student.id);
+                  const displayName = [student.firstName, student.lastName].filter(Boolean).join(' ') || student.username;
+                  return (
+                    <label
+                      key={student.id}
+                      className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${
+                        selected
+                          ? 'border-violet-300/35 bg-violet-400/10'
+                          : 'border-white/10 bg-slate-950/30 hover:border-white/20'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleTestGoalStudent(student.id)}
+                        className="h-4 w-4 accent-violet-400"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-white">{displayName}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500">
+                          @{student.username}{student.yearGroup ? ` · ${student.yearGroup}` : ''}
+                        </div>
+                      </div>
+                      {!student.isActive && <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300">Inactive</span>}
+                    </label>
+                  );
+                })}
+                {!loading && !schoolStudents.length && (
+                  <div className="rounded-xl border border-dashed border-white/10 px-5 py-12 text-center text-sm text-slate-500">
+                    No students are assigned to this school yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeSection === 'settings' && (
           <div className="space-y-6">
             <div className="grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
@@ -632,7 +822,7 @@ function SchoolAdminWorkspace({
                     ['Operations and roles', 'school-operations'],
                     ['Homework setup', 'school-homework'],
                     ['Reports and exports', 'school-reports'],
-                  ].map(([label, section]) => (
+                  ].filter(([, section]) => HOMEWORK_ENABLED || section !== 'school-homework').map(([label, section]) => (
                     <button key={section} type="button" onClick={() => onOpenSchoolSection?.(section)} className="rounded-xl border border-white/10 bg-slate-950/45 px-4 py-3 text-left text-sm font-semibold text-slate-200 transition hover:border-cyan-400/35 hover:bg-cyan-400/5 hover:text-white">
                       {label} →
                     </button>
@@ -669,6 +859,14 @@ function SchoolAdminWorkspace({
           onToast={notify}
         />
       )}
+      <StudentLoginPackModal
+        open={showLoginPackModal}
+        schoolName={group.name}
+        studentCount={accounts.filter((account) => account.accountRole === 'student').length}
+        loading={generatingStudentLogins}
+        onCancel={() => setShowLoginPackModal(false)}
+        onConfirm={generateStudentLoginPack}
+      />
     </section>
   );
 }

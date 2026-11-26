@@ -184,6 +184,7 @@ class Group(db.Model):
     group_type = db.Column(db.String(20), nullable=False, default='school')
     is_legacy = db.Column(db.Boolean, nullable=False, default=False)
     school_timetable = db.Column(db.JSON, nullable=False, default=list)
+    school_day_config = db.Column(db.JSON, nullable=False, default=dict)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -205,6 +206,7 @@ class Group(db.Model):
             'groupType': self.group_type or 'school',
             'isLegacy': bool(self.is_legacy),
             'schoolTimetable': self.school_timetable or [],
+            'schoolDayConfig': self.school_day_config or {},
             'createdAt': self.created_at.isoformat()
         }
 
@@ -242,6 +244,43 @@ class GroupChallenge(db.Model):
         }
 
 
+class StaffPersonalChallenge(db.Model):
+    __tablename__ = 'staff_personal_challenges'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False)
+    member_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    title = db.Column(db.String(140), nullable=False, default='My personal challenge')
+    start_date = db.Column(db.DateTime, nullable=False)
+    end_date = db.Column(db.DateTime, nullable=False)
+    habits = db.Column(db.JSON, nullable=False, default=list)
+    status = db.Column(db.String(20), nullable=False, default='active')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('Group', foreign_keys=[group_id], backref=db.backref('staff_personal_challenges', lazy='dynamic'))
+    member = db.relationship('User', foreign_keys=[member_id], backref=db.backref('staff_personal_challenges', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('ix_staff_personal_challenge_group_member', 'group_id', 'member_id'),
+        db.Index('ix_staff_personal_challenge_status', 'group_id', 'status'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'groupId': self.group_id,
+            'memberId': self.member_id,
+            'title': self.title or 'My personal challenge',
+            'startDate': self.start_date.isoformat() if self.start_date else None,
+            'endDate': self.end_date.isoformat() if self.end_date else None,
+            'habits': self.habits or [],
+            'status': self.status or 'active',
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'updatedAt': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class StudentSchedulePlan(db.Model):
     __tablename__ = 'student_schedule_plans'
 
@@ -274,6 +313,185 @@ class StudentSchedulePlan(db.Model):
         }
 
 
+class StudentPlannerSettings(db.Model):
+    __tablename__ = 'student_planner_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    wake_time = db.Column(db.String(5), nullable=False, default='07:00')
+    bedtime = db.Column(db.String(5), nullable=False, default='22:00')
+    school_commute_minutes = db.Column(db.Integer, nullable=False, default=0)
+    timezone_name = db.Column(db.String(64), nullable=False, default='Europe/London')
+    recurring_reminders = db.Column(db.JSON, nullable=False, default=list)
+    ai_weekly_templates = db.Column(db.JSON, nullable=False, default=dict)
+    reward_preferences = db.Column(db.JSON, nullable=False, default=dict)
+    google_calendar_refresh_token = db.Column(db.Text, nullable=True)
+    google_calendar_access_token = db.Column(db.Text, nullable=True)
+    google_calendar_token_expiry = db.Column(db.DateTime, nullable=True)
+    google_calendar_scopes = db.Column(db.Text, nullable=True)
+    google_calendar_hidden_event_ids = db.Column(db.JSON, nullable=False, default=list)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'student_id', name='uq_student_planner_settings'),
+    )
+
+    def to_dict(self):
+        return {
+            'groupId': self.group_id,
+            'studentId': self.student_id,
+            'wakeTime': self.wake_time or '07:00',
+            'bedtime': self.bedtime or '22:00',
+            'schoolCommuteMinutes': max(0, self.school_commute_minutes or 0),
+            'timezone': self.timezone_name or 'Europe/London',
+            'recurringReminders': self.recurring_reminders or [],
+            'aiWeeklyTemplates': self.ai_weekly_templates or {},
+            'rewardPreferences': self.reward_preferences or {},
+            'googleCalendarConnected': bool(self.google_calendar_refresh_token),
+            'googleCalendarHiddenEventCount': len(self.google_calendar_hidden_event_ids or []),
+            'updatedAt': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class StudentIpWallet(db.Model):
+    __tablename__ = 'student_ip_wallets'
+
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
+    balance = db.Column(db.Integer, nullable=False, default=0)
+    lifetime_earned = db.Column(db.Integer, nullable=False, default=0)
+    lifetime_spent = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    student = db.relationship('User', foreign_keys=[student_id])
+
+    def to_dict(self):
+        return {
+            'balance': self.balance or 0,
+            'lifetimeEarned': self.lifetime_earned or 0,
+            'lifetimeSpent': self.lifetime_spent or 0,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'updatedAt': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class StudentIpTransaction(db.Model):
+    __tablename__ = 'student_ip_transactions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    wallet_id = db.Column(db.Integer, db.ForeignKey('student_ip_wallets.id'), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
+    amount = db.Column(db.Integer, nullable=False)
+    kind = db.Column(db.String(40), nullable=False)
+    reference_key = db.Column(db.String(180), nullable=False, unique=True)
+    description = db.Column(db.String(240), nullable=False, default='')
+    details = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    wallet = db.relationship('StudentIpWallet', foreign_keys=[wallet_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'amount': self.amount,
+            'kind': self.kind,
+            'description': self.description or '',
+            'details': self.details or {},
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class StudentIpPurchase(db.Model):
+    __tablename__ = 'student_ip_purchases'
+
+    id = db.Column(db.Integer, primary_key=True)
+    wallet_id = db.Column(db.Integer, db.ForeignKey('student_ip_wallets.id'), nullable=False)
+    item_id = db.Column(db.String(80), nullable=False)
+    item_type = db.Column(db.String(30), nullable=False)
+    price = db.Column(db.Integer, nullable=False)
+    purchased_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    wallet = db.relationship('StudentIpWallet', foreign_keys=[wallet_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('wallet_id', 'item_id', name='uq_student_ip_purchase_item'),
+    )
+
+    def to_dict(self):
+        return {
+            'itemId': self.item_id,
+            'itemType': self.item_type,
+            'price': self.price,
+            'purchasedAt': self.purchased_at.isoformat() if self.purchased_at else None,
+        }
+
+
+class StudentToolState(db.Model):
+    __tablename__ = 'student_tool_states'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    study_plan = db.Column(db.JSON, nullable=False, default=dict)
+    fitness_plan = db.Column(db.JSON, nullable=False, default=dict)
+    tutor_progress = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('Group', foreign_keys=[group_id])
+    student = db.relationship('User', foreign_keys=[student_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'student_id', name='uq_student_tool_state'),
+    )
+
+    def to_dict(self):
+        return {
+            'groupId': self.group_id,
+            'studentId': self.student_id,
+            'studyPlan': self.study_plan or {},
+            'fitnessPlan': self.fitness_plan or {},
+            'tutorProgress': self.tutor_progress or {},
+            'updatedAt': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MeditationSession(db.Model):
+    __tablename__ = 'guided_meditation_sessions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    session_key = db.Column(db.String(64), nullable=False, unique=True)
+    session_data = db.Column(db.JSON, nullable=False, default=dict)
+    alignment = db.Column(db.JSON, nullable=False, default=dict)
+    narration_filename = db.Column(db.String(180), nullable=False)
+    music_filename = db.Column(db.String(180), nullable=True)
+    is_published = db.Column(db.Boolean, nullable=False, default=True)
+    is_global = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = db.relationship('Group', foreign_keys=[group_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'sessionKey': self.session_key,
+            'session': self.session_data or {},
+            'alignment': self.alignment or {},
+            'narrationFilename': self.narration_filename,
+            'musicFilename': self.music_filename,
+            'isPublished': bool(self.is_published),
+            'isGlobal': bool(self.is_global),
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class Message(db.Model):
     __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
@@ -292,6 +510,10 @@ class Message(db.Model):
     school_class = db.relationship('SchoolClass', foreign_keys=[class_id])
 
     def to_dict(self):
+        try:
+            read_by = [int(user_id) for user_id in json.loads(self.read_by or '[]')]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            read_by = []
         return {
             'id': self.id,
             'groupId': self.group_id,
@@ -302,7 +524,7 @@ class Message(db.Model):
             'className': self.school_class.name if self.school_class else None,
             'content': self.content,
             'createdAt': self.created_at.isoformat() if self.created_at else None,
-            'readBy': self.read_by,
+            'readBy': read_by,
             'messageType': self.message_type
         }
 
@@ -768,11 +990,15 @@ class SchoolClass(db.Model):
     name = db.Column(db.String(120), nullable=False)
     tutor_group = db.Column(db.String(120), nullable=True)
     year_group = db.Column(db.String(40), nullable=True)
+    description = db.Column(db.Text, nullable=True)
+    subject_id = db.Column(db.Integer, db.ForeignKey('school_subjects.id'), nullable=True)
     room_id = db.Column(db.Integer, db.ForeignKey('school_rooms.id'), nullable=True)
+    weekly_lessons = db.Column(db.Integer, nullable=False, default=5)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     group = db.relationship('Group', foreign_keys=[group_id])
+    subject = db.relationship('SchoolSubject', foreign_keys=[subject_id])
     room = db.relationship('SchoolRoom', foreign_keys=[room_id])
 
     __table_args__ = (
@@ -786,8 +1012,12 @@ class SchoolClass(db.Model):
             'name': self.name,
             'tutorGroup': self.tutor_group or '',
             'yearGroup': self.year_group or '',
+            'description': self.description or '',
+            'subjectId': self.subject_id,
+            'subject': self.subject.to_dict() if self.subject else None,
             'roomId': self.room_id,
             'room': self.room.to_dict() if self.room else None,
+            'weeklyLessons': self.weekly_lessons or 5,
             'createdAt': self.created_at.isoformat() if self.created_at else None,
             'updatedAt': self.updated_at.isoformat() if self.updated_at else None
         }
@@ -829,6 +1059,7 @@ class SchoolTeachingAssignment(db.Model):
     class_id = db.Column(db.Integer, db.ForeignKey('school_classes.id'), nullable=False)
     subject_id = db.Column(db.Integer, db.ForeignKey('school_subjects.id'), nullable=False)
     teacher_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    assignment_role = db.Column(db.String(40), nullable=False, default='lead-teacher')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -848,6 +1079,7 @@ class SchoolTeachingAssignment(db.Model):
             'classId': self.class_id,
             'subjectId': self.subject_id,
             'teacherId': self.teacher_id,
+            'assignmentRole': self.assignment_role or 'lead-teacher',
             'schoolClass': self.school_class.to_dict() if self.school_class else None,
             'subject': self.subject.to_dict() if self.subject else None,
             'teacher': self.teacher.to_dict() if self.teacher else None,

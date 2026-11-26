@@ -14,20 +14,21 @@ const OverviewIntroSection = ({
     <>
       {!isLeader && mySchoolProfile?.goals?.length > 0 && (
         <div className="mb-8">
-          <div className="bg-gradient-to-r from-primary-600 to-primary-800 rounded-2xl p-6 text-white shadow-xl">
-            <div className="text-xs uppercase tracking-[0.2em] text-primary-100">Your goal first</div>
-            <h2 className="mt-2 text-3xl font-bold">{mySchoolProfile.goals[0].title}</h2>
+          <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-violet-600 via-violet-700 to-cyan-600 p-6 text-white shadow-2xl shadow-violet-500/20 sm:p-7">
+            <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-white/15 blur-3xl" />
+            <div className="relative text-xs font-bold uppercase tracking-[0.24em] text-violet-100">Your goal first</div>
+            <h2 className="relative mt-2 text-3xl font-black tracking-tight">{mySchoolProfile.goals[0].title}</h2>
             <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-              <div className="rounded-xl bg-white/10 p-3">
-                <div className="text-primary-100">Barrier</div>
+              <div className="rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur">
+                <div className="text-xs font-bold uppercase tracking-wider text-violet-100">Barrier</div>
                 <div className="mt-1 font-medium">{mySchoolProfile.goals[0].barrier || 'Not set yet'}</div>
               </div>
-              <div className="rounded-xl bg-white/10 p-3">
-                <div className="text-primary-100">For yourself</div>
+              <div className="rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur">
+                <div className="text-xs font-bold uppercase tracking-wider text-violet-100">For yourself</div>
                 <div className="mt-1 font-medium">{mySchoolProfile.goals[0].forSelf || 'Not set yet'}</div>
               </div>
-              <div className="rounded-xl bg-white/10 p-3">
-                <div className="text-primary-100">For others</div>
+              <div className="rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur">
+                <div className="text-xs font-bold uppercase tracking-wider text-violet-100">For others</div>
                 <div className="mt-1 font-medium">{mySchoolProfile.goals[0].forOthers || 'Not set yet'}</div>
               </div>
             </div>
@@ -35,24 +36,25 @@ const OverviewIntroSection = ({
         </div>
       )}
 
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold mb-4">Members</h2>
+      <section className="mb-8 rounded-[2rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.045] sm:p-6">
+        <p className="text-xs font-bold uppercase tracking-[0.24em] text-violet-600 dark:text-cyan-300">Community</p>
+        <h2 className="mb-5 mt-1 text-2xl font-black tracking-tight text-slate-950 dark:text-white">Members</h2>
         {group.members && group.members.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {group.members.map((member) => (
               <div
                 key={member.id}
-                className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg p-4 flex items-center gap-4 border border-gray-200 dark:border-secondary-700 transition-transform transform hover:scale-[1.025] hover:shadow-2xl group cursor-pointer"
+                className="group flex cursor-pointer items-center gap-4 rounded-2xl border border-slate-200 bg-white/80 p-4 transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-xl dark:border-white/10 dark:bg-white/[0.035] dark:hover:border-white/20"
               >
-                <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200 group-hover:ring-4 group-hover:ring-primary-200/40">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 text-xl font-black text-white shadow-lg shadow-violet-500/20 transition group-hover:scale-105">
                   {member.username?.[0]?.toUpperCase() || '?'}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-secondary-900 dark:text-white truncate">{member.username}</div>
-                  <div className="text-sm text-secondary-500 dark:text-secondary-400 truncate">{member.email}</div>
+                  <div className="truncate font-bold text-slate-950 dark:text-white">{member.username}</div>
+                  <div className="truncate text-sm text-slate-500 dark:text-slate-400">{member.email}</div>
                 </div>
                 {group.leader && String(group.leader.id) === String(member.id) && (
-                  <span className="ml-2 px-2 py-1 text-xs rounded bg-gradient-to-r from-primary-100 to-primary-300 dark:from-primary-900 dark:to-primary-700 text-primary-800 dark:text-primary-200 font-semibold shadow-sm border border-primary-200 dark:border-primary-800">
+                  <span className="ml-2 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 dark:border-violet-400/20 dark:bg-violet-500/10 dark:text-violet-200">
                     Leader
                   </span>
                 )}
@@ -60,9 +62,9 @@ const OverviewIntroSection = ({
             ))}
           </div>
         ) : (
-          <p className="text-gray-400">No members yet.</p>
+          <p className="rounded-2xl border border-dashed border-slate-300 py-8 text-center text-slate-400 dark:border-white/10">No members yet.</p>
         )}
-      </div>
+      </section>
     </>
   );
 };

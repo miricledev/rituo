@@ -48,7 +48,10 @@ function StandardGroupDetail({ shellProps, workspaceProps }) {
   );
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
+    <div className="relative mx-auto w-full max-w-[1440px] overflow-x-hidden px-3 py-5 sm:px-6 sm:py-8">
+      <div className="pointer-events-none fixed inset-0 -z-10 bg-gradient-to-b from-slate-50 via-white to-violet-50/40 dark:from-[#050816] dark:via-[#070b17] dark:to-[#091226]" />
+      <div className="pointer-events-none fixed left-[-10rem] top-28 -z-10 h-80 w-80 rounded-full bg-violet-500/10 blur-3xl" />
+      <div className="pointer-events-none fixed right-[-8rem] top-1/3 -z-10 h-72 w-72 rounded-full bg-cyan-400/10 blur-3xl" />
       <StandardGroupShell {...shellProps} />
       <GroupDetailWorkspace {...workspaceProps} overviewContent={overviewContent} />
     </div>

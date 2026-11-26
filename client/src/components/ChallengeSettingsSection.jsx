@@ -1,34 +1,15 @@
 const ChallengeSettingsSection = ({
-  habitPresets,
-  handleLoadPreset,
   newChallenge,
   setNewChallenge,
   getDateString,
   groupCourses,
-  groupMembers
+  groupMembers,
+  workspaceType = 'school'
 }) => {
   return (
     <div className="mb-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">Challenge Settings</h3>
-        {habitPresets.length > 0 && (
-          <div className="flex items-center gap-2">
-            <select
-              onChange={(e) => {
-                if (e.target.value) {
-                  handleLoadPreset(e.target.value);
-                  e.target.value = '';
-                }
-              }}
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
-            >
-              <option value="">Load Preset...</option>
-              {habitPresets.map((preset) => (
-                <option key={preset.id} value={preset.id}>{preset.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -89,7 +70,7 @@ const ChallengeSettingsSection = ({
         </div>
       </div>
 
-      <div className="mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+      {workspaceType !== 'football' ? <div className="mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
         <label className="flex items-center gap-2 text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
           <input
             type="checkbox"
@@ -171,7 +152,7 @@ const ChallengeSettingsSection = ({
         {groupCourses.length === 0 && (
           <p className="text-xs text-gray-500 dark:text-gray-400">Create a course in the Course tab first.</p>
         )}
-      </div>
+      </div> : null}
     </div>
   );
 };

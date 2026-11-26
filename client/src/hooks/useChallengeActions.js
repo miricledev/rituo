@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import axios from 'axios';
+import { generatePersonalizedHabitBatches } from '../utils/challengeAiBatching';
 
 const useChallengeActions = ({
   group,
@@ -27,7 +28,7 @@ const useChallengeActions = ({
   setGroup,
   openEditChallengeHabitsModal
 }) => {
-  const handleLoadPreset = useCallback((presetId) => {
+  const handleLoadPreset = useCallback(async (presetId, options = {}) => {
     if (group?.activeChallenge && !editChallengeHabitsMode) {
       return;
     }
@@ -42,39 +43,85 @@ const useChallengeActions = ({
       maxValue: habit.habitType === 'numeric' ? (habit.maxValue ?? 10) : habit.maxValue,
       scheduleDays: habit.scheduleDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
       durationMinutes: Number(habit.durationMinutes) || 30,
-      combatType: habit.combatType || 'neutral'
+      combatType: habit.combatType || 'neutral',
+      periodicIntervalHours: Number(habit.periodicIntervalHours) || 4,
+      periodicOccurrences: Number(habit.periodicOccurrences) || 4,
+      allowOverlap: !!habit.allowOverlap,
+      linkedGoalId: null
     }));
 
-    if (editChallengeHabitsMode) {
-      const newMemberHabits = { ...memberHabits };
-      Object.keys(memberHabits).forEach((memberId) => {
-        if (!lockedChallengeMemberIds.has(memberId)) {
-          newMemberHabits[memberId] = [...mappedHabits];
-        }
-      });
-      setMemberHabits(newMemberHabits);
+    const eligibleMembers = (group?.members || []).filter(
+      (member) => (!member.accountRole || member.accountRole === 'student')
+        && (!editChallengeHabitsMode || !lockedChallengeMemberIds.has(String(member.id)))
+    );
+    const requestedIds = new Set((options.memberIds || []).map(String));
+    const targetMembers = requestedIds.size
+      ? eligibleMembers.filter((member) => requestedIds.has(String(member.id)))
+      : eligibleMembers;
+    if (!targetMembers.length) {
+      showPageToast('error', 'No editable students selected');
       return;
     }
-
-    const allMembers = group?.members || [];
-    const newMemberHabitsMap = {};
-    allMembers.forEach((member) => {
-      newMemberHabitsMap[member.id] = [...mappedHabits];
-    });
-    setMemberHabits(newMemberHabitsMap);
 
     if (!showCreateChallengeModal) {
       openCreateChallengeModal();
     }
+
+    try {
+      let habitsByMember = Object.fromEntries(
+        targetMembers.map((member) => [String(member.id), mappedHabits.map((habit) => ({ ...habit }))])
+      );
+      if (options.aiMatchGoals) {
+        const aiText = `Adapt the "${preset.name}" preset for each selected student while preserving its core intent.`;
+        const draft = await generatePersonalizedHabitBatches({
+          groupId,
+          text: aiText,
+          memberIds: targetMembers.map((member) => member.id),
+          presetHabits: mappedHabits,
+          onProgress: options.onProgress,
+        });
+        const studentHabitSets = draft.studentHabitSets || [];
+        habitsByMember = Object.fromEntries(
+          studentHabitSets.map((studentSet) => [
+            String(studentSet.studentId),
+            studentSet.habits || []
+          ])
+        );
+      }
+      setMemberHabits((previous) => {
+        const next = { ...previous };
+        targetMembers.forEach((member) => {
+          next[String(member.id)] = habitsByMember[String(member.id)] || [];
+        });
+        return next;
+      });
+      showPageToast(
+        'success',
+        options.aiMatchGoals ? 'Preset personalised with AI' : 'Preset imported',
+        `${preset.name} applied to ${targetMembers.length} student${targetMembers.length === 1 ? '' : 's'}.`
+      );
+      return options.aiMatchGoals
+        ? {
+            aiRequest: {
+              text: `Adapt the "${preset.name}" preset for each selected student while preserving its core intent.`,
+              presetHabits: mappedHabits,
+              memberIds: targetMembers.map((member) => member.id),
+            }
+          }
+        : null;
+    } catch (error) {
+      showPageToast('error', 'Preset could not be applied', error.response?.data?.error || error.message || 'Please try again.');
+    }
   }, [
     editChallengeHabitsMode,
     group,
+    groupId,
     habitPresets,
     lockedChallengeMemberIds,
-    memberHabits,
     openCreateChallengeModal,
     setMemberHabits,
-    showCreateChallengeModal
+    showCreateChallengeModal,
+    showPageToast
   ]);
 
   const deleteActiveChallenge = useCallback(async () => {
@@ -131,7 +178,7 @@ const useChallengeActions = ({
   }, [setAddMembersToChallengeSelected]);
 
   const handleCreateChallenge = useCallback(async (event) => {
-    event.preventDefault();
+    event?.preventDefault?.();
 
     const habitsToSubmit = isEditingHabits ? memberHabits : lockedHabits;
 
@@ -147,21 +194,22 @@ const useChallengeActions = ({
         resetChallengeModalState();
         await fetchGroupDetails();
         showPageToast('success', 'Challenge habits saved');
+        return true;
       } catch (error) {
         console.error('Error updating challenge habits:', error);
         showPageToast('error', 'Failed to save habits', error.response?.data?.error || error.message);
+        return false;
       }
-      return;
     }
 
     if (!newChallenge.startDate || !newChallenge.endDate) {
       showPageToast('error', 'Challenge dates required', 'Please select both start and end dates for the challenge.');
-      return;
+      return false;
     }
 
     if (Object.keys(habitsToSubmit).length === 0) {
       showPageToast('error', 'No habits added', 'Please add at least one habit before creating the challenge.');
-      return;
+      return false;
     }
 
     if (newChallenge.courseId) {
@@ -173,7 +221,7 @@ const useChallengeActions = ({
         const challengeWeeks = (end - start) / (7 * 24 * 60 * 60 * 1000);
         if (challengeWeeks < sectionsCount) {
           showPageToast('error', 'Challenge too short', `Challenge must be at least ${sectionsCount} weeks for this course (1 week per section).`);
-          return;
+          return false;
         }
       }
     }
@@ -194,11 +242,13 @@ const useChallengeActions = ({
       });
       resetChallengeModalState();
       setNewChallenge((prev) => ({ ...prev, courseId: null, courseRequiredMemberIds: [] }));
-      fetchGroupDetails();
+      await fetchGroupDetails();
       showPageToast('success', 'Challenge created');
+      return true;
     } catch (error) {
       console.error('Error creating challenge:', error);
       showPageToast('error', 'Failed to create challenge', error.response?.data?.error || error.message);
+      return false;
     }
   }, [
     editChallengeHabitsMode,
@@ -221,13 +271,13 @@ const useChallengeActions = ({
   }, [isEditingHabits, lockedHabits, memberHabits]);
 
   const getMissingMembers = useCallback(() => {
-    const allMembers = group?.members || [];
-    return allMembers.filter((member) => !membersWithHabits.includes(String(member.id)));
+    const studentMembers = (group?.members || []).filter((member) => !member.accountRole || member.accountRole === 'student');
+    return studentMembers.filter((member) => !membersWithHabits.includes(String(member.id)));
   }, [group, membersWithHabits]);
 
   const isChallengeValid = useCallback(() => {
-    const allMembers = group?.members || [];
-    return allMembers.length > 0 && allMembers.every((member) => membersWithHabits.includes(String(member.id)));
+    const studentMembers = (group?.members || []).filter((member) => !member.accountRole || member.accountRole === 'student');
+    return studentMembers.length > 0 && studentMembers.every((member) => membersWithHabits.includes(String(member.id)));
   }, [group, membersWithHabits]);
 
   return {

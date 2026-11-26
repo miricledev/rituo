@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { FiChevronDown, FiClock, FiShield, FiZap } from 'react-icons/fi';
 import HabitStatusCard from './HabitStatusCard';
 
 const MemberProgressSection = ({
@@ -9,7 +10,6 @@ const MemberProgressSection = ({
   timeUntilMidnight,
   collapsedMembers,
   toggleMemberCollapse,
-  calculateMemberCompletionRate,
   calculateTodayCompletionRate,
   isHabitAvailableToday,
   getPercentageColor,
@@ -21,20 +21,20 @@ const MemberProgressSection = ({
 
   return (
     <div className="mt-6 sm:mt-8">
-      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-        <h3 className="text-lg sm:text-xl font-semibold">Member Progress</h3>
-        <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-blue-600 dark:text-blue-400">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
-          <span className="text-sm font-mono font-bold text-blue-700 dark:text-blue-300">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.22em] text-violet-600 dark:text-cyan-300">People</p>
+          <h3 className="mt-1 text-xl font-black tracking-tight text-slate-950 dark:text-white sm:text-2xl">Member Progress</h3>
+        </div>
+        <div className="flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-3.5 py-2 dark:border-cyan-400/20 dark:bg-cyan-400/10">
+          <FiClock className="h-4 w-4 text-cyan-700 dark:text-cyan-300" />
+          <span className="font-mono text-sm font-bold text-cyan-700 dark:text-cyan-200">
             {timeUntilMidnight}
           </span>
-          <span className="text-xs text-blue-600 dark:text-blue-400">until reset</span>
+          <span className="text-xs text-cyan-600 dark:text-cyan-400">until reset</span>
         </div>
       </div>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 sm:mb-4 italic">
+      <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
         Click on a member&apos;s name to view their individual stats
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
@@ -45,7 +45,6 @@ const MemberProgressSection = ({
           );
           const memberId = member?.id || memberHabit.member;
           const isCollapsed = collapsedMembers[memberId];
-          const completionRate = calculateMemberCompletionRate(memberHabit);
           const todayCompletionRate = calculateTodayCompletionRate(memberHabit, isHabitAvailableToday);
           const hasCombatHabits = (memberHabit.habits || []).some((habit) => habit.combatType === 'attack' || habit.combatType === 'defence');
           const attackHabits = (memberHabit.habits || []).filter((habit) => habit.combatType === 'attack' || (!habit.combatType && !hasCombatHabits));
@@ -54,52 +53,44 @@ const MemberProgressSection = ({
           return (
             <div
               key={index}
-              className="bg-white dark:bg-secondary-800 rounded-xl shadow-lg border border-gray-200 dark:border-secondary-700 p-4 sm:p-6 flex flex-col gap-3 sm:gap-4 transition-transform transform hover:scale-[1.02] hover:shadow-2xl group"
+              className="group flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/80 p-4 transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-xl dark:border-white/10 dark:bg-white/[0.035] dark:hover:border-white/20 sm:gap-4 sm:p-5"
             >
               <div className="flex items-center gap-2 sm:gap-4 mb-2">
                 <Link to={`/groups/${groupId}/member/${memberId}`} className="flex items-center gap-3 sm:gap-4 flex-1 hover:opacity-80 transition-opacity">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 dark:from-primary-900 dark:to-primary-700 flex items-center justify-center text-xl font-bold text-primary-700 dark:text-primary-200 group-hover:ring-4 group-hover:ring-primary-200/40">
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 text-xl font-black text-white shadow-lg shadow-violet-500/20 transition group-hover:scale-105">
                     {member?.username?.[0]?.toUpperCase() || '?'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <div className="font-semibold text-lg text-primary-600 dark:text-primary-300 truncate">
+                      <div className="truncate text-lg font-bold text-slate-950 dark:text-white">
                         {member?.username || 'Unknown Member'}
                       </div>
-                      <svg className="w-4 h-4 text-primary-500 dark:text-primary-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <svg className="h-4 w-4 flex-shrink-0 text-violet-500 dark:text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     </div>
-                    <div className="text-xs text-secondary-500 dark:text-secondary-400 truncate">
+                    <div className="truncate text-xs text-slate-500 dark:text-slate-400">
                       {member?.email || ''}
                     </div>
-                    <div className="text-sm text-gray-600 dark:text-gray-400">
-                      {completionRate.toFixed(0)}% Complete
-                    </div>
+                    <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Open verified challenge statistics</div>
                   </div>
                 </Link>
                 <div className="flex flex-col items-center mr-1 sm:mr-3">
                   <div className={`text-3xl sm:text-5xl font-bold ${getPercentageColor(todayCompletionRate)}`}>
                     {todayCompletionRate.toFixed(0)}%
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">today</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">today</div>
                 </div>
                 <button
                   onClick={() => toggleMemberCollapse(memberId)}
-                  className="flex-shrink-0 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-secondary-700 transition-all duration-200 shadow-lg hover:shadow-xl active:scale-95"
+                  className="flex-shrink-0 rounded-xl border border-slate-200 bg-white/70 p-2 text-slate-500 transition-all hover:border-violet-300 hover:text-violet-600 active:scale-95 dark:border-white/10 dark:bg-white/[0.05] dark:text-slate-300 dark:hover:text-cyan-300"
                   aria-label={isCollapsed ? 'Expand habits' : 'Collapse habits'}
                 >
-                  <svg
-                    className={`w-6 h-6 text-gray-600 dark:text-gray-300 transition-all duration-200 ${
+                  <FiChevronDown
+                    className={`h-5 w-5 transition-all duration-200 ${
                       isCollapsed ? 'rotate-180' : ''
                     }`}
-                    style={{ filter: 'drop-shadow(0 0 8px rgba(0, 0, 0, 0.3))' }}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
+                  />
                 </button>
               </div>
               <div className={`space-y-3 mt-2 transition-all duration-300 ease-in-out overflow-hidden ${
@@ -109,10 +100,8 @@ const MemberProgressSection = ({
                   <div className="space-y-4">
                     {attackHabits.length > 0 && (
                       <div>
-                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-2 text-blue-600 dark:text-blue-400">
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-                            <path d="M21 3l-1 1M3 21l1-1M21 3l-10 10M3 21l10-10M9 3l3 3M15 21l-3-3M21 9l-3 3M3 15l3-3M21 21l-1-1M3 3l1 1" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
+                        <h4 className="mb-2 flex items-center gap-2 text-sm font-bold text-cyan-700 dark:text-cyan-300">
+                          <FiZap className="h-4 w-4" />
                           Attack Habits
                         </h4>
                         <div className="space-y-2">
@@ -131,10 +120,8 @@ const MemberProgressSection = ({
 
                     {defenceHabits.length > 0 && (
                       <div>
-                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-2 text-red-600 dark:text-red-400">
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
+                        <h4 className="mb-2 flex items-center gap-2 text-sm font-bold text-rose-600 dark:text-rose-300">
+                          <FiShield className="h-4 w-4" />
                           Defence Habits
                         </h4>
                         <div className="space-y-2">

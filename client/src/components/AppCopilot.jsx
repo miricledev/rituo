@@ -1,7 +1,30 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { HOMEWORK_ENABLED } from '../config/features';
+
+const STUDENT_FAQ_PROMPTS = [
+  "I don't feel motivated today. What can I do?",
+  "I feel overwhelmed and don't know where to start.",
+  'I keep getting distracted by my phone. How can I focus?',
+  'I messed up my routine. How do I reset?'
+];
+
+const visibleAssistantConfig = (config, accountRole) => {
+  if (!config) return config;
+  const isStudent = config.role === 'student' || accountRole === 'student';
+  const visibleConfig = HOMEWORK_ENABLED ? config : {
+    ...config,
+    description: String(config.description || '')
+      .replace(/,? homework,?/gi, ',')
+      .replace(/\s+,/g, ','),
+    starterPrompts: (config.starterPrompts || []).filter((prompt) => !/homework/i.test(prompt))
+  };
+  return isStudent
+    ? { ...visibleConfig, starterPrompts: STUDENT_FAQ_PROMPTS }
+    : visibleConfig;
+};
 
 const getPageName = (pathname) => {
   if (pathname.startsWith('/teacher-desk')) return 'teacher-desk';
@@ -50,12 +73,8 @@ const fallbackConfigs = {
     assistantName: 'Performance Coach',
     audienceLabel: 'Student support',
     toneLabel: 'Positive, simple, and encouraging',
-    description: 'Your habits, daily plan, recovery steps, and one achievable action at a time.',
-    starterPrompts: [
-      'What should I focus on today?',
-      'Help me plan my habits around school.',
-      'How can I recover if I missed a habit?'
-    ]
+    description: 'Practical support for motivation, stress, focus, confidence, routines, and everyday setbacks.',
+    starterPrompts: STUDENT_FAQ_PROMPTS
   }
 };
 
@@ -83,27 +102,39 @@ export default function AppCopilot() {
   const navigate = useNavigate();
   const pageName = getPageName(location.pathname);
   const accountRole = currentUser?.accountRole || 'student';
-  const fallbackConfig = fallbackConfigs[accountRole] || fallbackConfigs.student;
+  const fallbackConfig = visibleAssistantConfig(fallbackConfigs[accountRole] || fallbackConfigs.student, accountRole);
   const style = roleStyles[accountRole] || roleStyles.student;
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([]);
   const [assistantConfig, setAssistantConfig] = useState(fallbackConfig);
+  const conversationRef = useRef(null);
   const groupId = useMemo(() => inferGroupId(location.pathname), [location.pathname]);
 
   useEffect(() => {
     let active = true;
-    setAssistantConfig(fallbackConfig);
+    setAssistantConfig(visibleAssistantConfig(fallbackConfig, accountRole));
     api.get('/groups/ai-assistant/config', { params: { page: pageName } })
       .then((response) => {
-        if (active && response.data?.config) setAssistantConfig(response.data.config);
+        if (active && response.data?.config) setAssistantConfig(visibleAssistantConfig(response.data.config, accountRole));
       })
       .catch(() => {});
     return () => {
       active = false;
     };
   }, [accountRole, pageName]);
+
+  useEffect(() => {
+    if (!open || !conversationRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      conversationRef.current?.scrollTo({
+        top: conversationRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, messages, open]);
 
   const submitPrompt = async (value) => {
     const message = value.trim();
@@ -119,7 +150,7 @@ export default function AppCopilot() {
         groupId,
         date: new Date().toISOString().slice(0, 10)
       });
-      if (response.data?.assistant) setAssistantConfig(response.data.assistant);
+      if (response.data?.assistant) setAssistantConfig(visibleAssistantConfig(response.data.assistant, accountRole));
       setMessages((prev) => [...prev, { role: 'assistant', payload: response.data?.response || null }]);
     } catch (error) {
       setMessages((prev) => [
@@ -167,7 +198,7 @@ export default function AppCopilot() {
             </button>
           </div>
 
-          <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+          <div ref={conversationRef} className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Frequently asked</div>
             <div className="mt-3 flex flex-wrap gap-2">
               {(assistantConfig.starterPrompts || fallbackConfig.starterPrompts).map((starter) => (
@@ -184,12 +215,6 @@ export default function AppCopilot() {
             </div>
 
             <div className="mt-4 space-y-3">
-              {!messages.length ? (
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm leading-6 text-slate-400">
-                  Responses use your account role, current route, and permitted school context. Suggested actions are filtered to pages your role can access.
-                </div>
-              ) : null}
-
               {messages.map((message, index) => (
                 <div
                   key={`${message.role}-${index}`}
@@ -212,7 +237,18 @@ export default function AppCopilot() {
                           {action.link?.route ? (
                             <button
                               type="button"
-                              onClick={() => navigate(action.link.route)}
+                              onClick={() => {
+                                const openAction = () => {
+                                  setOpen(false);
+                                  navigate(action.link.route);
+                                };
+                                const plannerGuard = window.__innerPerformancePlannerGuard;
+                                if (plannerGuard?.isDirty?.()) {
+                                  plannerGuard.requestLeave(openAction);
+                                  return;
+                                }
+                                openAction();
+                              }}
                               className={`mt-3 rounded-full bg-gradient-to-r ${style.trigger} px-3 py-1.5 text-xs font-bold text-slate-950`}
                             >
                               {action.link.label || 'Open'}
@@ -238,6 +274,20 @@ export default function AppCopilot() {
                   )}
                 </div>
               ))}
+              {loading ? (
+                <div role="status" aria-live="polite" className="mr-3 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                  <div className="flex items-center gap-1" aria-hidden="true">
+                    {[0, 1, 2].map((dot) => (
+                      <span
+                        key={dot}
+                        className={`h-2 w-2 rounded-full bg-gradient-to-r ${style.trigger} animate-bounce`}
+                        style={{ animationDelay: `${dot * 140}ms` }}
+                      />
+                    ))}
+                  </div>
+                  <span className="font-medium">{assistantConfig.assistantName} is typing...</span>
+                </div>
+              ) : null}
             </div>
           </div>
 

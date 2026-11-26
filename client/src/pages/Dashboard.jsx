@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import {
@@ -36,7 +36,7 @@ const roleMeta = {
     label: 'Teacher',
     eyebrow: 'Teaching flow',
     title: 'Know who needs you next.',
-    description: 'Move from timetable to register, behaviour, homework and intervention without losing context.',
+    description: 'Move from timetable to register, behaviour and intervention without losing context.',
     icon: FaChalkboardTeacher,
     gradient: 'from-cyan-400 via-blue-500 to-indigo-500'
   },
@@ -64,6 +64,7 @@ const emptyAccountForm = {
 
 const Dashboard = () => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const role = currentUser?.accountRole || 'student';
   const meta = roleMeta[role] || roleMeta.student;
   const RoleIcon = meta.icon;
@@ -75,6 +76,7 @@ const Dashboard = () => {
   const [editingAccount, setEditingAccount] = useState(null);
   const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
   const [toast, setToast] = useState(null);
+  const [loadingDashboard, setLoadingDashboard] = useState(true);
 
   const schools = useMemo(() => {
     const byId = new Map();
@@ -86,6 +88,7 @@ const Dashboard = () => {
 
   const loadDashboard = async () => {
     try {
+      setLoadingDashboard(true);
       const groupResponse = await axios.get('/groups/my-groups');
       const currentLeading = (groupResponse.data.leading || []).filter((group) => group.isLegacy === false);
       const currentMemberOf = (groupResponse.data.memberOf || []).filter((group) => group.isLegacy === false);
@@ -101,14 +104,20 @@ const Dashboard = () => {
       };
       setGroups(normalizedGroups);
       const nextSchools = [...currentLeading, ...currentMemberOf];
+      if (role === 'student' && nextSchools[0]?.groupId) {
+        navigate(`/groups/${nextSchools[0].groupId}`, { replace: true });
+        return;
+      }
       setAccountForm((previous) => ({ ...previous, groupId: previous.groupId || nextSchools[0]?.groupId || '' }));
       if (role === 'admin') {
         const accountResponse = await axios.get('/admin/accounts');
         setAccounts(accountResponse.data?.accounts || []);
         setDirectoryRefreshKey((current) => current + 1);
       }
+      setLoadingDashboard(false);
     } catch (error) {
       setToast({ type: 'error', title: 'Dashboard unavailable', message: error.response?.data?.error || error.message });
+      setLoadingDashboard(false);
     }
   };
 
@@ -132,6 +141,34 @@ const Dashboard = () => {
       setCreatingAccount(false);
     }
   };
+
+  if (role === 'student' && loadingDashboard) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#050816] px-5 text-white">
+        <div className="w-full max-w-md rounded-[2rem] border border-white/10 bg-white/[0.055] p-8 text-center shadow-2xl shadow-indigo-950/40 backdrop-blur-xl">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-400 text-xl text-slate-950">
+            <FaSchool />
+          </div>
+          <p className="mt-5 text-xs font-bold uppercase tracking-[0.28em] text-cyan-300">Student workspace</p>
+          <h1 className="mt-2 text-2xl font-black">Opening today&apos;s habits...</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-400">Taking you straight to your school day.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (role === 'student' && !schools.length) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#050816] px-5 text-white">
+        <div className="w-full max-w-lg rounded-[2rem] border border-white/10 bg-white/[0.055] p-8 text-center shadow-2xl shadow-indigo-950/40 backdrop-blur-xl">
+          <img src="/images/empty-states/no-school.webp" alt="Your school workspace is waiting to be prepared" className="mx-auto h-48 w-full max-w-sm rounded-[1.5rem] object-cover shadow-2xl shadow-indigo-950/40" />
+          <p className="mt-5 text-xs font-bold uppercase tracking-[0.28em] text-cyan-300">Student workspace</p>
+          <h1 className="mt-2 text-3xl font-black">Your school is being prepared</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-400">An administrator needs to assign your account to a school before habits and school activity can appear.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#050816] text-white">
@@ -167,19 +204,26 @@ const Dashboard = () => {
                 )}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                [schools.length, 'Schools', FaSchool],
-                [role === 'admin' ? accounts.length : schools.reduce((total, school) => total + (school.members?.length || 0), 0), role === 'admin' ? 'Accounts' : 'Peers', FaUsers],
-                [legacyCount, 'Legacy spaces', FaLock],
-                ['AI', 'Planning ready', FaBrain]
-              ].map(([value, label, Icon]) => (
-                <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
-                  <Icon className="text-cyan-300" />
-                  <div className="mt-5 text-2xl font-bold">{value}</div>
-                  <div className="mt-1 text-xs uppercase tracking-wider text-slate-400">{label}</div>
-                </div>
-              ))}
+            <div className="space-y-3">
+              <img
+                src={role === 'student' ? '/images/student/student-workspace-hero.webp' : role === 'teacher' ? '/images/teacher/teacher-desk-hero.webp' : '/images/landing/private-school-platform.webp'}
+                alt={role === 'student' ? 'Inner Performance student workspace' : role === 'teacher' ? 'Inner Performance Teacher Desk' : 'Inner Performance school platform'}
+                className="h-36 w-full rounded-2xl border border-white/10 object-cover shadow-xl shadow-indigo-950/30"
+              />
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  [schools.length, 'Schools', FaSchool],
+                  [role === 'admin' ? accounts.length : schools.reduce((total, school) => total + (school.members?.length || 0), 0), role === 'admin' ? 'Accounts' : 'Peers', FaUsers],
+                  [legacyCount, 'Legacy spaces', FaLock],
+                  ['AI', 'Planning ready', FaBrain]
+                ].map(([value, label, Icon]) => (
+                  <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+                    <Icon className="text-cyan-300" />
+                    <div className="mt-5 text-2xl font-bold">{value}</div>
+                    <div className="mt-1 text-xs uppercase tracking-wider text-slate-400">{label}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </motion.section>
@@ -188,15 +232,15 @@ const Dashboard = () => {
           {(role === 'admin' ? [
             ['Provision people', 'Create teacher and student accounts with the right school access.', FaUsers, '#8b5cf6'],
             ['Build habits faster', 'Open a school challenge and turn free text into timed habits.', FaMagic, '#06b6d4'],
-            ['Run the operation', 'Timetable, registers, homework, behaviour and reports stay connected.', FaSchool, '#3b82f6']
+            ['Run the operation', 'Timetable, registers, behaviour and reports stay connected.', FaSchool, '#3b82f6']
           ] : role === 'teacher' ? [
             ['Start with today', 'Teacher Desk surfaces classes, registers and the highest-priority actions.', FaChalkboardTeacher, '#06b6d4'],
-            ['See the whole learner', 'Goals, habits, attendance, behaviour and homework share one profile.', FaUserGraduate, '#6366f1'],
+            ['See the whole learner', 'Goals, habits, attendance and behaviour share one profile.', FaUserGraduate, '#6366f1'],
             ['Act before drift', 'Intervention and recovery signals are built into daily workflows.', FaBrain, '#8b5cf6']
           ] : [
             ['Plan around real life', 'Explain your constraints and let OpenAI schedule today’s habits.', FaCalendarAlt, '#06b6d4'],
             ['Know the reason', 'Every habit can connect back to the goal it supports.', FaBrain, '#8b5cf6'],
-            ['Build momentum', 'Your school, homework and recovery points meet in one view.', FaGraduationCap, '#3b82f6']
+            ['Build momentum', 'Your school activity and recovery points meet in one view.', FaGraduationCap, '#3b82f6']
           ]).map(([title, description, Icon, color], index) => (
             <motion.div key={title} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 * index }} className="rounded-2xl border border-white/10 bg-white/[0.045] p-5 backdrop-blur">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl" style={{ backgroundColor: `${color}22`, color }}><Icon /></div>

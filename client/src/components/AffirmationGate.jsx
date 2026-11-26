@@ -31,6 +31,8 @@ const AffirmationGate = ({ username, onComplete }) => {
   return (
     <div className="fixed inset-0 z-[110] overflow-y-auto bg-[#02051b] text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <img src="/images/onboarding/mind-heart-gut-gate.webp" alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover opacity-[0.16]" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#02051b]/80 via-[#02051b]/65 to-[#02051b]" />
         <motion.div
           className="absolute -left-48 top-[-16rem] h-[38rem] w-[38rem] rounded-full bg-violet-600/20 blur-[100px]"
           animate={{ x: [0, 70, 0], y: [0, 40, 0] }}
