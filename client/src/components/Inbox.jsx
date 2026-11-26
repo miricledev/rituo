@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   FiBell,
@@ -241,7 +242,7 @@ const Inbox = () => {
         ) : null}
       </button>
 
-      {isOpen ? (
+      {isOpen ? createPortal(
         <div
           className="fixed inset-0 z-[90] flex items-stretch justify-center overflow-hidden bg-slate-950/80 backdrop-blur-md sm:p-5 lg:justify-end lg:p-6"
           onMouseDown={(event) => {
@@ -439,7 +440,8 @@ const Inbox = () => {
               </button>
             </footer>
           </section>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </div>
   );

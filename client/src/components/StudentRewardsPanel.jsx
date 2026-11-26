@@ -122,7 +122,7 @@ function progressPercent(reward) {
   return Math.min(100, Math.round((Number(reward.progress || 0) / Math.max(Number(reward.target || 1), 1)) * 100));
 }
 
-function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, onOpenFeature, standalone = false, workspaceType = 'school' }) {
+function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, onOpenFeature, standalone = false, workspaceType = 'school', readOnlyPreview = false }) {
   const isFootballWorkspace = workspaceType === 'football';
   const isStaffWorkspace = workspaceType === 'staff';
   const [rewards, setRewards] = useState(DEFAULT_REWARDS);
@@ -140,7 +140,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
     setRewards(normalized);
     setAvatarDraft(normalized.economy?.avatar || DEFAULT_AVATAR);
     onRewardsChange?.(normalized);
-    window.dispatchEvent(new CustomEvent('ip-bucks-updated', {
+    if (!readOnlyPreview) window.dispatchEvent(new CustomEvent('ip-bucks-updated', {
       detail: { balance: Number(normalized.economy?.wallet?.balance) || 0 }
     }));
   };
@@ -149,7 +149,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
     if (!groupId || !studentId) return undefined;
     let active = true;
     setLoading(true);
-    api.get(`/groups/${groupId}/students/${studentId}/rewards`)
+    api.get(`/groups/${groupId}/students/${studentId}/${readOnlyPreview ? 'preview' : 'rewards'}`)
       .then((response) => {
         if (!active) return;
         applyRewards(response.data?.rewards);
@@ -163,7 +163,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [groupId, studentId, refreshKey]);
+  }, [groupId, studentId, refreshKey, readOnlyPreview]);
 
   const economy = rewards.economy || DEFAULT_REWARDS.economy;
   const wallet = economy.wallet || DEFAULT_REWARDS.economy.wallet;
@@ -175,6 +175,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
   ), [economy.shop]);
 
   const updatePreferences = async (payload, successToast) => {
+    if (readOnlyPreview) return;
     try {
       setSaving(payload.avatar ? 'avatar' : 'locker');
       const response = await api.put(`/groups/${groupId}/students/${studentId}/rewards`, {
@@ -198,6 +199,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
   };
 
   const confirmPurchase = async () => {
+    if (readOnlyPreview) return;
     if (!pendingPurchase || saving) return;
     try {
       setSaving(`purchase-${pendingPurchase.id}`);
@@ -246,7 +248,7 @@ function StudentRewardsPanel({ groupId, studentId, refreshKey, onRewardsChange, 
 
           <div className="p-3.5 sm:p-5">
             {activeTab === 'earn' ? <EarnPanel economy={economy} rewards={rewards} isFootballWorkspace={isFootballWorkspace} /> : null}
-            {activeTab === 'shop' ? <ShopPanel economy={economy} wallet={wallet} onSelectPurchase={setPendingPurchase} onOpenAvatar={() => setActiveTab('avatar')} onOpenFeature={onOpenFeature} isFootballWorkspace={isFootballWorkspace} isStaffWorkspace={isStaffWorkspace} /> : null}
+            {activeTab === 'shop' ? <ShopPanel economy={economy} wallet={wallet} onSelectPurchase={readOnlyPreview ? () => setToast({ type: 'info', title: 'Read-only preview', message: 'Purchases are disabled in student preview.' }) : setPendingPurchase} onOpenAvatar={() => setActiveTab('avatar')} onOpenFeature={onOpenFeature} isFootballWorkspace={isFootballWorkspace} isStaffWorkspace={isStaffWorkspace} /> : null}
             {activeTab === 'avatar' ? <AvatarStudio economy={economy} avatarDraft={avatarDraft} setAvatarDraft={setAvatarDraft} avatarItemsBySlot={avatarItemsBySlot} saving={saving} onSave={saveAvatar} isFootballWorkspace={isFootballWorkspace} isStaffWorkspace={isStaffWorkspace} /> : null}
             {activeTab === 'locker' ? <LockerPanel rewards={rewards} collection={lockerCollection} setCollection={setLockerCollection} items={lockerItems} saving={saving} onEquip={equipLockerReward} /> : null}
           </div>

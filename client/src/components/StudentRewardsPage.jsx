@@ -2,7 +2,7 @@ import React from 'react';
 import { FiAward, FiShield, FiShoppingBag, FiTrendingUp } from 'react-icons/fi';
 import StudentRewardsPanel from './StudentRewardsPanel';
 
-function StudentRewardsPage({ groupId, studentId, refreshKey, onOpenFeature, workspaceType = 'school' }) {
+function StudentRewardsPage({ groupId, studentId, refreshKey, onOpenFeature, workspaceType = 'school', readOnlyPreview = false }) {
   const isFootballWorkspace = workspaceType === 'football';
   const isStaffWorkspace = workspaceType === 'staff';
   if (!studentId) {
@@ -55,6 +55,7 @@ function StudentRewardsPage({ groupId, studentId, refreshKey, onOpenFeature, wor
         refreshKey={refreshKey}
         onOpenFeature={onOpenFeature}
         workspaceType={workspaceType}
+        readOnlyPreview={readOnlyPreview}
         standalone
       />
     </div>

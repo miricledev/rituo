@@ -8630,9 +8630,13 @@ def _normalize_ip_avatar(raw_avatar, owned_item_ids, catalog=None):
     return avatar
 
 
-def _build_ip_economy(group, student_id, settings, habit_momentum):
-    wallet, credited = _sync_student_ip_bucks(group, student_id)
-    purchases = StudentIpPurchase.query.filter_by(wallet_id=wallet.id).order_by(StudentIpPurchase.purchased_at.desc()).all()
+def _build_ip_economy(group, student_id, settings, habit_momentum, read_only=False):
+    if read_only:
+        wallet = StudentIpWallet.query.filter_by(student_id=student_id).first()
+        credited = []
+    else:
+        wallet, credited = _sync_student_ip_bucks(group, student_id)
+    purchases = StudentIpPurchase.query.filter_by(wallet_id=wallet.id).order_by(StudentIpPurchase.purchased_at.desc()).all() if wallet else []
     owned_item_ids = {purchase.item_id for purchase in purchases}
     preferences = (settings.reward_preferences if settings else None) or {}
     catalog = _ip_shop_catalog_for_group(group)
@@ -8643,9 +8647,9 @@ def _build_ip_economy(group, student_id, settings, habit_momentum):
         'equipped': item.get('slot') != 'feature' and avatar.get(item.get('slot')) == item['id'],
         'purchasable': not item.get('comingSoon', False),
     } for item in catalog]
-    activity = StudentIpTransaction.query.filter_by(wallet_id=wallet.id).order_by(StudentIpTransaction.created_at.desc()).limit(16).all()
+    activity = StudentIpTransaction.query.filter_by(wallet_id=wallet.id).order_by(StudentIpTransaction.created_at.desc()).limit(16).all() if wallet else []
     return {
-        'wallet': wallet.to_dict(),
+        'wallet': wallet.to_dict() if wallet else {'balance': 0, 'lifetimeEarned': 0, 'lifetimeSpent': 0},
         'newEarnings': sum(item['amount'] for item in credited),
         'avatar': avatar,
         'avatarChoices': IP_AVATAR_FREE_CHOICES,
@@ -8824,7 +8828,7 @@ def _student_reward_catalog(metrics, group_type='school'):
     return {'themes': themes, 'titles': titles}
 
 
-def _build_student_rewards(group, student_id, settings=None):
+def _build_student_rewards(group, student_id, settings=None, read_only=False):
     metrics = _student_reward_metrics(group, student_id)
     catalog = _student_reward_catalog(metrics, getattr(group, 'group_type', 'school'))
     preferences = (settings.reward_preferences if settings else None) or {}
@@ -8845,7 +8849,7 @@ def _build_student_rewards(group, student_id, settings=None):
     locked_rewards.sort(
         key=lambda item: -(float(item['progress']) / max(float(item['target']), 1))
     )
-    economy = _build_ip_economy(group, student_id, settings, metrics.get('habitMomentum') or [])
+    economy = _build_ip_economy(group, student_id, settings, metrics.get('habitMomentum') or [], read_only=read_only)
     return {
         'metrics': metrics,
         'preferences': {
@@ -9317,6 +9321,33 @@ def _planner_settings_response(settings):
         and not _google_calendar_can_list_calendars(settings)
     )
     return payload
+
+
+@groups_bp.route('/<group_id>/students/<int:student_id>/preview', methods=['GET'])
+@jwt_required()
+def preview_student_workspace(group_id, student_id):
+    group = Group.query.filter_by(group_id=group_id).first()
+    if not group:
+        return jsonify({'error': 'School not found'}), 404
+    viewer_id = int(get_jwt_identity())
+    viewer = User.query.get(viewer_id)
+    if not viewer or not viewer.is_active or viewer.account_role != 'admin' or not can_manage_group(group, viewer_id):
+        return jsonify({'error': 'Only school administrators can preview student workspaces'}), 403
+    student = next((member for member in get_group_members_list(group) if member.id == student_id and member.account_role == 'student'), None)
+    if not student:
+        return jsonify({'error': 'Student not found in this school'}), 404
+    settings = _get_student_planner_settings(group.id, student_id)
+    source = settings.to_dict() if settings else {}
+    settings_preview = {
+        'wakeTime': source.get('wakeTime') or '07:00',
+        'bedtime': source.get('bedtime') or '22:00',
+        'schoolCommuteMinutes': source.get('schoolCommuteMinutes') or 0,
+        'timezone': source.get('timezone') or 'Europe/London',
+        'recurringReminders': source.get('recurringReminders') or [],
+        'aiWeeklyTemplates': source.get('aiWeeklyTemplates') or {},
+        'googleCalendarConnected': False,
+    }
+    return jsonify({'settings': settings_preview, 'rewards': _build_student_rewards(group, student_id, settings, read_only=True)}), 200
 
 
 @groups_bp.route('/<group_id>/students/<int:student_id>/planner-settings', methods=['GET', 'PUT'])

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   FaBookOpen,
   FaCalendarAlt,
@@ -15,6 +15,10 @@ import SchoolGroupShell from '../components/SchoolGroupShell';
 import GroupDetailWorkspace from '../components/GroupDetailWorkspace';
 import SchoolDashboardOverview from '../components/SchoolDashboardOverview';
 import StudentCompetitionStrip from '../components/StudentCompetitionStrip';
+import StudentChecklistSection from '../components/StudentChecklistSection';
+import DailyHabitPlanner from '../components/DailyHabitPlanner';
+import ColorChart from '../components/ColorChart';
+import StudentRewardsPage from '../components/StudentRewardsPage';
 import { HOMEWORK_ENABLED } from '../config/features';
 
 const adminSchoolAreas = [
@@ -260,6 +264,9 @@ function deriveSchoolArea(activeTab, currentSchoolSection, viewerType) {
 }
 
 function SchoolGroupDetail({ shellProps, workspaceProps, currentSchoolSection, onSelectSchoolArea }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewStudentId, setPreviewStudentId] = useState('');
+  const [previewTab, setPreviewTab] = useState('day');
   const accountRole = workspaceProps.user?.accountRole || 'student';
   const studentCount = (workspaceProps.group?.members || []).filter(
     (member) => (member.accountRole || 'student') === 'student'
@@ -455,12 +462,70 @@ function SchoolGroupDetail({ shellProps, workspaceProps, currentSchoolSection, o
         description: workspaceCopy.description.replace(/,? homework/gi, '')
       };
 
+  const previewStudents = (workspaceProps.group?.members || []).filter(
+    (member) => (member.accountRole || 'student') === 'student'
+  );
+  const selectedStudent = previewStudents.find((student) => String(student.id) === previewStudentId) || previewStudents[0];
+  const selectedHabits = (workspaceProps.group?.activeChallenge?.memberHabits || []).find(
+    (entry) => String(entry.member?.id ?? entry.member) === String(selectedStudent?.id)
+  );
+
+  if (previewOpen && viewerType === 'admin' && accountRole === 'admin') {
+    return (
+      <div className="relative mx-auto w-full max-w-[1440px] px-3 py-4 sm:px-6 sm:py-8">
+        <section className="mb-5 rounded-2xl border border-amber-300/30 bg-amber-50 p-4 text-amber-950 dark:bg-amber-500/10 dark:text-amber-100 sm:p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div><p className="text-xs font-black uppercase tracking-widest">Read-only student preview</p><p className="mt-1 text-sm">Previewing {workspaceProps.group.name}. Changes and purchases are disabled. Google Calendar events are not imported in preview.</p></div>
+            <button type="button" onClick={() => setPreviewOpen(false)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white dark:bg-white dark:text-slate-950">Exit student view</button>
+          </div>
+          <label className="mt-4 block text-xs font-bold">Student
+            <select value={String(selectedStudent?.id || '')} onChange={(event) => setPreviewStudentId(event.target.value)} className="mt-1 block w-full max-w-sm rounded-xl border border-amber-300 bg-white px-3 py-2 text-slate-950 dark:border-white/20 dark:bg-slate-900 dark:text-white">
+              {previewStudents.map((student) => <option key={student.id} value={student.id}>{[student.firstName, student.lastName].filter(Boolean).join(' ') || student.username}</option>)}
+            </select>
+          </label>
+        </section>
+        <div className="mb-4 flex flex-wrap gap-2">{[['day', 'My Day'], ['planner', 'My Planner'], ['chart', 'My Colour Chart'], ['shop', 'IP Shop']].map(([key, label]) => <button key={key} type="button" onClick={() => setPreviewTab(key)} className={`rounded-xl px-4 py-2.5 text-sm font-black ${previewTab === key ? 'bg-violet-600 text-white' : 'border border-slate-200 bg-white text-slate-700 dark:border-white/10 dark:bg-slate-900 dark:text-slate-200'}`}>{label}</button>)}</div>
+        {!selectedStudent ? <p className="rounded-2xl bg-white p-6 text-slate-700 dark:bg-slate-900 dark:text-slate-200">Add a student to this school to preview their view.</p> : (
+          previewTab === 'planner' ? <DailyHabitPlanner key={`planner-${selectedStudent.id}`} groupId={workspaceProps.groupId} profile={{ student: selectedStudent, linkedHabits: selectedHabits?.habits || [] }} canEdit={false} readOnlyPreview schoolTimetable={workspaceProps.group?.schoolTimetable || []} schoolDayConfig={workspaceProps.group?.schoolDayConfig || {}} activeChallenge={workspaceProps.group?.activeChallenge} challengeMember={selectedHabits} /> :
+          previewTab === 'chart' ? <ColorChart key={`chart-${selectedStudent.id}`} groupId={workspaceProps.groupId} groupType="school" memberHabit={{ member: selectedStudent.id }} isLeader={false} isCoach={false} /> :
+          previewTab === 'shop' ? <StudentRewardsPage key={`shop-${selectedStudent.id}`} groupId={workspaceProps.groupId} studentId={selectedStudent.id} readOnlyPreview /> :
+          !selectedHabits ? <p className="rounded-2xl bg-white p-6 text-slate-700 dark:bg-slate-900 dark:text-slate-200">This student has no habits in the current challenge.</p> :
+          <fieldset disabled aria-label="Read-only student habit preview" className="min-w-0">
+            <StudentChecklistSection
+              key={selectedStudent.id}
+              readOnly
+              isMember
+              isLeader={false}
+              myMemberHabit={selectedHabits}
+              groupId={workspaceProps.groupId}
+              studentId={selectedStudent.id}
+              challengeId={workspaceProps.group?.activeChallenge?.id}
+              schoolTimetable={workspaceProps.group?.schoolTimetable || []}
+              timeUntilMidnight={workspaceProps.timeUntilMidnight}
+              editingHabits={{}}
+              ticking={{}}
+              numericValues={{}}
+              textValues={{}}
+              tempNumericValues={{}}
+              tempTextValues={{}}
+              getLinkedGoalTitle={() => ''}
+              isHabitAvailableToday={workspaceProps.isHabitAvailableToday}
+              getNextAvailableDay={workspaceProps.getNextAvailableDay}
+            />
+          </fieldset>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="relative mx-auto w-full max-w-[1440px] overflow-x-hidden px-2 py-3 sm:px-6 sm:py-8">
       <div className="pointer-events-none fixed inset-0 -z-10 bg-gradient-to-b from-slate-50 via-white to-cyan-50/40 dark:from-[#050816] dark:via-[#070b17] dark:to-[#091226]" />
       <div className="pointer-events-none fixed left-[-10rem] top-28 -z-10 h-80 w-80 rounded-full bg-violet-500/10 blur-3xl" />
       <div className="pointer-events-none fixed right-[-8rem] top-1/3 -z-10 h-72 w-72 rounded-full bg-cyan-400/10 blur-3xl" />
       <SchoolGroupShell {...resolvedShellProps} />
+
+      {viewerType === 'admin' && accountRole === 'admin' ? <div className="mb-4 flex justify-end"><button type="button" onClick={() => setPreviewOpen(true)} className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-500/10 px-4 py-2.5 text-sm font-black text-cyan-700 hover:bg-cyan-500/20 dark:text-cyan-200"><FaUserGraduate /> View as student</button></div> : null}
 
       {showWorkspaceNavigation ? (
       <section className="relative mb-6 overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/85 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.09)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/[0.045] sm:p-6">

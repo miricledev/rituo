@@ -297,6 +297,7 @@ const DailyHabitPlanner = ({
   activeChallenge = null,
   challengeMember = null,
   workspaceType = 'school',
+  readOnlyPreview = false,
   onSaved
 }) => {
   const isFootballWorkspace = workspaceType === 'football';
@@ -683,10 +684,10 @@ const DailyHabitPlanner = ({
           googleCalendarHiddenEventCount: 0
         };
         try {
-          const settingsEndpoint = `/groups/${groupId}/students/${profile.student.id}/planner-settings`;
+          const settingsEndpoint = `/groups/${groupId}/students/${profile.student.id}/${readOnlyPreview ? 'preview' : 'planner-settings'}`;
           const settingsResponse = await axios.get(settingsEndpoint);
           const savedSettings = { ...settingsPayload, ...(settingsResponse.data?.settings || {}) };
-          settingsPayload = await syncDeviceTimezone(axios, settingsEndpoint, savedSettings);
+          settingsPayload = readOnlyPreview ? savedSettings : await syncDeviceTimezone(axios, settingsEndpoint, savedSettings);
         } catch (_error) {
           settingsPayload = { ...settingsPayload };
         }

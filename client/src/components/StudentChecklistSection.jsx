@@ -136,6 +136,7 @@ const StudentChecklistSection = ({
   challengeId,
   schoolTimetable = [],
   workspaceType = 'school',
+  readOnly = false,
   onOpenPlanner,
   onRefresh,
   showPageToast,
@@ -192,7 +193,7 @@ const StudentChecklistSection = ({
         reason: [entry.teacherName, entry.room].filter(Boolean).join(' · ') || 'School timetable'
       }));
     const settingsEndpoint = `/groups/${groupId}/students/${studentId}/planner-settings`;
-    axios.get(settingsEndpoint)
+    (readOnly ? axios.get(`/groups/${groupId}/students/${studentId}/preview`).catch(() => ({ data: { settings: {} } })) : axios.get(settingsEndpoint)
       .then(async (settingsResponse) => ({
         ...settingsResponse,
         data: {
@@ -204,11 +205,11 @@ const StudentChecklistSection = ({
           )
         }
       }))
-      .catch(() => ({ data: { settings: {} } }))
+      .catch(() => ({ data: { settings: {} } })))
       .then((settingsResponse) => Promise.allSettled([
         axios.get(`/groups/${groupId}/students/${studentId}/schedule`, { params: { date } }),
         Promise.resolve(settingsResponse),
-        axios.get('/groups/ip-wallet')
+        readOnly ? Promise.resolve({ data: { wallet: { balance: 0 } } }) : axios.get('/groups/ip-wallet')
       ]))
       .then(([scheduleResult, settingsResult, walletResult]) => {
         if (cancelled) return;
@@ -298,10 +299,10 @@ const StudentChecklistSection = ({
     return () => {
       cancelled = true;
     };
-  }, [groupId, studentId, schoolTimetable, myMemberHabit]);
+  }, [groupId, studentId, schoolTimetable, myMemberHabit, readOnly]);
 
   const restoreHabitStreak = async (habitIndex) => {
-    if (!groupId || !challengeId || restoringHabitIndex !== null) return;
+    if (readOnly || !groupId || !challengeId || restoringHabitIndex !== null) return;
     try {
       setRestoringHabitIndex(habitIndex);
       const response = await axios.post(
@@ -590,7 +591,7 @@ const StudentChecklistSection = ({
           const restoreOffer = completionWindows[String(habitIndex)]?.streakRestore || {};
           const restored = Boolean(progressEntry?.streakRestored || restoreOffer.alreadyRestored);
           const restoreCost = Number(restoreOffer.cost) || 0;
-          const canRestore = !completed && !restored && Number(restoreOffer.atRiskStreak) > 0 && restoreCost > 0;
+          const canRestore = !readOnly && !completed && !restored && Number(restoreOffer.atRiskStreak) > 0 && restoreCost > 0;
           const canAfford = ipWalletBalance >= restoreCost;
           const confirming = restoreConfirmIndex === habitIndex;
           const restoring = restoringHabitIndex === habitIndex;
